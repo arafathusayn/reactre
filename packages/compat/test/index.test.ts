@@ -24,6 +24,7 @@ import {
   useContext,
   useEffect,
   useLayoutEffect,
+  useRef,
   useState,
 } from "../src/index.ts";
 
@@ -221,6 +222,28 @@ describe("effects", () => {
     ]);
     render(null);
     expect(log.splice(0)).toEqual(["child layout cleanup 2", "child effect cleanup 2"]);
+  });
+
+  test("a commit's refs and layout effects run before its passive effects, even when the flush renders again", () => {
+    const log: string[] = [];
+    let bump = (_: number): void => {};
+    function Other() {
+      const [n, setN] = useState(0);
+      bump = setN;
+      return h("i", null, n);
+    }
+    const other = createRoot(new FakeElement("DIV") as unknown as Element);
+    flushSync(() => other.render(h(Other)));
+    function App() {
+      const ref = useRef<unknown>(null);
+      // An update queued while this commit renders, so the same flush renders again.
+      bump(1);
+      useLayoutEffect(() => void log.push("layout, ref " + (ref.current ? "set" : "null")));
+      useEffect(() => void log.push("passive, ref " + (ref.current ? "set" : "null")), []);
+      return h("div", { ref });
+    }
+    render(h(App));
+    expect(log).toEqual(["layout, ref set", "passive, ref set"]);
   });
 });
 

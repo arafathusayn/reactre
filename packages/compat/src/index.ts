@@ -3266,7 +3266,9 @@ function flushWork(sync: boolean): void {
   try {
     while (queue.length || layoutQ.length) {
       while (queue.length) {
-        // Effects of the last commit run before the next render, as in React.
+        // Effects of the last commit run before the next render, as in React: its refs and
+        // layout effects first, so its passive effects never see a ref still unset.
+        flushLayout();
         flushPassive();
         // Two queue arrays, swapped: updates made while this one renders go
         // to the other, and neither is allocated again.
