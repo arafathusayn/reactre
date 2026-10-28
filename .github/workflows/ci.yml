@@ -1,7 +1,8 @@
 name: CI
 
 # Every push to main and every pull request: formatting, both type checks,
-# the unit tests, and the React compatibility check in headless Chrome.
+# the unit tests, the plugin under Node, and the React compatibility check in
+# headless Chrome.
 
 on:
   push:
@@ -31,12 +32,18 @@ jobs:
       - run: bun test
       - name: Build and pack the published packages
         run: |
-          for dir in dom core compiler compat; do
+          for dir in dom core compiler compat plugin; do
             if jq -e .scripts.build "packages/$dir/package.json" >/dev/null; then
               (cd "packages/$dir" && bun run build)
             fi
             (cd "packages/$dir" && bun pm pack --dry-run)
           done
+      # The plugin under Node, as most Vite users run it, from the dist builds made above.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: node packages/plugin/test/node.mjs
 
   react-compat:
     name: React compatibility

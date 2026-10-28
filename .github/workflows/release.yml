@@ -1,8 +1,8 @@
 name: Release
 
 # Publishing a GitHub release tagged v<version> publishes @reactre/dom, @reactre/core,
-# @reactre/compiler and @reactre/compat to npm, all at that version, and attaches their tarballs
-# to the release.
+# @reactre/compiler, @reactre/compat and @reactre/plugin to npm, all at that version, and
+# attaches their tarballs to the release.
 #
 # npm authenticates this workflow through trusted publishing (OIDC), so no token is stored
 # anywhere. From a public repository, npm also records provenance that links each package to
@@ -24,7 +24,7 @@ concurrency:
 env:
   TAG: ${{ github.event.release.tag_name }}
   # Dependencies first, so each package's dependencies are on npm before it is.
-  PACKAGES: dom core compiler compat
+  PACKAGES: dom core compiler compat plugin
 
 jobs:
   publish:
