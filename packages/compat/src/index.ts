@@ -1618,6 +1618,9 @@ function hostChildren(f: Fiber, dom: Any, p: Any, old: Props | null): void {
     if (!hydrating) dom.textContent = "";
     f.tx = null;
   }
+  // React renders a noscript's children only as text: with scripting on, the browser reads its
+  // content as text anyway, so element children (a fallback <style>, say) are left out.
+  if (f.t === "noscript") return;
   reconcile(f, ch);
 }
 
