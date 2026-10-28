@@ -1,0 +1,11 @@
+{
+  "name": "reactre-testdom",
+  "private": true,
+  "description": "A small linked-list DOM for the packages' tests and profiling.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./setup": "./src/setup.ts"
+  }
+}
