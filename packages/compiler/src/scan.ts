@@ -195,8 +195,9 @@ export function literal(src: string): unknown {
   if (src === "false") return false;
   if (src === "null") return null;
   if (src === "undefined" || src === "void 0") return undefined;
-  // Plain decimals only. Hex, exponents and separators stay expressions.
-  if (/^-?\d+(\.\d+)?$/.test(src)) return Number(src);
+  // Decimals, with or without a leading zero and with an exponent, as Bun and oxc print them
+  // (oxc prints 0.5 as .5 and 1000 as 1e3). Hex and separators stay expressions.
+  if (/^-?(\d+(\.\d+)?|\.\d+)(e[+-]?\d+)?$/.test(src)) return Number(src);
   // Bun prints strings in double quotes, so JSON.parse decodes most of them. The scan rejects
   // source that only starts and ends with a quote, such as `"a")("b"`. An escape JSON lacks
   // (\x41, \') makes JSON.parse throw, and the value stays an expression.
