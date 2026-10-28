@@ -87,7 +87,8 @@ jobs:
           done
 
       # The release carries the tarballs npm serves, byte for byte, even when a version was
-      # published earlier by hand, so the two never differ.
+      # published earlier by hand, so the two never differ. A tarball published moments ago can
+      # take a few minutes to reach npm's CDN, so each download is retried for up to 5 minutes.
       - name: Attach npm's tarballs to the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -96,6 +97,10 @@ jobs:
           for dir in $PACKAGES; do
             name=$(jq -r .name "packages/$dir/package.json")
             version=$(jq -r .version "packages/$dir/package.json")
-            npm pack "$name@$version" --pack-destination "$RUNNER_TEMP/release"
+            for attempt in $(seq 1 20); do
+              npm pack "$name@$version" --pack-destination "$RUNNER_TEMP/release" && break
+              [ "$attempt" = 20 ] && exit 1
+              sleep 15
+            done
           done
           gh release upload "$TAG" "$RUNNER_TEMP"/release/*.tgz --clobber
