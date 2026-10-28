@@ -8,7 +8,7 @@
 // app: run.ts's tests find buttons and rows by them, and the shared stylesheet styles them.
 // Every action builds a new rows array, so the keyed list can compare rows by identity.
 
-import { batch, For, render, selector, signal } from "reactre";
+import { batch, For, render, selector, signal } from "@reactre/core";
 
 // #region Data
 

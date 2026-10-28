@@ -1,4 +1,4 @@
-// reactre: declarative UI compiled to reactre/dom templates.
+// reactre: declarative UI compiled to @reactre/dom templates.
 //
 // You write TSX components over signals:
 //
@@ -18,7 +18,7 @@
 //   );
 //   render(App, document.getElementById("main")!);
 //
-// reactre-compiler turns each JSX tree into a template, cloned per
+// @reactre/compiler turns each JSX tree into a template, cloned per
 // instance, and the code that keeps its holes up to date. Components run
 // once; what changes later is what reads a signal:
 //
@@ -34,7 +34,7 @@
 //   - Event handlers in rows are delegated: one listener per event type on
 //     the list's parent, which finds the row and calls its handler.
 //
-// The list is reactre/dom's keyed List (reuse, minimal moves, swaps and
+// The list is @reactre/dom's keyed List (reuse, minimal moves, swaps and
 // removals in place). Nothing here depends on React.
 //
 // Design decisions that shape the code below:
@@ -50,7 +50,7 @@
 //   - Everything named with a leading `__` is the compiler's target, not a
 //     public API. Its shape follows what the compiler emits.
 
-import { List, Template } from "./dom.ts";
+import { List, Template } from "@reactre/dom";
 
 // #region Reactivity core
 
@@ -427,7 +427,7 @@ class RowContext implements Observer {
 const rowContext = new RowContext();
 
 /**
- * The runtime of one `<For>`: a reactre/dom List of rows, plus what keeps
+ * The runtime of one `<For>`: a @reactre/dom List of rows, plus what keeps
  * the rows' holes current (item updates, signal reads, selector changes)
  * and the delegated event listeners.
  */
@@ -638,7 +638,7 @@ class ForList<T, K> {
 
 // #region What compiled code calls
 
-/** Internal: a template from markup strings and hole markers (reactre-compiler). */
+/** Internal: a template from markup strings and hole markers (@reactre/compiler). */
 export function __template(strings: readonly string[], holes: readonly number[]): Template {
   return new Template(strings, holes);
 }
@@ -734,7 +734,7 @@ export function render(view: () => unknown, parent: Element): void {
 
 /**
  * `<For each key>`: a keyed list; compiled away, so only its type is used.
- * Calling it at runtime throws: the source was not compiled by reactre-compiler.
+ * Calling it at runtime throws: the source was not compiled by @reactre/compiler.
  *
  * Rows are keyed by `key`, reused across renders and moved with the fewest
  * DOM moves. A row's markup is built once, when its key first appears; its
@@ -753,7 +753,7 @@ export function For<T>(_props: {
   key: (item: T) => string | number;
   children: (item: T) => unknown;
 }): unknown {
-  throw new Error("reactre: <For> must be compiled by reactre-compiler");
+  throw new Error("reactre: <For> must be compiled by @reactre/compiler");
 }
 
 // #endregion

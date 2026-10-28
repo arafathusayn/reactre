@@ -1,15 +1,15 @@
 # reactre
 
-A tiny, fast UI library for the web. You write components in TSX over signals; a compiler turns each JSX tree into a template that is parsed once and cloned, and a change updates only the text, class or attribute that reads it. No virtual DOM, no dependencies, about 6 KB gzipped.
+A tiny, fast UI library for the web. You write components in TSX over signals. No virtual DOM, no dependencies, about 6 KB gzipped.
 
 ```sh
-bun add reactre
+bun add @reactre/core
 ```
 
-Or with npm: `npm install reactre`.
+Or with npm: `npm install @reactre/core`.
 
 ```tsx
-import { render, signal } from "reactre";
+import { render, signal } from "@reactre/core";
 
 const [count, setCount] = signal(0);
 
@@ -23,7 +23,7 @@ Components run once. `{count()}` reads a signal, so that one text node updates w
 A keyed list, where selecting a row re-runs only the two rows whose class changes:
 
 ```tsx
-import { For, render, selector, signal } from "reactre";
+import { For, render, selector, signal } from "@reactre/core";
 
 type Todo = { id: number; title: string };
 
@@ -49,25 +49,29 @@ const App = () => (
 render(App, document.getElementById("app")!);
 ```
 
-TSX is compiled at build time by [`reactre-compiler`](packages/compiler), a Bun plugin:
+TSX is compiled at build time by [`@reactre/compiler`](packages/compiler), a Bun plugin:
 
 ```sh
-bun add -d reactre-compiler
+bun add -d @reactre/compiler
 ```
 
 ```ts
-import { reactreCompiler } from "reactre-compiler";
+import { reactreCompiler } from "@reactre/compiler";
 
 await Bun.build({ entrypoints: ["src/main.tsx"], outdir: "dist", plugins: [reactreCompiler()] });
 ```
 
 ## Without TSX
 
-The templates the compiler produces are a public API of their own, in `reactre/dom`. They need no build step:
+The templates the compiler produces are a public API of their own, in `@reactre/dom`. They need no build step:
+
+```sh
+bun add @reactre/core @reactre/dom
+```
 
 ```ts
-import { effect, signal } from "reactre";
-import { html, on, text } from "reactre/dom";
+import { effect, signal } from "@reactre/core";
+import { html, on, text } from "@reactre/dom";
 
 const [count, setCount] = signal(0);
 
@@ -80,15 +84,16 @@ document.body.append(view.root);
 
 The template is parsed once. `mount` clones it with values for its holes, in order, and the effect rewrites the one text node when `count` changes.
 
-**[Read the reactre docs →](packages/reactre)**
+**[Read the reactre docs →](packages/core)**
 
 ## Packages
 
-| Package                                 | For                                                                                        |
-| --------------------------------------- | ------------------------------------------------------------------------------------------ |
-| [`reactre`](packages/reactre)           | Signals, templates and keyed lists. `reactre/dom` is the template layer.                   |
-| [`reactre-compiler`](packages/compiler) | Writing reactre as TSX: compiles each JSX tree to a template at build time (a Bun plugin). |
-| [`reactre-compat`](packages/compat)     | Running an existing React 19 app on reactre's template layer, unchanged.                   |
+| Package                                  | For                                                                                        |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------ |
+| [`@reactre/core`](packages/core)         | Signals, effects and keyed lists: the components you write.                                |
+| [`@reactre/dom`](packages/dom)           | Templates and keyed lists on the DOM, with no build step. `@reactre/core` renders on it.   |
+| [`@reactre/compiler`](packages/compiler) | Writing reactre as TSX: compiles each JSX tree to a template at build time (a Bun plugin). |
+| [`@reactre/compat`](packages/compat)     | Running an existing React 19 app on reactre's templates, unchanged.                        |
 
 ## Performance
 

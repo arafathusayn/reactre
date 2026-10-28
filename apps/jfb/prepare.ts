@@ -58,9 +58,9 @@ export interface Entry {
 /**
  * Our entries. `reactre` is app/reactre.tsx, compiled by reactre-compiler.
  * `reactre-compat` is the idiomatic React app (app/main.jsx) on
- * reactre-compat, its JSX compiled to templates by reactre-compat/compiler;
+ * reactre-compat, its JSX compiled to templates by @reactre/compat/compiler;
  * `react` is the same app on React 19. `reactre-dom` is app/dom.ts,
- * written by hand on reactre/dom's templates and keyed list.
+ * written by hand on @reactre/dom's templates and keyed list.
  */
 export const OURS: Record<string, Entry> = {
   reactre: { app: "reactre.tsx", compiler: "reactre" },
@@ -79,24 +79,24 @@ export interface BuildOptions {
   readonly packages?: string;
   /** Minify the bundle (default true); profiling turns it off to keep function names readable. */
   readonly minify?: boolean;
-  /** reactre-compat/compiler's inlineElements option. */
+  /** @reactre/compat/compiler's inlineElements option. */
   readonly inlineElements?: boolean;
 }
 
 /**
  * A Bun plugin that resolves our packages, and `react` and `react-dom` where the entry runs on
  * reactre-compat, from `dir`, so a build can take them from another revision. Every `react` and
- * `react-dom` subpath maps to the reactre-compat root, which provides both APIs.
+ * `react-dom` subpath maps to the @reactre/compat root, which provides both APIs.
  */
 function resolveFrom(dir: string, react: Entry["react"]): BunPlugin {
   return {
     name: "jfb-resolve",
     setup(build) {
-      build.onResolve({ filter: /^reactre(-compiler|-compat)?(\/.*)?$/ }, (args) => ({
+      build.onResolve({ filter: /^@reactre\// }, (args) => ({
         path: Bun.resolveSync(args.path, dir),
       }));
       if (react === "reactre-compat")
-        build.onResolve({ filter: /^react(-dom)?(\/.*)?$/ }, () => ({ path: Bun.resolveSync("reactre-compat", dir) }));
+        build.onResolve({ filter: /^react(-dom)?(\/.*)?$/ }, () => ({ path: Bun.resolveSync("@reactre/compat", dir) }));
     },
   };
 }
@@ -114,13 +114,13 @@ export async function buildEntry(name: string, entry: Entry, options: BuildOptio
   // The compilers load from the same place as the runtime they compile for.
   if (entry.compiler === "reactre") {
     const { reactreCompiler } = (await import(
-      Bun.resolveSync("reactre-compiler", packages)
-    )) as typeof import("reactre-compiler");
+      Bun.resolveSync("@reactre/compiler", packages)
+    )) as typeof import("@reactre/compiler");
     plugins.push(reactreCompiler());
   } else if (entry.compiler === "reactre-compat") {
     const { reactreCompatCompiler } = (await import(
-      Bun.resolveSync("reactre-compat/compiler", packages)
-    )) as typeof import("reactre-compat/compiler");
+      Bun.resolveSync("@reactre/compat/compiler", packages)
+    )) as typeof import("@reactre/compat/compiler");
     plugins.push(
       reactreCompatCompiler(options.inlineElements === undefined ? {} : { inlineElements: options.inlineElements }),
     );

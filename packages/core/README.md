@@ -1,23 +1,23 @@
-# reactre
+# @reactre/core
 
-A tiny, fast UI library for the web. You write components in TSX over signals; a compiler turns each JSX tree into a template that is parsed once and cloned, and a change updates only the text, class or attribute that reads it.
+A tiny, fast UI library for the web. You write components in TSX over signals.
 
-- **Small.** About 6 KB minified and gzipped, with no dependencies.
+- **Small.** About 6 KB minified and gzipped, with no third-party dependencies.
 - **Fine-grained.** No virtual DOM and no tree diffing: components run once, and a signal's readers update.
 - **Fast lists.** A keyed list reuses rows and makes the fewest DOM moves. Selecting one row out of thousands touches two.
 - **Typed.** Template holes carry their value types, and the types cost nothing at runtime.
 - **Runs anywhere there is a DOM.** Any modern browser, with any bundler or none.
 
 ```sh
-bun add reactre
+bun add @reactre/core
 ```
 
-Or with npm: `npm install reactre`.
+Or with npm: `npm install @reactre/core`.
 
 ## A counter
 
 ```tsx
-import { render, signal } from "reactre";
+import { render, signal } from "@reactre/core";
 
 const [count, setCount] = signal(0);
 
@@ -31,7 +31,7 @@ render(Counter, document.getElementById("app")!);
 ## A list
 
 ```tsx
-import { For, render, selector, signal } from "reactre";
+import { For, render, selector, signal } from "@reactre/core";
 
 type Todo = { id: number; title: string };
 
@@ -59,25 +59,29 @@ render(App, document.getElementById("app")!);
 
 `<For>` reuses rows by key and moves the fewest nodes. `selector` makes a change of selection re-run only the two rows whose key it was or is, and row clicks go to one delegated listener.
 
-TSX is compiled at build time by `reactre-compiler`, a Bun plugin:
+TSX is compiled at build time by [`@reactre/compiler`](https://www.npmjs.com/package/@reactre/compiler), a Bun plugin:
 
 ```sh
-bun add -d reactre-compiler
+bun add -d @reactre/compiler
 ```
 
 ```ts
-import { reactreCompiler } from "reactre-compiler";
+import { reactreCompiler } from "@reactre/compiler";
 
 await Bun.build({ entrypoints: ["src/main.tsx"], outdir: "dist", plugins: [reactreCompiler()] });
 ```
 
 ## Without TSX
 
-The templates the compiler produces are a public API of their own, in `reactre/dom`:
+The templates the compiler produces are a public API of their own, in [`@reactre/dom`](https://www.npmjs.com/package/@reactre/dom). Signals drive them just as well:
+
+```sh
+bun add @reactre/core @reactre/dom
+```
 
 ```ts
-import { effect, signal } from "reactre";
-import { html, on, text } from "reactre/dom";
+import { effect, signal } from "@reactre/core";
+import { html, on, text } from "@reactre/dom";
 
 const [count, setCount] = signal(0);
 
@@ -90,32 +94,7 @@ document.body.append(view.root);
 
 The template is parsed once. `mount` clones it with values for its holes, in order, and the effect rewrites the one text node when `count` changes.
 
-A keyed list:
-
-```ts
-import { effect, signal } from "reactre";
-import { html, List, text, type BlockOf } from "reactre/dom";
-
-type Todo = { id: number; title: string };
-const [todos, setTodos] = signal<Todo[]>([
-  { id: 1, title: "Write the docs" },
-  { id: 2, title: "Ship it" },
-]);
-
-const Item = html`<li>${text()}</li>`;
-const list = new List<Todo, BlockOf<typeof Item>>(document.querySelector("ul")!, {
-  key: (todo) => todo.id,
-  create: (todo) => Item.mount([todo.title]),
-  update: (item, todo) => item.set(0, todo.title),
-});
-
-effect(() => list.set(todos()));
-setTodos((all) => [...all].reverse()); // both rows are kept; one moves
-```
-
 ## API
-
-### `reactre`
 
 | Export               | What it does                                                                                    |
 | -------------------- | ----------------------------------------------------------------------------------------------- |
@@ -127,18 +106,6 @@ setTodos((all) => [...all].reverse()); // both rows are kept; one moves
 | `selector(source)`   | `isSelected(key)`, where a change of selection re-runs only the readers of the old and new key. |
 | `<For each key>`     | A keyed list in TSX.                                                                            |
 | `render(view, root)` | Mounts a TSX view into an element.                                                              |
-
-### `reactre/dom`
-
-| Export                        | What it does                                                                                       |
-| ----------------------------- | -------------------------------------------------------------------------------------------------- |
-| `html`, `svg`                 | A template, parsed once per call site, with typed holes.                                           |
-| `text`, `cls`, `attr`, `prop` | Value holes: text content, the class, an attribute, a DOM property.                                |
-| `on`, `slot`                  | An event handler hole, and a place to insert other content.                                        |
-| `Template.mount(values)`      | Clones the template with its hole values and returns a `Block`.                                    |
-| `Block.set(index, value)`     | Writes one hole, and only when the value changed.                                                  |
-| `List`                        | A keyed list: reuses rows by key and keeps the longest run in place, so it moves the fewest nodes. |
-| `morph(target, nodes)`        | Patches a live subtree to match freshly built nodes.                                               |
 
 ## Browsers and bundlers
 

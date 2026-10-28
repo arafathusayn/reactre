@@ -9,8 +9,8 @@
 //   bun run.ts [--runtimes reactre-compat,reactre-compat+classes,reactre-compat+classes+compiler] [--verbose]
 //
 // Runtimes: `reactre-compat` is the default build, without class components; `+classes` is the
-// build with them (reactre-compat/classes); `+compiler` compiles the scenarios' JSX to templates
-// with reactre-compat/compiler. The build aliases `react`, `react-dom` and their subpaths to the
+// build with them (@reactre/compat/classes); `+compiler` compiles the scenarios' JSX to templates
+// with @reactre/compat/compiler. The build aliases `react`, `react-dom` and their subpaths to the
 // runtime, as a bundler plugin for a real app would.
 //
 // Exits non-zero when a `+classes` scenario differs from React, or a scenario of the default
@@ -20,8 +20,8 @@
 
 import { join } from "node:path";
 
+import { reactreCompatCompiler } from "@reactre/compat/compiler";
 import puppeteer from "puppeteer-core";
-import { reactreCompatCompiler } from "reactre-compat/compiler";
 
 import { reactAlias, type Runtime } from "./alias.ts";
 import { findChrome } from "./chrome.ts";
@@ -34,7 +34,7 @@ const dir = import.meta.dir;
  * Bundles a page entry for one runtime spec into a single IIFE script.
  *
  * "reactre-compat+classes" is the runtime with class support, "+compiler" adds
- * reactre-compat/compiler (the scenarios' JSX compiled to templates). Every side is a minified
+ * @reactre/compat/compiler (the scenarios' JSX compiled to templates). Every side is a minified
  * production build, since production builds are what apps ship.
  */
 async function bundle(entry: string, spec: string): Promise<string> {

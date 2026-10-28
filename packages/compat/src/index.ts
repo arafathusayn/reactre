@@ -1,9 +1,9 @@
-// reactre-compat: the React 19 client API on reactre/dom.
+// @reactre/compat: the React 19 client API on @reactre/dom.
 //
 // One module stands in for `react`, `react/jsx-runtime`, `react/jsx-dev-runtime`,
 // `react/compiler-runtime`, `react-dom` and `react-dom/client`. Alias those specifiers to it at
 // build time and an unchanged React app (components, hooks, libraries) renders on it. It exists
-// so React code gets reactre/dom's DOM speed without being rewritten.
+// so React code gets @reactre/dom's DOM speed without being rewritten.
 //
 // Key design decisions:
 //
@@ -13,7 +13,7 @@
 //   2. Placement: only host elements (and roots, portals and block slots) place DOM nodes. After
 //      a render changes which nodes a host holds, the host's node list is compared with its live
 //      children: the common prefix and suffix are kept, and the rest is reordered with
-//      reactre/dom's longest increasing subsequence, so a reorder costs the minimum number of DOM
+//      @reactre/dom's longest increasing subsequence, so a reorder costs the minimum number of DOM
 //      moves. Moves use moveBefore() where the browser has it, so a moved row keeps focus,
 //      selection, iframes and running animations; React's insertBefore() loses them.
 //   3. Events: one listener per event type on each root (and portal container), added when a
@@ -24,7 +24,7 @@
 //      before the render returns, passive effects after paint (or before the next render,
 //      whichever comes first). Updates batch automatically and flush in a microtask; updates
 //      from an event handler or inside flushSync flush before the handler returns.
-//   5. Blocks: reactre-compat/compiler turns JSX trees of host elements into templates. A block
+//   5. Blocks: @reactre/compat/compiler turns JSX trees of host elements into templates. A block
 //      clones a prebuilt prototype and on update writes only the holes whose values changed. A
 //      component whose whole render is one block hosts it itself, so a list row costs one fiber.
 //   6. Hot paths are written for the JavaScript engine: small objects with one shape and short
@@ -42,7 +42,7 @@
 // components, unmounting, scheduling, effects, hooks, events, resource hints and the default
 // export.
 
-import { lis } from "reactre/dom";
+import { lis } from "@reactre/dom";
 
 /** The React version this module implements, as libraries read it. */
 export const version: string = "19.2.0";
@@ -136,14 +136,14 @@ function withDefaults(type: Any, props: Props, copy: boolean): Props {
   return out;
 }
 
-/** Internal: an inline element's key (reactre-compat/compiler). */
+/** Internal: an inline element's key (@reactre/compat/compiler). */
 export function __key(k: Any): string | null {
   return k === undefined ? null : "" + k;
 }
 
 /**
  * Internal: an inline element's props with its type's defaultProps filled
- * in (reactre-compat/compiler builds component elements without jsx()).
+ * in (@reactre/compat/compiler builds component elements without jsx()).
  */
 export function __defaults(type: Any, props: Props): Props {
   return withDefaults(type, props, false);
@@ -433,7 +433,7 @@ const SUSPENSE = 9;
 const LAZY = 10;
 const ACTIVITY = 11;
 const MEMO = 12; // memo() of anything but a plain function: a wrapper around one child
-const BLOCK = 13; // a compiled template instance (reactre-compat/compiler)
+const BLOCK = 13; // a compiled template instance (@reactre/compat/compiler)
 const SLOT = 14; // a child hole of a block holding elements: places its nodes before its anchor
 
 // Flags (bits of Fiber.f). Several states share one number field, so a fiber stays small and a
@@ -643,7 +643,7 @@ function setupFunc(type: Any): void {
 
 /**
  * Shallow equality of two objects by own keys and Object.is, as React compares props. Not part
- * of React's public API; exported for libraries and for reactre-compat/classes (PureComponent).
+ * of React's public API; exported for libraries and for @reactre/compat/classes (PureComponent).
  */
 export function shallowEqual(a: Any, b: Any): boolean {
   if (Object.is(a, b)) return true;
@@ -1924,7 +1924,7 @@ function styleProp(s: Any, k: string, v: Any): void {
 
 // #endregion
 
-// #region Blocks: compiled templates (reactre-compat/compiler)
+// #region Blocks: compiled templates (@reactre/compat/compiler)
 
 // The compiler turns a JSX tree of host elements into a template, built once
 // per namespace and cloned per instance, and a values array with one value
@@ -2175,7 +2175,7 @@ function propsOf(d: TemplateNode, v: Any[]): Props {
   return props;
 }
 
-/** Internal: an element of a compiled template with its hole values (reactre-compat/compiler). */
+/** Internal: an element of a compiled template with its hole values (@reactre/compat/compiler). */
 export function __block(template: object, key: Any, values: Any[]): ReactElement {
   return new BlockElement(template as Template, key == null ? null : "" + key, values) as Any;
 }
@@ -2336,7 +2336,7 @@ function setChild(f: Fiber, i: number, x: Any, old: Any): void {
 
 // #region List deltas
 
-// A compiled list loop's report (reactre-compat/compiler): its new list is
+// A compiled list loop's report (@reactre/compat/compiler): its new list is
 // the list it made last time except at the indexes in deltaIdx.
 // setChild uses the report only for the slot whose last list is `deltaPrev` and whose new one
 // is `deltaOut`, both compared by identity, so a stale report never matches another list.
@@ -2344,7 +2344,7 @@ let deltaOut: Any[] | null = null,
   deltaPrev: Any[] | null = null,
   deltaIdx: number[] = [];
 
-/** Internal: list `out` equals `prev` but at `idx` (reactre-compat/compiler). */
+/** Internal: list `out` equals `prev` but at `idx` (@reactre/compat/compiler). */
 export function __delta(out: Any[], prev: Any[], idx: number[]): void {
   deltaOut = out;
   deltaPrev = prev;
@@ -2822,7 +2822,7 @@ export const Component: ComponentClass = ComponentFn as Any;
 /** A class component that re-renders only when its props or state change (shallowly). */
 export const PureComponent: ComponentClass = PureComponentFn as Any;
 
-// Class support is a separate module (reactre-compat/classes), so
+// Class support is a separate module (@reactre/compat/classes), so
 // apps without class components do not ship it. Its entry installs it here.
 
 /**
@@ -2863,7 +2863,7 @@ export interface ClassSupport {
 // Installed class support, or null when the app does not load it.
 let classes: ClassSupport | null = null;
 
-/** Internal: installs class support; reactre-compat/classes calls it when it loads. Once only. */
+/** Internal: installs class support; @reactre/compat/classes calls it when it loads. Once only. */
 export function __installClasses(make: (core: ClassCore) => ClassSupport): void {
   // Installed once: a second call keeps the support already in use.
   classes ??= make({
@@ -2895,7 +2895,7 @@ export function __installClasses(make: (core: ClassCore) => ClassSupport): void 
 /** The error for a class component rendered while class support is not loaded. */
 function noClasses(type: Any): Error {
   return new Error(
-    `${type.displayName ?? type.name ?? "A class component"} is a class component, and this build leaves class support out. Alias react to reactre-compat/classes to include it.`,
+    `${type.displayName ?? type.name ?? "A class component"} is a class component, and this build leaves class support out. Alias react to @reactre/compat/classes to include it.`,
   );
 }
 

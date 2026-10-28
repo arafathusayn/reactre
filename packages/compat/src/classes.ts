@@ -1,7 +1,7 @@
-// reactre-compat with class components: the same exports as
-// reactre-compat, plus the class component runtime (lifecycles,
+// @reactre/compat with class components: the same exports as
+// @reactre/compat, plus the class component runtime (lifecycles,
 // setState, error boundaries). Alias `react` and `react-dom` to this module
-// instead of reactre-compat when the app or a library it uses
+// instead of @reactre/compat when the app or a library it uses
 // renders class components; the default module leaves them out and throws a
 // clear error when one renders.
 //

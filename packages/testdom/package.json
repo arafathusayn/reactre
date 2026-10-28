@@ -1,5 +1,5 @@
 {
-  "name": "reactre-testdom",
+  "name": "@reactre/testdom",
   "private": true,
   "description": "A small linked-list DOM for the packages' tests and profiling.",
   "license": "Apache-2.0",

@@ -1,5 +1,5 @@
 // A single-pass scanner for JavaScript source, shared by the two JSX compilers
-// (reactre-compiler and reactre-compat/compiler): it skips literals, comments, templates and
+// (@reactre/compiler and @reactre/compat/compiler): it skips literals, comments, templates and
 // regular expressions, and finds the top-level parts of an argument list.
 //
 // Both compilers work on the JavaScript that Bun's transpiler prints, as text: they find jsx calls,

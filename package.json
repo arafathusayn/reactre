@@ -30,8 +30,8 @@
     "compat": "bun --cwd apps/react-compat run.ts"
   },
   "devDependencies": {
-    "bun-types": "catalog:",
-    "reactre-compiler": "workspace:*",
-    "reactre-testdom": "workspace:*"
+    "@reactre/compiler": "workspace:*",
+    "@reactre/testdom": "workspace:*",
+    "bun-types": "catalog:"
   }
 }

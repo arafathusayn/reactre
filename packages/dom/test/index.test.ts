@@ -1,7 +1,7 @@
-// Example-based tests of reactre/dom on the fake DOM: the LIS, the keyed List
+// Example-based tests of @reactre/dom on the fake DOM: the LIS, the keyed List
 // (order, node reuse, minimal moves, key lookup modes, nested reconciles,
 // state-preserving moves), html templates and blocks, slot holes, and morph.
-// DOM work is counted by reactre-testdom's `ops`, so tests assert exact costs.
+// DOM work is counted by @reactre/testdom's `ops`, so tests assert exact costs.
 import { beforeEach, describe, expect, test } from "bun:test";
 
 import {
@@ -12,9 +12,9 @@ import {
   installFakeDocument,
   ops,
   resetOps,
-} from "reactre-testdom";
+} from "@reactre/testdom";
 
-import { type Entry, html, lis, List, morph, slot, text } from "../src/dom.ts";
+import { type Entry, html, lis, List, morph, slot, text } from "../src/index.ts";
 
 beforeEach(installFakeDocument);
 

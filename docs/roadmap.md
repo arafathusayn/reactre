@@ -36,7 +36,7 @@ Where reactre-compat loses is script time in the measured click, for two reasons
 Not yet tried:
 
 - **Slimmer fibers.** A row fiber carries about 22 fields, several of them unused by rows (`rx`, `tx`, `hc`, `x`). Moving cold fields into a side object would cut per-row memory on create, replace, append and clear.
-- **No per-row state on DOM elements.** Rows carry two symbol expandos (`FIBER`, `OWN`). For the hand-written reactre/dom app, an expando slowed native clearing by 5–7% (`apps/profiling/native-clear.ts`). Measure reactre-compat with and without them first: event dispatch walks `FIBER`, and placement uses `OWN`.
+- **No per-row state on DOM elements.** Rows carry two symbol expandos (`FIBER`, `OWN`). For the hand-written @reactre/dom app, an expando slowed native clearing by 5–7% (`apps/profiling/native-clear.ts`). Measure reactre-compat with and without them first: event dispatch walks `FIBER`, and placement uses `OWN`.
 - **Fewer distinct functions on the update path**, so less code tiers up during the click: for example `flushSoon` with `runMicro`, and `rerender` into `flushWork`.
 
 Already measured and rejected: building component elements through `jsx()`, a fragment in `place()`, `insertBefore` instead of `moveBefore`, turning off the inert template document, and skipping the per-event mark.
@@ -58,7 +58,7 @@ These don't affect the benchmark app, but would affect a real app.
 
 ## 4. reactre-compat's known bugs
 
-- **Spread props in a compiled list row.** reactre-compat/compiler's free-name scan treats a name after `...` as a property access, so `rows.map((r) => <li {...extra}>{r}</li>)` hoists a loop that is never passed `extra`. It throws a ReferenceError, or reads the wrong binding.
+- **Spread props in a compiled list row.** @reactre/compat/compiler's free-name scan treats a name after `...` as a property access, so `rows.map((r) => <li {...extra}>{r}</li>)` hoists a loop that is never passed `extra`. It throws a ReferenceError, or reads the wrong binding.
 - **`componentWillMount` next to `getSnapshotBeforeUpdate`.** On mount, the class runtime checks the class's static `getSnapshotBeforeUpdate` instead of the instance's method, so a class that defines it still gets `componentWillMount`, which React skips.
 
 **Done when** each has a failing test first, then a fix, with the compatibility check still at 36 of 36 with classes.
@@ -72,4 +72,4 @@ These don't affect the benchmark app, but would affect a real app.
 
 - **Type declarations.** The packages give types through their TypeScript sources. Emit `.d.ts` files instead, so a consumer's own compiler settings never type-check reactre's sources.
 - **JSX types.** Give editors the types of reactre's intrinsic elements and `<For>`, so TSX written for reactre type-checks.
-- **Other bundlers.** reactre-compiler and reactre-compat/compiler are Bun plugins. Plugins for Vite and esbuild would bring TSX to other build setups.
+- **Other bundlers.** @reactre/compiler and @reactre/compat/compiler are Bun plugins. Plugins for Vite and esbuild would bring TSX to other build setups.

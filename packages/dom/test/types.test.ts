@@ -3,7 +3,7 @@
 // lines live in functions that never run: they test the compiler, not the DOM.
 import { beforeEach, describe, expect, test } from "bun:test";
 
-import { asDom, type FakeElement, installFakeDocument, SVG_NS } from "reactre-testdom";
+import { asDom, type FakeElement, installFakeDocument, SVG_NS } from "@reactre/testdom";
 
 import {
   attr,
@@ -23,7 +23,7 @@ import {
   type Template,
   text,
   type ValuesOf,
-} from "../src/dom.ts";
+} from "../src/index.ts";
 
 beforeEach(installFakeDocument);
 

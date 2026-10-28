@@ -31,7 +31,7 @@ jobs:
       - run: bun test
       - name: Build and pack the published packages
         run: |
-          for dir in reactre compiler compat; do
+          for dir in dom core compiler compat; do
             if jq -e .scripts.build "packages/$dir/package.json" >/dev/null; then
               (cd "packages/$dir" && bun run build)
             fi

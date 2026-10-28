@@ -3,9 +3,9 @@
 // counterexample on failure. See prop.ts.
 import { beforeEach, describe, expect, test } from "bun:test";
 
-import { asDom, type FakeElement, type FakeNode, installFakeDocument, ops, resetOps } from "reactre-testdom";
+import { asDom, type FakeElement, type FakeNode, installFakeDocument, ops, resetOps } from "@reactre/testdom";
 
-import { attr, cls, html, lis, List, morph, text } from "../src/dom.ts";
+import { attr, cls, html, lis, List, morph, text } from "../src/index.ts";
 import { assertProperty, type Choices, type Gen, keyOf, type KeyStyle, listCase } from "./prop.ts";
 
 beforeEach(installFakeDocument);

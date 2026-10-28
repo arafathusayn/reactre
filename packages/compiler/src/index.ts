@@ -1,10 +1,10 @@
-// reactre-compiler: a Bun plugin that compiles reactre's TSX into templates
+// @reactre/compiler: a Bun plugin that compiles reactre's TSX into templates
 // and the code that keeps them up to date (the model is in reactre's src/index.ts).
 //
 // Bun transpiles each file (TypeScript stripped, JSX to the automatic
 // runtime's `jsx(type, props, key)` calls). Every jsx call is then compiled:
 //
-//   - A host element tree becomes a reactre/dom template, hoisted to
+//   - A host element tree becomes a @reactre/dom template, hoisted to
 //     module scope, and an expression that clones it with the values of its
 //     holes. A hole whose expression calls a function is bound (an effect
 //     that rewrites it); an `on*` handler is added as a listener; a child
@@ -53,7 +53,7 @@ export interface ReactreCompilerOptions {
 export function reactreCompiler(options: ReactreCompilerOptions = {}): BunPlugin {
   const filter = options.filter ?? /\.[jt]sx$/;
   return {
-    name: "reactre-compiler",
+    name: "@reactre/compiler",
     setup(build) {
       build.onLoad({ filter }, async ({ path }) => {
         if (path.includes("/node_modules/")) return undefined;
@@ -68,7 +68,7 @@ export function reactreCompiler(options: ReactreCompilerOptions = {}): BunPlugin
 /**
  * Transpile one TSX (or JSX) source with Bun and compile its JSX.
  *
- * @returns JavaScript that imports what it needs from `reactre` and no JSX runtime.
+ * @returns JavaScript that imports what it needs from `@reactre/core` and no JSX runtime.
  * @throws ReactreCompileError for a construct the compiler does not handle.
  * @example
  *   const js = compileSource(`export const A = () => <p class="x">{count()}</p>;`);
@@ -78,7 +78,7 @@ export function compileSource(source: string, loader: "jsx" | "tsx" = "tsx"): st
   // jsx call is compiled away.
   const t = new Bun.Transpiler({
     loader,
-    tsconfig: { compilerOptions: { jsx: "react-jsx", jsxImportSource: "reactre" } },
+    tsconfig: { compilerOptions: { jsx: "react-jsx", jsxImportSource: "@reactre/core" } },
   } as ConstructorParameters<typeof Bun.Transpiler>[0]);
   return compileJs(t.transformSync(source));
 }
@@ -87,7 +87,7 @@ export function compileSource(source: string, loader: "jsx" | "tsx" = "tsx"): st
 
 // #region Templates and holes
 
-// Hole markers, as reactre/dom's text(), cls(), attr() and slot() make them; 0 is untyped (an event).
+// Hole markers, as @reactre/dom's text(), cls(), attr() and slot() make them; 0 is untyped (an event).
 const M_TEXT = -1,
   M_CLASS = -2,
   M_ATTR = -4,
@@ -159,7 +159,7 @@ export function compileJs(js: string): string {
   for (const m of body.matchAll(/\b(jsxs|jsx|jsxDEV|Fragment)_[a-z0-9]{8}\b/g)) {
     throw new ReactreCompileError(`reactre: ${m[1]} left uncompiled (fragments are not supported)`);
   }
-  const imports = `import { __template as __rrT, __for as __rrFor, __insert as __rrInsert, __bind as __rrBind, __slot as __rrSlot, untrack as __rrUntrack } from "reactre";\n`;
+  const imports = `import { __template as __rrT, __for as __rrFor, __insert as __rrInsert, __bind as __rrBind, __slot as __rrSlot, untrack as __rrUntrack } from "@reactre/core";\n`;
   return imports + c.templates.join("\n") + "\n" + body;
 }
 

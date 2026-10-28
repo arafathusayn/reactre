@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "reactre-compat": "workspace:*",
+    "@reactre/compat": "workspace:*",
     "puppeteer-core": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:",

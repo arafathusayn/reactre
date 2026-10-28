@@ -1,4 +1,4 @@
-// Unit tests for reactre-compat/compiler: what it compiles to templates and
+// Unit tests for @reactre/compat/compiler: what it compiles to templates and
 // what it leaves to the plain runtime. That compiled code renders what React
 // renders is checked in headless Chrome by apps/react-compat/run.ts
 // (the reactre-compat+compiler runtimes).
@@ -15,7 +15,7 @@ import { __block, __defaults, __key, __template, Fragment, jsx, jsxs } from "../
 const templates = (out: string): unknown[] =>
   [...out.matchAll(/__hrTemplate\((.*)\);$/gm)].map((m) => JSON.parse(m[1]!) as unknown);
 
-describe("reactre-compat-compiler", () => {
+describe("@reactre/compat/compiler", () => {
   test("a host tree becomes one template; its expressions become holes in order", () => {
     const out = compileSource(
       `export const Row = ({ r, sel, pick }) => <tr className={sel ? "danger" : ""}><td className="col">{r.id}</td><td><a onClick={() => pick(r.id)}>{r.label}</a></td></tr>;`,

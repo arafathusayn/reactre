@@ -53,15 +53,11 @@ const scratch = join(import.meta.dir, ".cache/ab");
 // The base revision's packages, with a node_modules that links them as the
 // workspace does, so the base build resolves only base sources.
 rmSync(scratch, { recursive: true, force: true });
-mkdirSync(join(scratch, "node_modules"), { recursive: true });
+mkdirSync(join(scratch, "node_modules/@reactre"), { recursive: true });
 const tar = Bun.spawnSync(["sh", "-c", `git -C '${repo}' archive '${ref}' packages | tar -x -C '${scratch}'`]);
 if (tar.exitCode !== 0) throw new Error(`git archive ${ref}: ${tar.stderr}`);
-for (const [pkg, dir] of [
-  ["reactre", "reactre"],
-  ["reactre-compiler", "compiler"],
-  ["reactre-compat", "compat"],
-])
-  symlinkSync(join(scratch, "packages", dir!), join(scratch, "node_modules", pkg!));
+for (const dir of ["core", "dom", "compiler", "compat"])
+  symlinkSync(join(scratch, "packages", dir), join(scratch, "node_modules/@reactre", dir));
 
 // Both sides build into the benchmark checkout as their own entries, so run.ts's `measure` loads
 // them like any other entry.

@@ -1,0 +1,38 @@
+{
+  "name": "@reactre/dom",
+  "version": "0.0.1",
+  "description": "Templates parsed once and cloned, typed holes, and keyed lists that make the fewest DOM moves.",
+  "keywords": [
+    "reactre",
+    "dom",
+    "templates",
+    "keyed-list",
+    "morph",
+    "ui"
+  ],
+  "homepage": "https://github.com/arafathusayn/reactre/tree/main/packages/dom#readme",
+  "bugs": "https://github.com/arafathusayn/reactre/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/arafathusayn/reactre.git",
+    "directory": "packages/dom"
+  },
+  "license": "Apache-2.0",
+  "author": "Arafat Husayn",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "bun": "./src/index.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "src",
+    "dist"
+  ],
+  "scripts": {
+    "build": "bun build src/index.ts --outdir dist --target browser --format esm"
+  }
+}

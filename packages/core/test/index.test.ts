@@ -1,4 +1,4 @@
-// Tests of reactre and reactre-compiler on the fake DOM: TSX sources written
+// Tests of reactre and @reactre/compiler on the fake DOM: TSX sources written
 // here are compiled as the plugin compiles them and run against the runtime.
 // They cover holes that follow signals, components and slots, batch, memo and
 // untrack, and <For>: node reuse, selector updates, delegated handlers and
@@ -6,8 +6,8 @@
 
 import { beforeEach, describe, expect, test } from "bun:test";
 
-import { compileSource, ReactreCompileError } from "reactre-compiler";
-import { FakeElement, FakeEvent, installFakeDocument } from "reactre-testdom";
+import { compileSource, ReactreCompileError } from "@reactre/compiler";
+import { FakeElement, FakeEvent, installFakeDocument } from "@reactre/testdom";
 
 import * as runtime from "../src/index.ts";
 
@@ -16,9 +16,9 @@ beforeEach(installFakeDocument);
 // Compile this file's own TSX test source (a module body ending in `return { ... }`)
 // and run it with the runtime, `root` in scope.
 function run<T>(src: string, root: FakeElement): T {
-  // new Function cannot import: each `import { a, b as c } from "reactre"`
+  // new Function cannot import: each `import { a, b as c } from "@reactre/core"`
   // becomes `const` bindings to the runtime passed in as `rr`.
-  const js = compileSource(src).replace(/^import \{([^}]*)\} from "reactre";$/gm, (_, names: string) =>
+  const js = compileSource(src).replace(/^import \{([^}]*)\} from "@reactre\/core";$/gm, (_, names: string) =>
     names
       .split(",")
       .map((n) => {
@@ -57,7 +57,7 @@ describe("reactre: elements and signals", () => {
     const root = box();
     const api = run<{ setName: (s: string) => void; setOn: (b: boolean) => void; renders: () => number }>(
       `
-      import { render, signal } from "reactre";
+      import { render, signal } from "@reactre/core";
       const [name, setName] = signal("a");
       const [on, setOn] = signal(false);
       let renders = 0;
@@ -84,7 +84,7 @@ describe("reactre: elements and signals", () => {
     const root = box();
     const api = run<{ count: () => number }>(
       `
-      import { render, signal } from "reactre";
+      import { render, signal } from "@reactre/core";
       const [count, setCount] = signal(0);
       function Button({ label, onClick }) {
         return <button onClick={onClick}>{label}</button>;
@@ -108,7 +108,7 @@ describe("reactre: elements and signals", () => {
     const root = box();
     const api = run<{ setShow: (b: boolean) => void }>(
       `
-      import { render, signal } from "reactre";
+      import { render, signal } from "@reactre/core";
       const [show, setShow] = signal(true);
       function App() {
         return <div>{show() ? <b>yes</b> : <i>no</i>}<hr /></div>;
@@ -146,7 +146,7 @@ describe("reactre: elements and signals", () => {
 
 // The benchmark's shape: a keyed list of rows, a selection, row handlers.
 const LIST = `
-  import { For, render, selector, signal } from "reactre";
+  import { For, render, selector, signal } from "@reactre/core";
   const [rows, setRows] = signal([]);
   const [selected, setSelected] = signal(0);
   const [suffix, setSuffix] = signal("");
@@ -254,7 +254,7 @@ describe("reactre: <For>", () => {
   });
 });
 
-describe("reactre-compiler: errors", () => {
+describe("@reactre/compiler: errors", () => {
   test("constructs it does not compile are errors, not a runtime fallback", () => {
     expect(() => compileSource(`const x = <><b /></>;`)).toThrow(ReactreCompileError);
     expect(() => compileSource(`const p = {}; const x = <b {...p} />;`)).toThrow(ReactreCompileError);

@@ -1,8 +1,9 @@
 {
-  "name": "reactre",
+  "name": "@reactre/core",
   "version": "0.0.1",
   "description": "A tiny, fast UI library: signals for state, compiled templates for the DOM.",
   "keywords": [
+    "reactre",
     "ui",
     "dom",
     "signals",
@@ -10,15 +11,14 @@
     "templates",
     "tsx",
     "jsx",
-    "keyed-list",
     "fine-grained"
   ],
-  "homepage": "https://github.com/arafathusayn/reactre/tree/main/packages/reactre#readme",
+  "homepage": "https://github.com/arafathusayn/reactre/tree/main/packages/core#readme",
   "bugs": "https://github.com/arafathusayn/reactre/issues",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/arafathusayn/reactre.git",
-    "directory": "packages/reactre"
+    "directory": "packages/core"
   },
   "license": "Apache-2.0",
   "author": "Arafat Husayn",
@@ -29,11 +29,6 @@
       "types": "./src/index.ts",
       "bun": "./src/index.ts",
       "default": "./dist/index.js"
-    },
-    "./dom": {
-      "types": "./src/dom.ts",
-      "bun": "./src/dom.ts",
-      "default": "./dist/dom.js"
     }
   },
   "files": [
@@ -41,6 +36,9 @@
     "dist"
   ],
   "scripts": {
-    "build": "bun build src/index.ts src/dom.ts --outdir dist --target browser --format esm --splitting --packages external"
+    "build": "bun build src/index.ts --outdir dist --target browser --format esm --packages external"
+  },
+  "dependencies": {
+    "@reactre/dom": "workspace:*"
   }
 }

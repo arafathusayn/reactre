@@ -1,5 +1,5 @@
-// reactre-compat/compiler: a Bun plugin that compiles JSX trees of host
-// elements into reactre-compat templates.
+// @reactre/compat/compiler: a Bun plugin that compiles JSX trees of host
+// elements into @reactre/compat templates.
 //
 // Each .jsx and .tsx file of the app is transpiled by Bun (TypeScript
 // stripped, JSX to the automatic runtime's `jsx("tr", { ... }, key)` calls,
@@ -13,7 +13,7 @@
 // hole sits, hoisted to module scope. Holes are attribute, style, event and
 // child expressions; components, keyed or bailed elements, fragments and
 // arrays stay ordinary jsx calls inside child holes (compiled in turn). The
-// runtime (reactre-compat) builds each template once and clones it, and
+// runtime (@reactre/compat) builds each template once and clones it, and
 // writes only the holes whose values changed, with React's semantics.
 //
 // A component element whose props are an object literal (no spread, key or
@@ -43,18 +43,18 @@
 // Design decisions:
 //   - When in doubt, the compiler leaves a call alone. An uncompiled jsx call is always correct
 //     (the runtime's own jsx() builds the element), only slower, so every bail-out is safe.
-//   - Bun's output is read as text with the scanner shared with reactre-compiler
-//     (reactre-compiler/scan), not parsed: the jsx calls are all there is to find.
+//   - Bun's output is read as text with the scanner shared with @reactre/compiler
+//     (@reactre/compiler/scan), not parsed: the jsx calls are all there is to find.
 //   - Every name the output adds starts with `__hr`, so it cannot collide with the app's names,
 //     and the free-name analysis below can tell the compiler's names from the app's.
 //
 //   Bun.build({ plugins: [reactreCompatCompiler()], ... })
 //
 // The output imports `react` and `react/jsx-runtime`, which the app aliases
-// to reactre-compat; with React itself the compiled code would not run.
+// to @reactre/compat; with React itself the compiled code would not run.
 
+import { CLOSE, isIdent, literal, NOT_LITERAL, OPEN, skipToken, split, until } from "@reactre/compiler/scan";
 import type { BunPlugin } from "bun";
-import { CLOSE, isIdent, literal, NOT_LITERAL, OPEN, skipToken, split, until } from "reactre-compiler/scan";
 
 // #region Plugin
 
@@ -82,7 +82,7 @@ export interface CompilerOptions {
 export function reactreCompatCompiler(options: CompilerOptions = {}): BunPlugin {
   const filter = options.filter ?? /\.[jt]sx$/;
   return {
-    name: "reactre-compat-compiler",
+    name: "@reactre/compat/compiler",
     setup(build) {
       build.onLoad({ filter }, async ({ path }) => {
         if (path.includes("/node_modules/") || options.exclude?.(path)) return undefined;
@@ -97,7 +97,7 @@ export function reactreCompatCompiler(options: CompilerOptions = {}): BunPlugin 
 /**
  * Transpile one JSX or TSX source with Bun and compile its host element trees.
  *
- * @returns JavaScript that imports from `react` and `react/jsx-runtime` (aliased to reactre-compat).
+ * @returns JavaScript that imports from `react` and `react/jsx-runtime` (aliased to @reactre/compat).
  * @example
  *   const js = compileSource(`export const A = ({ n }) => <p className="x">{n}</p>;`, "jsx");
  *   // js holds `__hrTemplate(["p",{"className":"x"},0])` and `__hrBlock(__hrT0, null, [n])`.

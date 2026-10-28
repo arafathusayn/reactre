@@ -1,4 +1,4 @@
-// The js-framework-benchmark app on reactre/dom: a declarative row template with typed holes, and
+// The js-framework-benchmark app on @reactre/dom: a declarative row template with typed holes, and
 // a keyed list that renders the rows array (reusing, moving and removing rows by id).
 //
 // The state is the rows array and the selected id; each action changes the state and renders
@@ -12,7 +12,7 @@
 // The templates below are single-line on purpose: whitespace between tags would become text
 // nodes in the DOM, which the official markup does not have.
 
-import { cls, html, List, text } from "reactre/dom";
+import { cls, html, List, text } from "@reactre/dom";
 
 // #region Data
 

@@ -1,5 +1,5 @@
-// Class components, which the class build (reactre-compat/classes)
-// adds to reactre-compat. Importing it installs class support for
+// Class components, which the class build (@reactre/compat/classes)
+// adds to @reactre/compat. Importing it installs class support for
 // every test in the process, so class tests live here.
 //
 // Covered: setState merging and callbacks with componentDidUpdate, and an error boundary's
@@ -7,7 +7,7 @@
 
 import { beforeEach, describe, expect, test } from "bun:test";
 
-import { FakeElement, installFakeDocument } from "reactre-testdom";
+import { FakeElement, installFakeDocument } from "@reactre/testdom";
 
 import { Component, createElement as h, createRoot, flushSync, type Root } from "../src/classes.ts";
 

@@ -13,7 +13,7 @@ export type Runtime = "react" | "reactre-compat";
 
 /** Options for `reactAlias`. */
 export interface AliasOptions {
-  /** reactre-compat only: include class components (reactre-compat/classes). Off by default. */
+  /** reactre-compat only: include class components (@reactre/compat/classes). Off by default. */
   readonly classes?: boolean;
 }
 
@@ -23,7 +23,7 @@ export interface AliasOptions {
  * the one package root, which provides the APIs of all of them.
  */
 export function reactAlias(runtime: Runtime, options: AliasOptions = {}): BunPlugin {
-  const compat = Bun.resolveSync(options.classes ? "reactre-compat/classes" : "reactre-compat", import.meta.dir);
+  const compat = Bun.resolveSync(options.classes ? "@reactre/compat/classes" : "@reactre/compat", import.meta.dir);
   return {
     name: "react-alias-" + runtime,
     setup(build) {
@@ -31,11 +31,11 @@ export function reactAlias(runtime: Runtime, options: AliasOptions = {}): BunPlu
         if (runtime === "react") return { path: Bun.resolveSync(args.path, import.meta.dir) };
         return { path: compat };
       });
-      // reactre-compat imports reactre/dom. A browser build would resolve it to the package's
+      // @reactre/compat imports @reactre/dom. A browser build would resolve it to the package's
       // built dist/, which a fresh checkout does not have; Bun's runtime resolution picks the
       // workspace sources (the `bun` export condition), so the check always runs the code in
       // the tree.
-      build.onResolve({ filter: /^reactre(\/.*)?$/ }, (args) => ({
+      build.onResolve({ filter: /^@reactre\/dom$/ }, (args) => ({
         path: Bun.resolveSync(args.path, dirname(args.importer)),
       }));
     },
