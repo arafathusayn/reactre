@@ -1,0 +1,172 @@
+// React compatibility check: runs the scenarios in cases.tsx and libraries.tsx in headless Chrome
+// against React 19 and against each runtime that stands in for it, and compares every transcript
+// (logged values and the HTML after each step) with React's, line for line.
+//
+// React itself is the oracle: no expected output is written by hand, so a scenario checks
+// whatever React 19 does, including details no one thought to spell out. A real browser runs
+// both sides, so DOM behavior (events, focus, form controls) is the browser's, not a mock's.
+//
+//   bun run.ts [--runtimes reactre-compat,reactre-compat+classes,reactre-compat+classes+compiler] [--verbose]
+//
+// Runtimes: `reactre-compat` is the default build, without class components; `+classes` is the
+// build with them (reactre-compat/classes); `+compiler` compiles the scenarios' JSX to templates
+// with reactre-compat/compiler. The build aliases `react`, `react-dom` and their subpaths to the
+// runtime, as a bundler plugin for a real app would.
+//
+// Exits non-zero when a `+classes` scenario differs from React, or a scenario of the default
+// build differs for any reason but rendering a class (those are listed as needing classes).
+// --verbose prints the pages' console output and both full transcripts of each differing
+// scenario.
+
+import { join } from "node:path";
+
+import puppeteer from "puppeteer-core";
+import { reactreCompatCompiler } from "reactre-compat/compiler";
+
+import { reactAlias, type Runtime } from "./alias.ts";
+import { findChrome } from "./chrome.ts";
+
+// #region Building
+
+const dir = import.meta.dir;
+
+/**
+ * Bundles a page entry for one runtime spec into a single IIFE script.
+ *
+ * "reactre-compat+classes" is the runtime with class support, "+compiler" adds
+ * reactre-compat/compiler (the scenarios' JSX compiled to templates). Every side is a minified
+ * production build, since production builds are what apps ship.
+ */
+async function bundle(entry: string, spec: string): Promise<string> {
+  const [runtime, ...extras] = spec.split("+") as [Runtime, ...string[]];
+  const r = await Bun.build({
+    entrypoints: [join(dir, entry)],
+    format: "iife",
+    minify: true,
+    plugins: [
+      ...(extras.includes("compiler") ? [reactreCompatCompiler()] : []),
+      reactAlias(runtime, { classes: extras.includes("classes") }),
+    ],
+    define: { "process.env.NODE_ENV": JSON.stringify("production") },
+  });
+  if (!r.success) throw new Error(r.logs.join("\n"));
+  return await r.outputs[0]!.text();
+}
+
+// #endregion
+
+// #region Options
+
+const args = process.argv.slice(2);
+const opt = (name: string): string | undefined => {
+  const i = args.indexOf(name);
+  return i >= 0 ? args[i + 1] : undefined;
+};
+const runtimes = (opt("--runtimes") ?? "reactre-compat,reactre-compat+classes,reactre-compat+classes+compiler").split(
+  ",",
+);
+/** Whether a runtime is ours, so its differences fail the check. */
+const ours = (rt: string) => rt.startsWith("reactre-compat");
+// What the default build throws when a class component renders.
+const NO_CLASSES = "this build leaves class support out";
+const verbose = args.includes("--verbose");
+
+// #endregion
+
+// #region Running pages
+
+const browser = await puppeteer.launch({ executablePath: findChrome(), headless: true, args: ["--no-sandbox"] });
+
+/**
+ * Runs one bundled page.tsx in a fresh page and returns its transcripts by scenario name.
+ *
+ * Each runtime gets its own page, so no state leaks from one runtime's run into another's. `ssr`
+ * is set on the window before the script runs, since the hydration scenario reads it at once.
+ */
+async function run(code: string, ssr: Record<string, string>): Promise<Record<string, string[]>> {
+  const page = await browser.newPage();
+  if (verbose) {
+    page.on("console", (m) => console.log("  page:", m.text()));
+    page.on("pageerror", (e) => console.log("  page error:", e instanceof Error ? e.message : String(e)));
+  }
+  try {
+    await page.setContent("<!doctype html><html><head></head><body></body></html>");
+    await page.evaluate((s) => ((window as unknown as { __ssr: unknown }).__ssr = s), ssr);
+    await page.addScriptTag({ content: code });
+    await page.waitForFunction(() => (window as unknown as { __done?: boolean }).__done === true, { timeout: 60000 });
+    return await page.evaluate(() => (window as unknown as { __results: Record<string, string[]> }).__results);
+  } finally {
+    await page.close();
+  }
+}
+
+// #endregion
+
+// #region Comparing
+
+let failed = false;
+try {
+  // The server HTML for hydration comes from React's own server renderer, once, and every
+  // runtime hydrates the same markup.
+  const ssrPage = await browser.newPage();
+  await ssrPage.setContent("<!doctype html><html><body></body></html>");
+  await ssrPage.addScriptTag({ content: await bundle("ssr.tsx", "react") });
+  const ssr = await ssrPage.evaluate(() => (window as unknown as { __ssr: Record<string, string> }).__ssr);
+  await ssrPage.close();
+
+  // React's transcripts are the expected ones.
+  const want = await run(await bundle("page.tsx", "react"), ssr);
+  const names = Object.keys(want);
+  const summary: string[] = [];
+  for (const rt of runtimes) {
+    let got: Record<string, string[]>;
+    try {
+      got = await run(await bundle("page.tsx", rt), ssr);
+    } catch (e) {
+      summary.push(`${rt}: did not run: ${e instanceof Error ? e.message.split("\n")[0] : e}`);
+      if (ours(rt)) failed = true;
+      continue;
+    }
+    let pass = 0;
+    const bad: string[] = [],
+      classes: string[] = [];
+    for (const name of names) {
+      const a = want[name]!,
+        b = got[name] ?? ["(missing)"];
+      const n = Math.max(a.length, b.length);
+      // The first differing line; one line is enough to point at the problem.
+      let diff = -1;
+      for (let i = 0; i < n; i++) if (a[i] !== b[i]) ((diff = i), (i = n));
+      if (diff < 0) {
+        pass++;
+        continue;
+      }
+      // The default build leaves classes out on purpose; a scenario it fails only for that is
+      // reported apart and does not fail the check.
+      if (ours(rt) && !rt.includes("+classes") && b.some((line) => line.includes(NO_CLASSES))) {
+        classes.push(name);
+        continue;
+      }
+      bad.push(name);
+      console.log(
+        `\n${rt} ✗ ${name}\n  react: ${a[diff] ?? "(nothing)"}\n  ${rt.padStart(5)}: ${b[diff] ?? "(nothing)"}`,
+      );
+      if (verbose) {
+        console.log("  --- react ---\n  " + a.join("\n  "));
+        console.log(`  --- ${rt} ---\n  ` + b.join("\n  "));
+      }
+    }
+    summary.push(
+      `${rt}: ${pass}/${names.length} scenarios match React` +
+        (classes.length ? `; need classes: ${classes.join("; ")}` : "") +
+        (bad.length ? `; differ: ${bad.join("; ")}` : ""),
+    );
+    if (ours(rt) && bad.length) failed = true;
+  }
+  console.log("\n" + summary.join("\n"));
+} finally {
+  await browser.close();
+}
+// #endregion
+
+process.exit(failed ? 1 : 0);

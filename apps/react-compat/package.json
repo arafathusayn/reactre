@@ -1,0 +1,21 @@
+{
+  "name": "react-compat-check",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "reactre-compat": "workspace:*",
+    "puppeteer-core": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "@radix-ui/react-dialog": "catalog:",
+    "@tanstack/react-query": "catalog:",
+    "framer-motion": "catalog:",
+    "lucide-react": "catalog:",
+    "react-hook-form": "catalog:",
+    "react-router": "catalog:",
+    "react-transition-group": "catalog:",
+    "recharts": "catalog:",
+    "sonner": "catalog:",
+    "zustand": "catalog:"
+  }
+}
