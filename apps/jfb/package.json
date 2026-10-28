@@ -1,0 +1,20 @@
+{
+  "name": "jfb",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./chrome": "./chrome.ts",
+    "./kinds": "./kinds.ts",
+    "./prepare": "./prepare.ts",
+    "./run": "./run.ts",
+    "./trace": "./trace.ts"
+  },
+  "dependencies": {
+    "puppeteer-core": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "reactre": "workspace:*",
+    "reactre-compiler": "workspace:*",
+    "reactre-compat": "workspace:*"
+  }
+}
