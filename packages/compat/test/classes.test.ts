@@ -91,3 +91,13 @@ describe("error boundaries", () => {
     expect(caught).toEqual(["boom"]);
   });
 });
+
+describe("packaging", () => {
+  // The class build works by side effect: importing it installs class support. A bundler that
+  // trusts a blanket "sideEffects": false follows its re-exports to the main module and drops
+  // the install (Vite's Rolldown does), so the manifest must name it.
+  test("the class build is declared as having side effects", async () => {
+    const manifest = (await Bun.file(new URL("../package.json", import.meta.url)).json()) as { sideEffects: unknown };
+    expect(manifest.sideEffects).toEqual(["./src/classes.ts", "./dist/classes.js"]);
+  });
+});
