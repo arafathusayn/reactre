@@ -6,7 +6,8 @@
 // whatever React 19 does, including details no one thought to spell out. A real browser runs
 // both sides, so DOM behavior (events, focus, form controls) is the browser's, not a mock's.
 //
-//   bun run.ts [--runtimes reactre-compat,reactre-compat+classes,reactre-compat+classes+compiler] [--verbose]
+//   bun run.ts [--runtimes reactre-compat,reactre-compat+classes,reactre-compat+classes+compiler]
+//              [--only <text>] [--verbose]
 //
 // Runtimes: `reactre-compat` is the default build, without class components; `+classes` is the
 // build with them (@reactre/compat/classes); `+compiler` compiles the scenarios' JSX to templates
@@ -15,6 +16,7 @@
 //
 // Exits non-zero when a `+classes` scenario differs from React, or a scenario of the default
 // build differs for any reason but rendering a class (those are listed as needing classes).
+// --only runs just the scenarios whose names contain one of its comma-separated texts.
 // --verbose prints the pages' console output and both full transcripts of each differing
 // scenario.
 
@@ -70,6 +72,8 @@ const ours = (rt: string) => rt.startsWith("reactre-compat");
 // What the default build throws when a class component renders.
 const NO_CLASSES = "this build leaves class support out";
 const verbose = args.includes("--verbose");
+/** Only the scenarios whose names contain one of these comma-separated texts. */
+const only = opt("--only");
 
 // #endregion
 
@@ -91,7 +95,7 @@ async function run(code: string, ssr: Record<string, string>): Promise<Record<st
   }
   try {
     await page.setContent("<!doctype html><html><head></head><body></body></html>");
-    await page.evaluate((s) => ((window as unknown as { __ssr: unknown }).__ssr = s), ssr);
+    await page.evaluate((s, o) => Object.assign(window, { __ssr: s, __only: o ?? undefined }), ssr, only ?? null);
     await page.addScriptTag({ content: code });
     await page.waitForFunction(() => (window as unknown as { __done?: boolean }).__done === true, { timeout: 60000 });
     return await page.evaluate(() => (window as unknown as { __results: Record<string, string[]> }).__results);

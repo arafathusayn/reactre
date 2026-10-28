@@ -13,6 +13,7 @@ declare global {
     __ssr: Record<string, string>;
     __results: Record<string, string[]>;
     __done: boolean;
+    __only: string | undefined;
   }
 }
 
@@ -29,6 +30,8 @@ const settle = async (): Promise<void> => {
 async function main(): Promise<void> {
   const results: Record<string, string[]> = {};
   for (const [name, run] of Object.entries({ ...cases, ...libraryCases })) {
+    // run.ts --only: just the scenarios whose names contain one of the comma-separated texts.
+    if (window.__only !== undefined && !window.__only.split(",").some((s) => name.includes(s))) continue;
     const out: string[] = (results[name] = []);
     // useId values follow each runtime's own scheme (they only have to be
     // unique and stable), so they are numbered by first appearance.
