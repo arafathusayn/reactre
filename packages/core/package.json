@@ -36,7 +36,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "bun build src/index.ts --outdir dist --target browser --format esm --packages external"
+    "build": "rm -rf dist && bun build src/index.ts --outdir dist --target browser --format esm --packages external"
   },
   "dependencies": {
     "@reactre/dom": "workspace:*"

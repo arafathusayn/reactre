@@ -39,7 +39,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "bun build src/index.ts src/classes.ts --outdir dist --target browser --format esm --splitting --packages external"
+    "build": "rm -rf dist && bun build src/index.ts src/classes.ts --outdir dist --target browser --format esm --splitting --packages external"
   },
   "dependencies": {
     "@reactre/compiler": "workspace:*",
