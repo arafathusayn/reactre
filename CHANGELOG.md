@@ -4,6 +4,15 @@ All notable changes to @reactre/dom, @reactre/core, @reactre/compiler and @react
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### @reactre/compat
+
+- Fixed: the class build (`@reactre/compat/classes`) is declared as having side effects, so bundlers that trust `sideEffects`, such as Vite's, keep the code that installs class support.
+- Fixed: when an update arrives while a commit renders, its refs and layout effects still run before its passive effects, as in React (cmdk's list height).
+- Fixed: a `<noscript>` renders its children only as text, as React does (input-otp's fallback style).
+- Docs: setting up Vite.
+
 ## [0.0.1] - 2026-10-29
 
 First release.

@@ -72,4 +72,5 @@ These don't affect the benchmark app, but would affect a real app.
 
 - **Type declarations.** The packages give types through their TypeScript sources. Emit `.d.ts` files instead, so a consumer's own compiler settings never type-check reactre's sources.
 - **JSX types.** Give editors the types of reactre's intrinsic elements and `<For>`, so TSX written for reactre type-checks.
-- **Other bundlers.** @reactre/compiler and @reactre/compat/compiler are Bun plugins. Plugins for Vite and esbuild would bring TSX to other build setups.
+- **Other bundlers.** @reactre/compiler and @reactre/compat/compiler are Bun plugins. One @reactre/plugin built on unplugin would bring both to Vite, Rollup, Rolldown, webpack, Rspack, esbuild and Bun. Their first step runs Bun.Transpiler; under Node it needs a stand-in with the same output, such as oxc-transform. @reactre/compat itself already runs on Vite through `resolve.alias`.
+- **Fast Refresh.** @vitejs/plugin-react's Fast Refresh needs a React renderer registered with react-refresh, which @reactre/compat does not do yet, so an edited component keeps its old code on screen. Until then the docs leave the plugin out and Vite reloads the page on save. **Done when** compat registers with react-refresh, an edit re-renders in place keeping state, and a Vite dev-server check proves it.
