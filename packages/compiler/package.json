@@ -1,0 +1,35 @@
+{
+  "name": "reactre-compiler",
+  "version": "0.0.1",
+  "description": "The Bun plugin that compiles reactre TSX into templates and the code that updates them.",
+  "keywords": [
+    "reactre",
+    "bun",
+    "bun-plugin",
+    "tsx",
+    "jsx",
+    "compiler",
+    "templates"
+  ],
+  "homepage": "https://github.com/arafathusayn/reactre/tree/main/packages/compiler#readme",
+  "bugs": "https://github.com/arafathusayn/reactre/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/arafathusayn/reactre.git",
+    "directory": "packages/compiler"
+  },
+  "license": "Apache-2.0",
+  "author": "Arafat Husayn",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts",
+    "./scan": "./src/scan.ts"
+  },
+  "files": [
+    "src"
+  ],
+  "engines": {
+    "bun": ">=1.4.4"
+  }
+}
