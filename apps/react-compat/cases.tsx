@@ -103,7 +103,7 @@ const click = (el: HTMLElement): void => el.click();
  * value it last set, so assigning `el.value` would hide the change from it; the native setter
  * does not.
  */
-function type(el: HTMLElement, value: string): void {
+export function type(el: HTMLElement, value: string): void {
   const input = el as HTMLInputElement;
   // The native setter, as a user's keystroke would leave it.
   const proto = el.nodeName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;

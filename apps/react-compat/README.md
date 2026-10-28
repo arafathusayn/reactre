@@ -6,6 +6,7 @@ Checks that @reactre/compat behaves like React 19. Each scenario in `cases.tsx` 
 bun run compat                                   # from the repository root
 bun run.ts --runtimes reactre-compat+classes     # from this directory
 bun run.ts --verbose                             # print both transcripts where they differ
+bun run.ts --only cmdk,react-redux               # just the scenarios whose names contain these
 ```
 
 | Runtime                           | Build                                                          |
@@ -14,4 +15,4 @@ bun run.ts --verbose                             # print both transcripts where 
 | `reactre-compat+classes`          | With class components (`@reactre/compat/classes`)              |
 | `reactre-compat+classes+compiler` | With classes, and the JSX compiled by @reactre/compat/compiler |
 
-The check fails when a build with classes differs from React, or when the default build differs for any reason but rendering a class. The library scenarios cover React Router, TanStack Query, Radix, framer-motion, Recharts, react-hook-form, react-transition-group, sonner, zustand and lucide-react.
+The check fails when a build with classes differs from React, or when the default build differs for any reason but rendering a class. The library scenarios cover the 25 React libraries npm downloads most, one package per project (the list and how it was chosen are at the top of `libraries.tsx`): React Router, TanStack Query, Table and Virtual, Radix, framer-motion, Recharts, react-hook-form, react-transition-group, sonner, zustand, lucide-react, React Redux, react-markdown, react-day-picker, cmdk, dnd kit, Sentry, Floating UI, vaul, next-themes, react-resizable-panels, Embla Carousel, input-otp and Emotion.
