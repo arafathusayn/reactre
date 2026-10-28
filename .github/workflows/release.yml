@@ -1,0 +1,89 @@
+name: Release
+
+# Publishing a GitHub release tagged v<version> publishes reactre, reactre-compiler and
+# reactre-compat to npm, all at that version, and attaches their tarballs to the release.
+#
+# npm authenticates this workflow through trusted publishing (OIDC), so no token is stored
+# anywhere. From a public repository, npm also records provenance that links each package to
+# this run. Publishing is idempotent: a version already on npm is left alone, so rerunning a
+# release is safe.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write # attach the tarballs to the release
+  id-token: write # npm trusted publishing and provenance
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  TAG: ${{ github.event.release.tag_name }}
+  # Dependencies first, so each package's dependencies are on npm before it is.
+  PACKAGES: reactre compiler compat
+
+jobs:
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      # npm 11.5.1 or later publishes through trusted publishing; Node 24 ships it.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - run: bun install --frozen-lockfile
+
+      - name: Check every package's version matches the tag
+        run: |
+          for dir in $PACKAGES; do
+            version=$(jq -r .version "packages/$dir/package.json")
+            if [ "$TAG" != "v$version" ]; then
+              echo "::error::Release tag $TAG does not match packages/$dir/package.json version $version"
+              exit 1
+            fi
+          done
+
+      - run: bun fmt --check
+      - run: bun check
+      - run: bun run check:strict
+      - run: bun test
+
+      # The ES modules in dist/ are what browsers, bundlers and other runtimes load. bun pm pack
+      # resolves workspace versions in each manifest.
+      - name: Build and pack
+        run: |
+          for dir in $PACKAGES; do
+            if jq -e .scripts.build "packages/$dir/package.json" >/dev/null; then
+              (cd "packages/$dir" && bun run build)
+            fi
+            (cd "packages/$dir" && bun pm pack --destination "$RUNNER_TEMP/packs")
+          done
+
+      - name: Publish to npm
+        env:
+          # npm records provenance only for public repositories.
+          PROVENANCE: ${{ github.event.repository.private == false && '--provenance' || '' }}
+        run: |
+          for dir in $PACKAGES; do
+            name=$(jq -r .name "packages/$dir/package.json")
+            version=$(jq -r .version "packages/$dir/package.json")
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "$name@$version is already on npm; nothing to publish."
+            else
+              npm publish "$RUNNER_TEMP/packs/$name-$version.tgz" --access public $PROVENANCE
+            fi
+          done
+
+      - name: Attach the tarballs to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" "$RUNNER_TEMP"/packs/*.tgz --clobber

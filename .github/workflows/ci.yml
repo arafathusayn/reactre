@@ -1,0 +1,51 @@
+name: CI
+
+# Every push to main and every pull request: formatting, both type checks,
+# the unit tests, and the React compatibility check in headless Chrome.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Format, types and tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      - run: bun install --frozen-lockfile
+      - run: bun fmt --check
+      - run: bun check
+      - run: bun run check:strict
+      - run: bun test
+      - name: Build and pack the published packages
+        run: |
+          for dir in reactre compiler compat; do
+            if jq -e .scripts.build "packages/$dir/package.json" >/dev/null; then
+              (cd "packages/$dir" && bun run build)
+            fi
+            (cd "packages/$dir" && bun pm pack --dry-run)
+          done
+
+  react-compat:
+    name: React compatibility
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      - run: bun install --frozen-lockfile
+      # The runner image ships Google Chrome; apps/react-compat/chrome.ts finds it.
+      - run: bun run compat
