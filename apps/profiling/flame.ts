@@ -1,0 +1,246 @@
+// Call trees and flame graphs from Chrome CPU profiles (the .cpuprofile format the DevTools
+// profiler records and loads), for profile.ts and window.ts.
+//
+// The tree merges the profiles' stacks by function and call site; a sample counts for the time
+// until the next sample, as DevTools counts it. (idle) is left out, so the root's total is the
+// time the main thread was busy.
+//
+// It merges many profiles into one tree because one click holds too few samples to rank
+// functions; the sum over many clicks does. The flame graph is a standalone SVG, so it opens in
+// any browser with no viewer and can be kept next to a log.
+
+// #region Profiles and call trees
+
+/** The parts of a .cpuprofile this module reads. `timeDeltas` are microseconds between samples. */
+export type CpuProfile = {
+  nodes: {
+    id: number;
+    callFrame: { functionName: string; url: string; lineNumber: number; columnNumber: number };
+    children?: number[];
+  }[];
+  samples: number[];
+  timeDeltas: number[];
+  startTime: number;
+  endTime: number;
+};
+
+/**
+ * One node of the merged call tree, in milliseconds. `native` marks frames with no script URL
+ * (DOM and other built-in calls); `kids` are keyed by function name and call-site line.
+ */
+export type Frame = { name: string; native: boolean; self: number; total: number; kids: Map<string, Frame> };
+
+/** A new, empty tree node. */
+const frame = (name: string, native: boolean): Frame => ({ name, native, self: 0, total: 0, kids: new Map() });
+
+/**
+ * The merged call tree. With `own`, a sample counts only when some frame of
+ * its stack is the page's code (own(url)), or it is GC or (program): the
+ * rest is the harness (puppeteer's clicks and DOM polling), totaled in
+ * the root's `harness`.
+ */
+export function callTree(profiles: CpuProfile[], own?: (url: string) => boolean): Frame & { harness: number } {
+  const root = Object.assign(frame("(all)", true), { harness: 0 });
+  for (const p of profiles) {
+    const byId = new Map(p.nodes.map((n) => [n.id, n]));
+    const parent = new Map<number, number>();
+    for (const n of p.nodes) for (const c of n.children ?? []) parent.set(c, n.id);
+    p.samples.forEach((id, i) => {
+      // The time until the next sample, as DevTools counts it; the last sample counts for nothing.
+      const ms = (p.timeDeltas[i + 1] ?? 0) / 1000;
+      const stack: number[] = [];
+      for (let at: number | undefined = id; at !== undefined; at = parent.get(at)) stack.push(at);
+      stack.pop(); // (root)
+      // An idle sample is the thread waiting, not working.
+      if (stack.length === 1 && byId.get(stack[0]!)!.callFrame.functionName === "(idle)") return;
+      if (own !== undefined) {
+        const leaf = byId.get(stack[0]!)!.callFrame.functionName;
+        if (
+          leaf !== "(garbage collector)" &&
+          leaf !== "(program)" &&
+          !stack.some((n) => own(byId.get(n)!.callFrame.url))
+        ) {
+          root.harness += ms;
+          return;
+        }
+      }
+      let f: Frame = root;
+      f.total += ms;
+      for (let s = stack.length - 1; s >= 0; s--) {
+        const { functionName, url, lineNumber } = byId.get(stack[s]!)!.callFrame;
+        const name = functionName || "(anonymous)";
+        // Keyed by call site as well as name, so two functions with one name (common in a bundle)
+        // stay apart. The label's line is 1-based, as editors show it.
+        const key = `${name}:${lineNumber}`;
+        let k = f.kids.get(key);
+        if (k === undefined)
+          f.kids.set(key, (k = frame(lineNumber >= 0 && url ? `${name}:${lineNumber + 1}` : name, !url)));
+        k.total += ms;
+        f = k;
+      }
+      f.self += ms;
+    });
+  }
+  return root;
+}
+
+/**
+ * Self and total time by function name, summed across the tree. A recursive function's total
+ * counts once per stack (only its outermost frame adds), so it never exceeds the root's total.
+ */
+export function byFunction(root: Frame): { name: string; self: number; total: number }[] {
+  const out = new Map<string, { name: string; self: number; total: number }>();
+  const walk = (f: Frame, open: Set<string>): void => {
+    for (const k of f.kids.values()) {
+      let r = out.get(k.name);
+      if (r === undefined) out.set(k.name, (r = { name: k.name, self: 0, total: 0 }));
+      r.self += k.self;
+      const outer = open.has(k.name);
+      if (!outer) ((r.total += k.total), open.add(k.name));
+      walk(k, open);
+      if (!outer) open.delete(k.name);
+    }
+  };
+  walk(root, new Set());
+  return [...out.values()];
+}
+
+// #endregion
+
+// #region Flame graph
+
+/** Escapes text for SVG content and attribute values. */
+const esc = (s: string): string =>
+  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+/**
+ * A frame's fill: gray for names in parentheses, such as (program) and (garbage collector), blue
+ * for native calls, and a warm hue from a hash of the name for script, so one function keeps its
+ * color across graphs.
+ */
+function color(f: Frame): string {
+  if (f.name.startsWith("(")) return "#b8b8b8"; // (program), (garbage collector)
+  if (f.native) return "#7fa7d9"; // DOM and other native calls
+  let h = 0;
+  for (let i = 0; i < f.name.length; i++) h = (h * 31 + f.name.charCodeAt(i)) | 0;
+  return `hsl(${20 + (Math.abs(h) % 35)}, 85%, ${58 + (Math.abs(h >> 8) % 14)}%)`;
+}
+
+/** A top-down flame graph (root on top, as in DevTools), children by total time. */
+export function flameSvg(full: Frame & { harness?: number }, title: string, width = 1400): string {
+  // (program) is the browser's own work (style, layout, paint): it would
+  // squeeze the JavaScript into slivers, so the graph leaves it out.
+  const program = full.kids.get("(program):-1")?.total ?? 0;
+  const root: Frame = {
+    ...full,
+    total: full.total - program,
+    kids: new Map([...full.kids].filter(([k]) => k !== "(program):-1")),
+  };
+  // Each level is 17 px tall; frames narrower than 0.4 px are skipped, since they would not show
+  // and only bloat the file.
+  const row = 17;
+  const rects: string[] = [];
+  let depth = 0;
+  const scale = (width - 20) / (root.total || 1);
+  const draw = (f: Frame, x: number, d: number): void => {
+    const w = f.total * scale;
+    if (w < 0.4) return;
+    depth = Math.max(depth, d);
+    const y = 40 + d * row;
+    const pct = ((f.total / (root.total || 1)) * 100).toFixed(1);
+    const label = w > 28 ? esc(f.name.slice(0, Math.floor((w - 6) / 6.6))) : "";
+    rects.push(
+      `<g><title>${esc(f.name)}: ${f.total.toFixed(2)} ms total (${pct}%), ${f.self.toFixed(2)} ms self</title>` +
+        `<rect x="${(10 + x).toFixed(1)}" y="${y}" width="${Math.max(w - 0.5, 0.3).toFixed(1)}" height="${row - 1}" fill="${color(f)}" rx="1.5"/>` +
+        (label ? `<text x="${(13 + x).toFixed(1)}" y="${y + 12}">${label}</text>` : "") +
+        `</g>`,
+    );
+    let cx = x;
+    for (const k of [...f.kids.values()].sort((a, b) => b.total - a.total))
+      (draw(k, cx, d + 1), (cx += k.total * scale));
+  };
+  draw(root, 0, 0);
+  const height = 60 + (depth + 1) * row;
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" font-family="ui-monospace,monospace" font-size="11">` +
+    `<rect width="100%" height="100%" fill="#fff"/><text x="10" y="22" font-size="14" font-weight="bold">${esc(title)}</text>` +
+    `<text x="10" y="${height - 8}" fill="#666">${root.total.toFixed(1)} ms of JS, DOM calls and GC shown (${program.toFixed(1)} ms of (program)${full.harness ? `, ${full.harness.toFixed(1)} ms of harness` : ""} left out) · orange: JS · blue: native and DOM calls · gray: GC · hover for times</text>` +
+    rects.join("") +
+    `</svg>`
+  );
+}
+
+// #endregion
+
+// #region Line ticks and traces
+
+/**
+ * Samples by source line inside the named functions (DevTools' line-level ticks), most sampled
+ * first. It reads each node's `positionTicks`; a node without them adds nothing.
+ */
+export function hotLines(profiles: CpuProfile[], names: string[]): { fn: string; line: number; ticks: number }[] {
+  const out = new Map<string, { fn: string; line: number; ticks: number }>();
+  for (const p of profiles)
+    for (const n of p.nodes as (CpuProfile["nodes"][number] & {
+      positionTicks?: { line: number; ticks: number }[];
+    })[]) {
+      const fn = n.callFrame.functionName || "(anonymous)";
+      if (!names.includes(fn)) continue;
+      for (const t of n.positionTicks ?? []) {
+        const k = `${fn}:${t.line}`;
+        const r = out.get(k);
+        if (r) r.ticks += t.ticks;
+        else out.set(k, { fn, line: t.line, ticks: t.ticks });
+      }
+    }
+  return [...out.values()].sort((a, b) => b.ticks - a.ticks);
+}
+
+/** The fields of a trace event that `fromTrace` reads. */
+type TraceEvent = { name: string; ph: string; ts: number; pid: number; tid: number; id?: string; args?: Any };
+// Trace payloads are untyped JSON with many shapes; one alias keeps the escape hatch in one place.
+// deno-lint-ignore no-explicit-any
+type Any = any;
+
+/**
+ * The CPU profile a trace recorded (its disabled-by-default-v8.cpu_profiler
+ * Profile and ProfileChunk events, which the Performance panel draws as the
+ * JS flame chart), cut to the samples between from and to (trace µs).
+ */
+export function fromTrace(events: TraceEvent[], from: number, to: number): CpuProfile[] {
+  const out: CpuProfile[] = [];
+  for (const start of events.filter((e) => e.name === "Profile")) {
+    const nodes = new Map<number, CpuProfile["nodes"][number] & { parent?: number }>();
+    const samples: number[] = [];
+    const deltas: number[] = [];
+    // Chunk sample times are deltas from the profile's start, so `t` accumulates every delta,
+    // including those of samples outside the window.
+    let t = start.args.data.startTime as number;
+    for (const c of events) {
+      if (c.name !== "ProfileChunk" || c.id !== start.id || c.pid !== start.pid) continue;
+      const d = c.args.data;
+      for (const n of d.cpuProfile?.nodes ?? []) nodes.set(n.id, { ...n, children: [] });
+      const s: number[] = d.cpuProfile?.samples ?? [];
+      const td: number[] = d.timeDeltas ?? [];
+      for (let i = 0; i < s.length; i++) {
+        t += td[i] ?? 0;
+        if (t < from || t > to) continue;
+        samples.push(s[i]!);
+        deltas.push(td[i] ?? 0);
+      }
+    }
+    for (const n of nodes.values()) if (n.parent !== undefined) nodes.get(n.parent)?.children!.push(n.id);
+    if (samples.length === 0) continue;
+    // callTree counts a sample until the next one: shift the deltas by one.
+    out.push({
+      nodes: [...nodes.values()],
+      samples,
+      timeDeltas: [0, ...deltas.slice(1), 0],
+      startTime: from,
+      endTime: to,
+    });
+  }
+  return out;
+}
+
+// #endregion

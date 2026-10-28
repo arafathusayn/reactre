@@ -1,0 +1,9 @@
+{
+  "name": "profiling",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "jfb": "workspace:*",
+    "puppeteer-core": "catalog:"
+  }
+}
