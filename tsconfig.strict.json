@@ -1,0 +1,19 @@
+{
+  // The strictest settings, for the published packages, on top of tsconfig.json.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "isolatedDeclarations": true,
+    "declaration": true,
+    "erasableSyntaxOnly": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "noImplicitReturns": true,
+    "allowUnreachableCode": false,
+    "allowUnusedLabels": false,
+    "noUncheckedSideEffectImports": true,
+    "strictBuiltinIteratorReturn": true,
+    "moduleDetection": "force",
+    "forceConsistentCasingInFileNames": true,
+    "libReplacement": false
+  },
+  "include": ["packages/*/src"]
+}

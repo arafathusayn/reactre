@@ -1,0 +1,11 @@
+[fmt]
+printWidth = 120
+sortImports = true
+embeddedLanguageFormatting = "off"
+
+[test]
+root = "packages"
+preload = ["./packages/testdom/src/setup.ts"]
+
+[install]
+ignoreScripts = true
