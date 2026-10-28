@@ -1,17 +1,27 @@
 # Changelog
 
-All notable changes to @reactre/dom, @reactre/core, @reactre/compiler and @reactre/compat are recorded here. The four packages are released together, at the same version.
+All notable changes to @reactre/dom, @reactre/core, @reactre/compiler, @reactre/compat and @reactre/plugin are recorded here. The packages are released together, at the same version.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+### @reactre/plugin
+
+- Added: one plugin for Vite, Rollup, Rolldown, esbuild, webpack, Rspack and Bun, built on unplugin and running under Node and Bun. By default it compiles reactre TSX; with `compat`, it resolves `react` and `react-dom` to @reactre/compat (or its class build) and compiles the app's JSX with @reactre/compat/compiler.
+
+### @reactre/compiler
+
+- Added: an ES module build in `dist/`, so Node can load `compileJs` and the scanner.
+- Changed: numbers written as `.5` or `1e3` in JSX are static values, as `0.5` and `1000` are.
 
 ### @reactre/compat
 
 - Fixed: the class build (`@reactre/compat/classes`) is declared as having side effects, so bundlers that trust `sideEffects`, such as Vite's, keep the code that installs class support.
 - Fixed: when an update arrives while a commit renders, its refs and layout effects still run before its passive effects, as in React (cmdk's list height).
 - Fixed: a `<noscript>` renders its children only as text, as React does (input-otp's fallback style).
-- Docs: setting up Vite.
+- Added: an ES module build of `@reactre/compat/compiler` in `dist/`, so Node can load `compileJs`.
+- Docs: setting up Vite, with @reactre/plugin or an alias.
 
 ## [0.0.1] - 2026-10-29
 

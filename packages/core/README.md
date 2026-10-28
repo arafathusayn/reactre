@@ -59,16 +59,18 @@ render(App, document.getElementById("app")!);
 
 `<For>` reuses rows by key and moves the fewest nodes. `selector` makes a change of selection re-run only the two rows whose key it was or is, and row clicks go to one delegated listener.
 
-TSX is compiled at build time by [`@reactre/compiler`](https://www.npmjs.com/package/@reactre/compiler), a Bun plugin:
+TSX is compiled at build time by [`@reactre/plugin`](https://www.npmjs.com/package/@reactre/plugin), for Vite, Rollup, Rolldown, esbuild, webpack, Rspack and Bun:
 
 ```sh
-bun add -d @reactre/compiler
+bun add -d @reactre/plugin
 ```
 
 ```ts
-import { reactreCompiler } from "@reactre/compiler";
+// vite.config.ts
+import reactre from "@reactre/plugin/vite";
+import { defineConfig } from "vite";
 
-await Bun.build({ entrypoints: ["src/main.tsx"], outdir: "dist", plugins: [reactreCompiler()] });
+export default defineConfig({ plugins: [reactre()] });
 ```
 
 ## Without TSX
