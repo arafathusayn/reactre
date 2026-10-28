@@ -23,12 +23,24 @@
   "type": "module",
   "sideEffects": false,
   "exports": {
-    ".": "./src/index.ts",
-    "./scan": "./src/scan.ts"
+    ".": {
+      "types": "./src/index.ts",
+      "bun": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./scan": {
+      "types": "./src/scan.ts",
+      "bun": "./src/scan.ts",
+      "default": "./dist/scan.js"
+    }
   },
   "files": [
-    "src"
+    "src",
+    "dist"
   ],
+  "scripts": {
+    "build": "rm -rf dist && bun build src/index.ts src/scan.ts --outdir dist --target node --format esm --splitting --packages external"
+  },
   "engines": {
     "bun": ">=1.4.4"
   }
