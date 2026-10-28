@@ -1,0 +1,99 @@
+{
+  "name": "@reactre/plugin",
+  "version": "0.0.1",
+  "description": "reactre's compilers and React alias for Vite, Rollup, Rolldown, esbuild, webpack, Rspack and Bun.",
+  "keywords": [
+    "reactre",
+    "react",
+    "unplugin",
+    "vite-plugin",
+    "rollup-plugin",
+    "rolldown-plugin",
+    "esbuild-plugin",
+    "webpack-plugin",
+    "rspack-plugin",
+    "bun-plugin",
+    "jsx",
+    "compiler"
+  ],
+  "homepage": "https://github.com/arafathusayn/reactre/tree/main/packages/plugin#readme",
+  "bugs": "https://github.com/arafathusayn/reactre/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/arafathusayn/reactre.git",
+    "directory": "packages/plugin"
+  },
+  "license": "Apache-2.0",
+  "author": "Arafat Husayn",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "bun": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./vite": {
+      "types": "./src/vite.ts",
+      "bun": "./src/vite.ts",
+      "default": "./dist/vite.js"
+    },
+    "./rollup": {
+      "types": "./src/rollup.ts",
+      "bun": "./src/rollup.ts",
+      "default": "./dist/rollup.js"
+    },
+    "./rolldown": {
+      "types": "./src/rolldown.ts",
+      "bun": "./src/rolldown.ts",
+      "default": "./dist/rolldown.js"
+    },
+    "./esbuild": {
+      "types": "./src/esbuild.ts",
+      "bun": "./src/esbuild.ts",
+      "default": "./dist/esbuild.js"
+    },
+    "./webpack": {
+      "types": "./src/webpack.ts",
+      "bun": "./src/webpack.ts",
+      "default": "./dist/webpack.js"
+    },
+    "./rspack": {
+      "types": "./src/rspack.ts",
+      "bun": "./src/rspack.ts",
+      "default": "./dist/rspack.js"
+    },
+    "./bun": {
+      "types": "./src/bun.ts",
+      "bun": "./src/bun.ts",
+      "default": "./dist/bun.js"
+    }
+  },
+  "files": [
+    "src",
+    "dist"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && bun build src/index.ts src/vite.ts src/rollup.ts src/rolldown.ts src/esbuild.ts src/webpack.ts src/rspack.ts src/bun.ts --outdir dist --target node --format esm --splitting --packages external"
+  },
+  "dependencies": {
+    "@reactre/compat": "workspace:*",
+    "@reactre/compiler": "workspace:*",
+    "oxc-transform": "catalog:",
+    "unplugin": "catalog:"
+  },
+  "devDependencies": {
+    "@reactre/core": "workspace:*",
+    "@rollup/plugin-node-resolve": "catalog:",
+    "@rspack/core": "catalog:",
+    "esbuild": "catalog:",
+    "oxc-minify": "catalog:",
+    "rolldown": "catalog:",
+    "rollup": "catalog:",
+    "vite": "catalog:",
+    "webpack": "catalog:"
+  },
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  }
+}
