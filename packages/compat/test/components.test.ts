@@ -220,6 +220,19 @@ describe("errors no boundary catches", () => {
     expect(reports).toEqual([boom]);
   });
 
+  test("without onRecoverableError an error the retry rendered past goes to reportError", () => {
+    let calls = 0;
+    function Once() {
+      if (calls++ === 0) throw boom;
+      return h("i", null, "ok");
+    }
+    render(h("div", null, h(Once)));
+    expect(html()).toBe("<div><i>ok</i></div>");
+    expect(reports.map((e) => [(e as Error).message, (e as Error).cause])).toEqual([
+      [expect.stringContaining("#520"), boom],
+    ]);
+  });
+
   test("an error thrown when a component renders again reaches the root", () => {
     let set!: (n: number) => void;
     function Flaky() {

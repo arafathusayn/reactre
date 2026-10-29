@@ -953,7 +953,7 @@ function reconcile(p: Fiber, children: Any): void {
       }
     } catch (e) {
       // As in the general path's catch below: p re-renders on retry and its host re-places.
-      thrownIn(p, e);
+      childThrew(p, e);
       p.f |= DIRTY;
       curHost.f |= STRUCT;
       throw e;
@@ -1055,7 +1055,7 @@ function reconcile(p: Fiber, children: Any): void {
   } catch (e) {
     // Keep every live fiber tracked, so the boundary that catches this can
     // retry (suspense) or unmount (errors) the whole subtree.
-    thrownIn(p, e);
+    childThrew(p, e);
     p.f |= DIRTY;
     const kept = new Set(nc);
     p.c = nc.concat(old.filter((o) => !kept.has(o) && !(o.f & DEAD)));
@@ -1488,8 +1488,8 @@ function create(it: Any, p: Fiber, key: Key): Fiber {
   } catch (e) {
     // A child that fails to mount is dropped: nothing of it is committed. While hydrating, the
     // server's nodes it claimed stay, for the content to hydrate again or render on the client.
-    thrownIn(f, e);
-    unmount(f, !hydrating);
+    renderThrew(f, e);
+    dropFailed(f);
     throw e;
   }
   // A new node under a Fragment ref gets its instance's listeners and observers.
@@ -3386,8 +3386,8 @@ function clientRender(f: Fiber): void {
   for (let i = 0, xs = f.c; i < xs.length; i++) unmount(xs[i]!, true);
   f.c = NO_FIBERS;
   f.hc = null;
-  if (f.n === SUSPENSE) suspense(f);
-  else activity(f);
+  // React's render on the client is its retry: an error it throws counts (see failed).
+  counting(() => (f.n === SUSPENSE ? suspense(f) : activity(f)));
 }
 
 /**
@@ -3576,11 +3576,14 @@ function hydrateDone(f: Fiber, thrown: Any): Any {
     }
     hydrating = false;
     thrown = null;
-    try {
-      reconcile(f, f.p);
-    } catch (e) {
-      thrown = e;
-    }
+    // React's render on the client is its retry: an error it throws counts (see failed).
+    counting(() => {
+      try {
+        reconcile(f, f.p);
+      } catch (e) {
+        thrown = e;
+      }
+    });
     if (thrown !== null && !isThenable(thrown) && d.nodeType === 9) {
       // The client render failed too: the root unmounts, and the document keeps its singletons,
       // emptied, as React releases them.
@@ -3932,10 +3935,17 @@ function runRoot(f: Fiber): void {
   curNs = f.ns = nsOfContainer(f.d);
   let thrown = f.x;
   f.x = null;
+  // A first render that meets an error renders again whole (see firstAgain).
+  let first = false;
   if (!r.mounted) {
     r.mounted = true;
     if (r.hydrate) (hydrating = r.hydrate).begin(f);
-    else f.d.textContent = "";
+    else {
+      f.d.textContent = "";
+      first = true;
+      firstErrors = [];
+      redo++;
+    }
   }
   try {
     if (thrown === null) {
@@ -3943,12 +3953,18 @@ function runRoot(f: Fiber): void {
         reconcile(f, f.p);
       } catch (e) {
         thrown = e;
+        // React renders a render that failed again before its error counts (see failed).
+        if (!first && !isThenable(e)) {
+          const errors = failed(f, e);
+          if (errors !== null) thrown = rootAgain(f, errors);
+        }
       }
     }
     if (hydrating) {
       thrown = hydrating.root(f, thrown);
       hydrating = ph2;
     }
+    if (first) thrown = firstAgain(f, thrown);
     if (thrown !== null) {
       if (isThenable(thrown)) thrown.then(retry(f), retry(f));
       else {
@@ -3964,6 +3980,29 @@ function runRoot(f: Fiber): void {
     hydrating = ph2;
   }
   if (f.f & STRUCT) place(f);
+}
+
+/**
+ * After a root's first render: one that met an error (caught or not) renders again whole, every
+ * node anew, as React's retry mounts everything again. Returns what the root has to handle.
+ */
+function firstAgain(f: Fiber, thrown: Any): Any {
+  const promise = thrown !== null && isThenable(thrown);
+  // The root's own error is one the first pass met.
+  if (thrown !== null && !promise) failed(f, thrown);
+  const errors = firstErrors!;
+  firstErrors = null;
+  redo--;
+  if (!errors.length || promise) return thrown;
+  discardAll(f);
+  return rootAgain(f, errors);
+}
+
+/** React's retry of a root render that threw: it renders again. Returns what that throws, else null. */
+function rootAgain(f: Fiber, errors: Any[]): Any {
+  const x = retryRender(f, errors, () => reconcile(f, f.p));
+  if (x !== null && !isThenable(x)) captureStacks(x, f);
+  return x;
 }
 
 /**
@@ -4033,7 +4072,7 @@ function runFunc(f: Fiber, mount = false): void {
     const hs = f.h;
     if (hs !== null && (hi !== hs.length || !(f.f & HOOKS))) hooksCalled(f, hs.length);
   } catch (e) {
-    thrownIn(f, e);
+    renderThrew(f, e);
     f.f |= DIRTY;
     throw e;
   } finally {
@@ -4218,10 +4257,23 @@ export interface ClassCore {
   isRendering(f: Any): boolean;
   /** Call a root's error callback; an error it throws is thrown again from a task. */
   report(report: (e: Any, info: Any) => void, e: Any, info: Any): void;
-  /** Record that `e` was thrown in f, unless something deeper already did. */
+  /** Record that `e` was thrown in f (by a lifecycle or below), unless something deeper already did. */
   thrownIn(f: Any, e: Any): void;
+  /** Record that f's render threw `e`. */
+  renderThrew(f: Any, e: Any): void;
   /** The component stack of error `e`, from where it was thrown (else from f). */
   componentStack(e: Any, f: Any): string;
+  /**
+   * A boundary's render caught error `e`: null to handle it now, an empty array when a retry above
+   * renders it again, else the errors (#520's) to render again with `again`.
+   */
+  failed(f: Any, e: Any): Any[] | null;
+  /** Render again with `fn`, errors counting now; returns what it throws, else null. */
+  again(f: Any, errors: Any[], fn: () => void): Any;
+  /** Run `fn`, a render only for show: a boundary that catches in it only renders its fallback. */
+  forShow(fn: () => void): void;
+  /** Unmount f's children, which never committed: no ref or class hears of it. */
+  discard(f: Any): void;
 }
 
 /** Internal: what class support provides. */
@@ -4234,6 +4286,8 @@ export interface ClassSupport {
   boundary(f: Any): boolean;
   /** componentWillUnmount for class fiber `f` (its ref is detached before). */
   unmount(f: Any): void;
+  /** Boundary `f` renders its fallback for error `e` only for show, then is as it was. */
+  draft(f: Any, e: Any): void;
 }
 
 // Installed class support, or null when the app does not load it.
@@ -4270,9 +4324,14 @@ export function __installClasses(make: (core: ClassCore) => ClassSupport): void 
     },
     isRendering: (f) => f === cur,
     report: callReport,
-    thrownIn: (f, e) => thrownIn(f, e),
+    thrownIn: childThrew,
+    renderThrew,
     // Class support asks for a stack only for an error a boundary caught: counted for hydration.
     componentStack: (e, f) => (failures++, stackOf(e, f)),
+    failed,
+    again: retryRender,
+    forShow,
+    discard: discardAll,
   });
 }
 
@@ -4304,6 +4363,11 @@ export interface StackSupport {
    * `e` was thrown, for another stack of it.
    */
   componentStack(e: Any, f: Any, keep?: boolean): string;
+  /**
+   * Capture the stack of `e`, an error a render threw (else from f), as React's throwException
+   * does: for #520's wrapper, which is returned, then for `e` itself, kept for its report.
+   */
+  capture(e: Any, f: Any): string;
 }
 
 /**
@@ -4331,6 +4395,7 @@ export function __installStacks(make: (core: StackCore) => StackSupport): void {
   });
   thrownIn = s.thrownIn;
   stackOf = s.componentStack;
+  captureStacks = s.capture;
 }
 
 /**
@@ -5198,8 +5263,10 @@ function unmount(f: Fiber, rm: boolean): void {
     case HOST:
       // A hoisted node sits in <head>, not inside its parent: it is always removed itself.
       if ((rm || f.f & HOIST) && f.d.parentNode !== null) f.d.parentNode.removeChild(f.d);
-      // Hidden content detached its refs when it hid.
-      if (f.p.ref != null && (hiddenCount === 0 || hiddenLevel(f) === 0)) safely(f, () => detachRef(f, f.p.ref));
+      // Hidden content detached its refs when it hid; content that never committed never attached
+      // them (see discardAll).
+      if (f.p.ref != null && !discarding && (hiddenCount === 0 || hiddenLevel(f) === 0))
+        safely(f, () => detachRef(f, f.p.ref));
       // Then it loses Fragment refs' listeners and observers, as in React.
       if (f.f & FRAGREF) fragmentRefs!.hosts(f, false);
       for (let ix = 0, xs = f.c; ix < xs.length; ix++) {
@@ -5244,8 +5311,8 @@ function unmount(f: Fiber, rm: boolean): void {
       break;
     case CLASS:
       // The ref is detached, then componentWillUnmount runs, each on its own, as React does;
-      // hidden content did both when it hid.
-      if (hiddenCount === 0 || hiddenLevel(f) === 0) {
+      // hidden content did both when it hid, and content that never committed does neither.
+      if (!discarding && (hiddenCount === 0 || hiddenLevel(f) === 0)) {
         if (f.p.ref != null) safely(f, () => detachRef(f, f.p.ref));
         if (classes !== null) safely(f, () => classes!.unmount(f));
       }
@@ -5407,10 +5474,34 @@ function reportUncaught(e: Any): void {
     }, 0);
 }
 
+// The error a render threw last, and whether a component's render (or a child that failed to
+// mount) threw it, rather than an element's props, a child's type or a class lifecycle: only such
+// an error renders again (see failed), as compat keeps no props from before the throw to render an
+// update again from. Written by the first catch an error passes, only on a throw.
+let lastError: Any = null,
+  inRender = false;
+/** A component's render (or a child that failed to mount) threw `e` in f. */
+function renderThrew(f: Fiber, e: Any): void {
+  if (e !== lastError) {
+    lastError = e;
+    inRender = true;
+  }
+  thrownIn(f, e);
+}
+/** Rendering f's children (or f's lifecycles) threw `e`. */
+function childThrew(f: Fiber, e: Any): void {
+  if (e !== lastError) {
+    lastError = e;
+    inRender = false;
+  }
+  thrownIn(f, e);
+}
+
 // Component stacks come with ./features/stacks.ts (see __installStacks): until it installs them,
 // a throw records nothing and errors are reported with an empty stack.
 let thrownIn: (f: Fiber, e: Any) => void = () => {},
-  stackOf: (e: Any, f: Fiber | null, keep?: boolean) => string = () => "";
+  stackOf: (e: Any, f: Fiber | null, keep?: boolean) => string = () => "",
+  captureStacks: (e: Any, f: Fiber) => string = () => "";
 
 // Parents render before children: queued fibers sort by depth, counted when
 // more than one is queued (rare) instead of stored in every fiber.
@@ -5538,8 +5629,13 @@ function rerender(f: Fiber): void {
   try {
     run(f, f.p, false);
   } catch (e) {
-    unwinding = true;
-    throwTo(f, e);
+    // React renders a render that failed again before its error counts (see failed).
+    const errors = isThenable(e) ? null : failed(f, e);
+    const x = errors === null ? e : renderAgain(f, e, errors);
+    if (errors === null || x !== null) {
+      unwinding = true;
+      throwTo(f, x);
+    }
   } finally {
     const host = curHost;
     curHost = ph;
@@ -5594,6 +5690,200 @@ function safely(f: Fiber, fn: () => void): void {
     fn();
   } catch (e) {
     throwTo(f, e);
+  }
+}
+
+// React renders a render that threw an error again, at once, before the error counts (see
+// failed). `redo`: a retry above renders this work again (a root's first render, or a fallback
+// rendered only for show); `retrying`: the retry renders, and its errors count; `refailed`: one
+// did. All of it runs only once a render has thrown.
+let redo = 0,
+  retrying = false,
+  refailed = false;
+// While a root's first render runs, the errors it met: each #520's wrapper, then its stack.
+let firstErrors: Any[] | null = null;
+// What failed answers when a retry above renders the work again.
+const DRAFT: Any[] = [];
+
+/**
+ * A render threw `e`, an error, to the boundary or root that catches it in f's place: its stack
+ * is captured twice, as React's throwException does (for #520's wrapper, then its own). React then
+ * renders the root again in one synchronous pass, and only an error that pass throws too counts.
+ * Only an error a component's render threw (see renderThrew) renders again: one from an element's
+ * props, a child's type or a class lifecycle counts at once, as compat keeps nothing from before
+ * the throw to render it again from. Returns null when this one counts (it is the retry's, one
+ * that is not a render's, or hydration's, which recovers its own way); DRAFT when a retry above
+ * renders this work again; else the wrapper and its stack, for the catcher to render again and
+ * report as recoverable if that renders.
+ */
+function failed(f: Fiber, e: Any): Any[] | null {
+  const render = e === lastError && inRender && !hydrating;
+  lastError = null;
+  if (retrying) {
+    refailed = true;
+    if (render) captureStacks(e, f);
+    return null;
+  }
+  if (!render) return null;
+  const stack = captureStacks(e, f);
+  const w = [new Error(prodMessage(520), { cause: e }), stack];
+  if (!redo) return w;
+  if (firstErrors !== null) firstErrors.push(w[0], stack);
+  return DRAFT;
+}
+
+/**
+ * React's retry: `fn` renders again, errors counting now. Returns what it throws, else null. If
+ * nothing failed, the errors of the first pass (`errors`, see failed) were recoverable.
+ */
+function retryRender(f: Fiber, errors: Any[], fn: () => void): Any {
+  const l = layoutQ.length,
+    p = passiveQ.length;
+  let thrown: Any = null;
+  retrying = true;
+  refailed = false;
+  try {
+    fn();
+  } catch (e) {
+    thrown = e;
+    refailed = true;
+  } finally {
+    retrying = false;
+  }
+  if (!refailed) recovered(f, errors, l, p);
+  return thrown;
+}
+
+/**
+ * After a retry that rendered: the first pass's errors go to onRecoverableError (React's #520,
+ * with the first stack) after the commit's layout effects, and what both passes queued runs once
+ * (see once). `l` and `p` are where the retry's entries start in the two queues.
+ */
+function recovered(f: Fiber, errors: Any[], l: number, p: number): void {
+  layoutQ = once(layoutQ, l);
+  passiveQ = once(passiveQ, p);
+  const q = layoutQ;
+  later(f, () => {
+    // Queued again at the end of the layout effects running, so it runs after them all.
+    const h = new Hook(f);
+    h.c = () => {
+      const report = f.o.opts.onRecoverableError;
+      for (let i = 0; i < errors.length; i += 2) {
+        if (report) callReport(report, errors[i], { componentStack: errors[i + 1] });
+        else reportUncaught(errors[i]);
+      }
+    };
+    q.push(h);
+  });
+}
+
+/**
+ * Queue `q` after a retry that rendered, its entries from `start` the retry's: what both passes
+ * queued is kept once. An effect keeps the retry's place; a callback (a lifecycle, a ref, a store
+ * check) the first pass's, which saw the instance as it was committed.
+ */
+function once(q: Hook[], start: number): Hook[] {
+  const out: Hook[] = [];
+  for (let i = 0; i < q.length; i++) {
+    const h = q[i]!;
+    if (
+      i < start
+        ? h.k === 0 || q.indexOf(h, start) < 0
+        : h.k !== 0 || !q.some((x, j) => j < start && x.k === 0 && x.f === h.f)
+    )
+      out.push(h);
+  }
+  return out;
+}
+
+/**
+ * React's retry of a queued fiber whose render threw `e`: the boundary above renders its fallback
+ * only for show (React's first pass unwinds to it), then the fiber renders again. Returns what that
+ * throws, for its boundary or the root, else null.
+ */
+function renderAgain(f: Fiber, e: Any, errors: Any[]): Any {
+  draftAt(f, e);
+  const x = retryRender(f, errors, () => run(f, f.p, false));
+  if (x !== null && !isThenable(x)) captureStacks(x, f);
+  return x;
+}
+
+/**
+ * The error boundary that catches `e`, thrown in f, renders its fallback only for show (see draft
+ * in ./features/classes.ts); a fallback that throws in turn passes its error on. The root renders
+ * nothing to show.
+ */
+function draftAt(f: Fiber, e: Any): void {
+  let b = f.r!;
+  while (b.n !== ROOT && !(b.n === CLASS && classes !== null && classes.boundary(b))) b = b.r!;
+  if (b.n === ROOT) return;
+  // Rendered in its place, as rerender renders a fiber; the host keeps its placement flag.
+  let h = b.r!;
+  while (h.n !== HOST && h.n !== ROOT && h.n !== PORTAL && h.n !== SLOT) h = h.r!;
+  const ph = curHost,
+    pn = curNs,
+    struct = h.f & STRUCT;
+  curHost = h;
+  curNs = hostNs(h);
+  try {
+    classes!.draft(b, e);
+  } catch (x) {
+    if (!isThenable(x)) {
+      captureStacks(x, b);
+      draftAt(b, x);
+    }
+  } finally {
+    curHost = ph;
+    curNs = pn;
+    h.f = (h.f & ~STRUCT) | struct;
+  }
+}
+
+/** Run `fn` as React's retry renders: an error a render throws in it counts at once. */
+function counting(fn: () => void): void {
+  const prev = retrying;
+  retrying = true;
+  try {
+    fn();
+  } finally {
+    retrying = prev;
+  }
+}
+
+/** Run `fn`, a render only for show: a boundary that catches in it only renders its fallback. */
+function forShow(fn: () => void): void {
+  redo++;
+  try {
+    fn();
+  } finally {
+    redo--;
+  }
+}
+
+/**
+ * Unmount the children of `p` that never committed (a render that failed, or a first pass that is
+ * thrown away): their refs were never attached and their classes never mounted, so neither hears
+ * of it, as React tells nothing of work it throws away.
+ */
+function discardAll(p: Fiber): void {
+  const prev = discarding;
+  discarding = true;
+  try {
+    removeAll(p);
+  } finally {
+    discarding = prev;
+  }
+}
+let discarding = false;
+
+/** A fiber that failed to mount: unmounted as never committed (see discardAll). */
+function dropFailed(f: Fiber): void {
+  const prev = discarding;
+  discarding = true;
+  try {
+    unmount(f, !hydrating);
+  } finally {
+    discarding = prev;
   }
 }
 

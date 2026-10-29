@@ -2084,7 +2084,9 @@ describe("errors", () => {
         flush(() => roots[name].render(L.createElement(Ping, { name, peer, limit: 70 })));
       flush(() => setters["a"]!(1));
       await tasks();
-      const self = createRoot(box(), { onUncaughtError: (e: Any) => void log.push("uncaught " + e.message.slice(0, 25)) });
+      const self = createRoot(box(), {
+        onUncaughtError: (e: Any) => void log.push("uncaught " + e.message.slice(0, 25)),
+      });
       flush(() => self.render(L.createElement(Ping, { name: "s", peer: "s", limit: 1000 })));
       flush(() => setters["s"]!(1));
       await tasks();
@@ -2547,7 +2549,8 @@ describe("the render loop", () => {
     const run = async (L: Lib, createRoot: (c: Any, o: Any) => Any, flush: (fn: () => void) => void) => {
       const log: string[] = [],
         c = box();
-      const report = (kind: string) => (e: Any, info: Any) => void log.push(`${kind} ${message(e)}${info.componentStack}`);
+      const report = (kind: string) => (e: Any, info: Any) =>
+        void log.push(`${kind} ${message(e)}${info.componentStack}`);
       const root = createRoot(c, {
         onUncaughtError: report("uncaught"),
         onCaughtError: report("caught"),
@@ -2620,6 +2623,346 @@ describe("the render loop", () => {
       ];
     });
     expect(log.filter((l) => l.startsWith("get")).length).toBeGreaterThan(10);
+  });
+
+  // A render that throws an error is not reported at once: React renders the root again, in one
+  // synchronous pass, and only an error that pass throws too is caught or reported (else the
+  // first is recoverable, #520). Each throw captures the error's component stack twice (once for
+  // #520's wrapper), and React's production build gets a component's frame by calling it without
+  // props: those calls are logged as "probe".
+
+  /** A function component named `name` that logs each call and renders `body(props)`. */
+  const named = (log: string[], name: string, body: (props: Any) => Any) => {
+    const C = (props: Any) => {
+      log.push((props ? "render " : "probe ") + name);
+      return body(props);
+    };
+    Object.defineProperty(C, "name", { value: name });
+    return C;
+  };
+  /** A component that throws `message` (an Error, unless `raw`) whenever it renders with `fail`. */
+  const thrower = (log: string[], name = "Boom", raw?: Any) =>
+    named(log, name, (props) => {
+      if (props?.fail ?? true) throw raw ?? new Error(name.toLowerCase());
+      return "ok";
+    });
+  /**
+   * A component with a layout effect that runs once (compat runs a layout cleanup as its component
+   * renders, React as it commits) and a passive effect that runs after every commit, rendering its
+   * children.
+   */
+  const withEffects = (L: Lib, log: string[], name: string) =>
+    named(log, name, (props) => {
+      L.useLayoutEffect(() => {
+        log.push("layout " + name);
+        return () => void log.push("layout cleanup " + name);
+      }, []);
+      L.useEffect(() => {
+        log.push("passive " + name);
+        return () => void log.push("passive cleanup " + name);
+      });
+      return props.children ?? name;
+    });
+  /** An error boundary class: getDerivedStateFromError unless `didCatchOnly`, and componentDidCatch. */
+  const boundary = (L: Lib, log: string[], name = "B", didCatchOnly = false) => {
+    class Boundary extends L.Component<Any> {
+      state = { failed: false };
+      constructor(props: Any) {
+        super(props);
+        log.push("construct " + name);
+      }
+      componentDidCatch(e: Any) {
+        log.push(name + " did catch " + e.message);
+      }
+      render() {
+        log.push("render " + name + (this.state.failed ? " failed" : ""));
+        return this.state.failed ? name + " failed" : this.props.children;
+      }
+    }
+    if (!didCatchOnly) (Boundary as Any).getDerivedStateFromError = () => ({ failed: true });
+    Object.defineProperty(Boundary, "name", { value: name });
+    return Boundary;
+  };
+
+  test("an error no boundary catches renders the root again before it is reported", async () => {
+    const mount = await stepsSame((L, log) => {
+      const h = L.createElement,
+        App = withEffects(L, log, "App"),
+        Sib = withEffects(L, log, "Sib"),
+        Boom = thrower(log);
+      return [
+        (root, flush) =>
+          flush(() => root.render(h(App, null, h(Sib, { key: 1 }), h(Boom, { key: 2 }), h(Sib, { key: 3 })))),
+      ];
+    });
+    expect(mount.filter((l) => l === "render Boom")).toHaveLength(2);
+    // An update, outside flushSync, in a transition, and inside Suspense (which errors pass).
+    await stepsSame((L, log) => {
+      const h = L.createElement,
+        App = withEffects(L, log, "App"),
+        Sib = withEffects(L, log, "Sib"),
+        Boom = thrower(log);
+      // The children are made in Page's render: elements passed through from above (the same
+      // objects in both passes) are not rendered again in compat's retry, where React's renders
+      // them again from the last commit.
+      const Page = named(log, "Page", (props) =>
+        h(App, null, h(Sib, { key: 1 }), h(Boom, { key: 2, fail: props.fail })),
+      );
+      return [
+        (root, flush) => flush(() => root.render(h(Page, { fail: false }))),
+        (root, flush) => flush(() => root.render(h(Page, { fail: true }))),
+      ];
+    });
+    for (const how of ["default", "transition", "suspense"])
+      await stepsSame((L, log) => {
+        const h = L.createElement,
+          el = h("div", null, h(thrower(log)));
+        return [
+          (root, _, L) =>
+            how === "default"
+              ? root.render(el)
+              : how === "transition"
+                ? L.startTransition(() => root.render(el))
+                : root.render(h(L.Suspense, { fallback: "…" }, el)),
+        ];
+      });
+    // The same error object thrown again keeps the stack it was captured with: only #520's
+    // wrapper captures one; a string is captured anew each time.
+    for (const raw of [new Error("same"), "a string"])
+      await stepsSame((L, log) => [
+        (root, flush) => flush(() => root.render(L.createElement(thrower(log, "Boom", raw)))),
+      ]);
+  });
+
+  test("a component whose own update throws renders again, then its boundary or root has the error", async () => {
+    for (const caught of [true, false])
+      for (const how of ["sync", "default"])
+        await stepsSame((L, log) => {
+          const h = L.createElement,
+            B = boundary(L, log);
+          let set: Any = null;
+          const Boom = named(log, "Boom", () => {
+            const [n, s] = L.useState(0);
+            set = s;
+            log.push("state " + n);
+            if (n) throw new Error("boom");
+            return n;
+          });
+          const Parent = named(log, "Parent", () => h(Boom));
+          return [
+            (root, flush) => flush(() => root.render(caught ? h(B, null, h(Parent)) : h(Parent))),
+            (_, flush) => (how === "sync" ? flush(() => set(1)) : set(1)),
+          ];
+        });
+    // A class whose update throws below it renders again from its state before the update, so
+    // shouldComponentUpdate sees the change again.
+    await stepsSame((L, log) => {
+      const h = L.createElement,
+        B = boundary(L, log);
+      let inst: Any = null;
+      const Child = thrower(log, "Child");
+      class P extends L.PureComponent<Any> {
+        state = { n: 0 };
+        constructor(props: Any) {
+          super(props);
+          inst = this;
+        }
+        shouldComponentUpdate(_: Any, s: Any) {
+          log.push("should update " + s.n);
+          return s.n !== this.state.n;
+        }
+        render() {
+          log.push("render P " + this.state.n);
+          return h(Child, { fail: this.state.n > 0 });
+        }
+      }
+      return [
+        (root, flush) => flush(() => root.render(h(B, null, h(P)))),
+        (_, flush) => flush(() => inst.setState({ n: 1 })),
+      ];
+    });
+  });
+
+  test("an error boundary's first render: the whole root renders twice, the boundary's fallback in each", async () => {
+    const h = (L: Lib) => L.createElement;
+    // getDerivedStateFromError, with siblings, effects and a parent around the boundary.
+    await stepsSame((L, log) => {
+      const B = boundary(L, log),
+        App = withEffects(L, log, "App"),
+        Pre = withEffects(L, log, "Pre"),
+        Rest = withEffects(L, log, "Rest");
+      return [
+        (root, flush) =>
+          flush(() =>
+            root.render(
+              h(L)(App, null, h(L)(Pre, { key: 0 }), h(L)(B, { key: 1 }, h(L)(thrower(log))), h(L)(Rest, { key: 2 })),
+            ),
+          ),
+      ];
+    });
+    // componentDidCatch only (the fallback renders nothing), two boundaries, a class that throws
+    // (constructed again), and a fallback that throws to the boundary above.
+    await stepsSame((L, log) => [
+      (root, flush) => flush(() => root.render(h(L)(boundary(L, log, "B", true), null, h(L)(thrower(log))))),
+    ]);
+    await stepsSame((L, log) => {
+      const B = boundary(L, log);
+      return [
+        (root, flush) =>
+          flush(() => root.render([h(L)(B, { key: 1 }, h(L)(thrower(log))), h(L)(B, { key: 2 }, h(L)(thrower(log)))])),
+      ];
+    });
+    await stepsSame((L, log) => {
+      class K extends L.Component<Any> {
+        constructor(props: Any) {
+          super(props);
+          log.push("construct K");
+        }
+        render(): Any {
+          log.push("render K");
+          throw new Error("k");
+        }
+      }
+      return [(root, flush) => flush(() => root.render(h(L)(boundary(L, log), null, h(L)(K))))];
+    });
+    await stepsSame((L, log) => {
+      class Inner extends L.Component<Any> {
+        state = { failed: false };
+        static getDerivedStateFromError() {
+          return { failed: true };
+        }
+        render() {
+          log.push("render Inner " + this.state.failed);
+          if (this.state.failed) throw new Error("fallback");
+          return this.props.children;
+        }
+      }
+      return [
+        (root, flush) =>
+          flush(() => root.render(h(L)(boundary(L, log, "Outer"), null, h(L)(Inner, null, h(L)(thrower(log)))))),
+      ];
+    });
+  });
+
+  test("an error boundary that catches in an update renders again before its fallback commits", async () => {
+    // The boundary's own update makes a child throw, and a parent's update mounts a child that
+    // throws: the boundary renders from before the update again (React renders the whole root).
+    await stepsSame((L, log) => {
+      const h = L.createElement;
+      let inst: Any = null;
+      class B extends boundary(L, log) {
+        override state = { failed: false, n: 0 };
+        constructor(props: Any) {
+          super(props);
+          inst = this;
+        }
+        override render() {
+          log.push("state " + this.state.n);
+          return this.state.failed ? "failed" : h(thrower(log), { fail: this.state.n > 0 });
+        }
+      }
+      return [(root, flush) => flush(() => root.render(h(B))), (_, flush) => flush(() => inst.setState({ n: 1 }))];
+    });
+    await stepsSame((L, log) => {
+      const h = L.createElement,
+        B = boundary(L, log),
+        Boom = thrower(log);
+      const New = named(log, "New", () => {
+        L.useState(() => log.push("init New"));
+        return h(Boom);
+      });
+      const P = named(log, "P", (props) => (props.show ? h(New) : "none"));
+      return [
+        (root, flush) => flush(() => root.render(h(B, null, h(P, { show: false })))),
+        (root, flush) => flush(() => root.render(h(B, null, h(P, { show: true })))),
+      ];
+    });
+    // A component's own update throws under a boundary whose fallback throws too: the boundary
+    // above catches that.
+    await stepsSame((L, log) => {
+      const h = L.createElement;
+      let set: Any = null;
+      class Inner extends L.Component<Any> {
+        state = { failed: false };
+        static getDerivedStateFromError() {
+          return { failed: true };
+        }
+        render() {
+          log.push("render Inner " + this.state.failed);
+          if (this.state.failed) throw new Error("fallback");
+          return this.props.children;
+        }
+      }
+      const Mine = named(log, "Mine", () => {
+        const [n, s] = L.useState(0);
+        set = s;
+        if (n) throw new Error("mine");
+        return n;
+      });
+      return [
+        (root, flush) => flush(() => root.render(h(boundary(L, log, "Outer"), null, h(Inner, null, h(Mine))))),
+        (_, flush) => flush(() => set(1)),
+      ];
+    });
+  });
+
+  test("a render that throws once and then renders is a recoverable error (#520) with its first stack", async () => {
+    const h = (L: Lib) => L.createElement;
+    const flaky = (log: string[]) => {
+      let calls = 0;
+      return named(log, "Flaky", (props) => {
+        if (props && calls++ === 0) throw new Error("flaky");
+        return "f";
+      });
+    };
+    // On a root's first render, under a boundary, and in an update the component itself makes.
+    await stepsSame((L, log) => [
+      (root, flush) => flush(() => root.render(h(L)(withEffects(L, log, "App"), null, h(L)(flaky(log))))),
+    ]);
+    await stepsSame((L, log) => [
+      (root, flush) =>
+        flush(() =>
+          root.render(h(L)(withEffects(L, log, "App"), null, h(L)(boundary(L, log), null, h(L)(flaky(log))))),
+        ),
+    ]);
+    await stepsSame((L, log) => {
+      let set: Any = null,
+        calls = 0;
+      const Once = named(log, "Once", () => {
+        const [n, s] = L.useState(0);
+        set = s;
+        if (n && calls++ === 0) throw new Error("once");
+        return n;
+      });
+      const Sib = withEffects(L, log, "Sib");
+      const Parent = named(log, "Parent", () => [h(L)(Sib, { key: 1 }), h(L)(Once, { key: 2 })]);
+      return [(root, flush) => flush(() => root.render(h(L)(Parent))), (_, flush) => flush(() => set(1))];
+    });
+    // The parent's update: a class before the child that throws once runs componentDidUpdate
+    // once, after the retry.
+    await stepsSame((L, log) => {
+      let set: Any = null,
+        calls = 0;
+      class K extends L.Component<Any> {
+        componentDidUpdate() {
+          log.push("K did update " + this.props.n);
+        }
+        render() {
+          log.push("render K " + this.props.n);
+          return this.props.n;
+        }
+      }
+      const Once = named(log, "Once", (props) => {
+        if (props.n && calls++ === 0) throw new Error("once");
+        return "o";
+      });
+      const Parent = named(log, "Parent", () => {
+        const [n, s] = L.useState(0);
+        set = s;
+        return [h(L)(K, { key: 1, n }), h(L)(Once, { key: 3, n })];
+      });
+      return [(root, flush) => flush(() => root.render(h(L)(Parent))), (_, flush) => flush(() => set(1))];
+    });
   });
 });
 

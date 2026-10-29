@@ -64,8 +64,11 @@ function support(core: ClassCore): ClassSupport {
     );
   }
 
-  /** Render the instance and reconcile its output with the fiber's children. */
-  function render(f: Any, inst: Any): void {
+  /**
+   * Render the instance and reconcile its output with the fiber's children. A fallback rendered for
+   * an error that counted (`final`) throws an error that counts too: it is not rendered again.
+   */
+  function render(f: Any, inst: Any, final = false): void {
     const out = core.rendering(f, () => {
       try {
         // Cleared first, so it marks only a setState made during this render (see enqueue).
@@ -75,6 +78,8 @@ function support(core: ClassCore): ClassSupport {
         // A render that threw is not done: the fiber stays dirty, so its next update renders it
         // even when its element is unchanged.
         f.f |= DIRTY;
+        if (final) core.thrownIn(f, e);
+        else core.renderThrew(f, e);
         throw e;
       }
     });
@@ -93,6 +98,29 @@ function support(core: ClassCore): ClassSupport {
     if (ref != null) {
       core.checkRef(ref);
       core.laterShown(f, () => core.attachRef(f, ref, inst));
+    }
+  }
+
+  /**
+   * React's first pass when its retry renders error `e` again: boundary `f` takes the error's state
+   * and renders its fallback, which is thrown away, and is then as it was. With only
+   * componentDidCatch it renders nothing, as in React.
+   */
+  function draft(f: Any, e: Any): void {
+    const gdsfe = f.t.getDerivedStateFromError;
+    if (typeof gdsfe !== "function") return;
+    const inst = f.s,
+      kept = f.c,
+      state = inst.state;
+    f.c = [];
+    try {
+      const d = gdsfe(e);
+      if (d != null) inst.state = { ...state, ...d };
+      core.forShow(() => render(f, inst));
+    } finally {
+      core.discard(f);
+      f.c = kept;
+      inst.state = state;
     }
   }
 
@@ -127,7 +155,11 @@ function support(core: ClassCore): ClassSupport {
       if (thrown === null) {
         let prevProps: Any = null,
           prevState: Any = null,
-          snapshot: Any;
+          snapshot: Any,
+          // What an update changes on the instance besides: put back if its render fails.
+          prevContext: Any = null,
+          queued: Any = null,
+          forced = 0;
         if (mount) {
           // Constructed as during render, with this fiber as the one rendering.
           inst = f.s = core.rendering(f, () => new C(props, context));
@@ -151,6 +183,9 @@ function support(core: ClassCore): ClassSupport {
         } else {
           prevProps = inst.props;
           prevState = inst.state;
+          prevContext = inst.context;
+          queued = f.q;
+          forced = f.f & FORCE;
           const legacy =
             typeof C.getDerivedStateFromProps !== "function" && typeof inst.getSnapshotBeforeUpdate !== "function";
           // Only new props from the parent, not the component's own setState.
@@ -205,9 +240,42 @@ function support(core: ClassCore): ClassSupport {
           return;
         } catch (e) {
           // A suspension goes up to a Suspense boundary, and anything thrown while hydrating to
-          // what recovers from it; an error goes up past a class that is not a boundary.
-          if (isThenable(e) || core.hydrating() || !boundary(f)) throw e;
-          thrown = e;
+          // what recovers from it.
+          if (isThenable(e) || core.hydrating()) throw e;
+          // React renders a render that failed again (see failed in ../core.ts), from the
+          // instance as it was committed: what this update changed on it goes back.
+          const undo = (): void => {
+            if (mount) return;
+            inst.props = prevProps;
+            inst.state = prevState;
+            inst.context = prevContext;
+            f.q = queued;
+            f.f |= forced;
+          };
+          // An error goes up past a class that is not a boundary.
+          if (!boundary(f)) {
+            undo();
+            throw e;
+          }
+          const errors = core.failed(f, e);
+          if (errors === null) thrown = e;
+          else {
+            // Not counted yet: the fallback renders only for show, as in React's first pass.
+            try {
+              draft(f, e);
+            } finally {
+              undo();
+            }
+            // Then the retry, unless one above renders this again. A mount constructs the class
+            // again, as React's retry does.
+            if (errors.length) {
+              if (mount) core.discard(f);
+              f.f &= ~DIRTY;
+              const x = core.again(f, errors, () => run(f, old, mount));
+              if (x !== null) throw x;
+            }
+            return;
+          }
         }
       }
       // Error boundary: drop the children, take the error's state, render again.
@@ -229,7 +297,7 @@ function support(core: ClassCore): ClassSupport {
         if (typeof inst.componentDidCatch === "function") inst.componentDidCatch(caught, { componentStack });
       });
       // With only componentDidCatch, the boundary renders nothing until that method sets state.
-      if (typeof gdsfe === "function") render(f, inst);
+      if (typeof gdsfe === "function") render(f, inst, true);
       classRef(f, old, inst);
     } catch (e) {
       // A lifecycle or render of this class threw: its component stack starts here.
@@ -263,6 +331,7 @@ function support(core: ClassCore): ClassSupport {
       const inst = f.s;
       if (inst !== null && typeof inst.componentWillUnmount === "function") inst.componentWillUnmount();
     },
+    draft,
   };
 
   // #endregion

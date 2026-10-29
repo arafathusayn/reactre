@@ -11,6 +11,9 @@
 //     describeNativeComponentFrame, the component is called (or constructed) with no props, with
 //     no component rendering so its first hook throws, and the frame of the stack trace that
 //     belongs to it is the one kept. Everything else gets React's built-in frame.
+//   - A render that throws is captured as React's throwException captures it (see capture): the
+//     stack of #520's wrapper, for the report if the render that follows succeeds, then the
+//     error's own, which an object keeps for every later report, as React's CapturedStacks does.
 
 import { __installStacks, type StackCore, SuspenseList, ViewTransition } from "../core.ts";
 
@@ -26,6 +29,11 @@ function stacks(core: StackCore) {
   // `stacks` is never thrown, so it stands for nothing recorded.
   let lastThrown: Any = stacks,
     thrownBy: Any = null;
+  // React's CapturedStacks: the stack an object was first captured with, kept. A value that is
+  // not an object is described at each capture; the last one's stack waits for its report.
+  const captured = new WeakMap<object, string>();
+  let lastValue: Any = stacks,
+    lastStack = "";
 
   // React's built-in frame format, read once from a stack trace as React reads it: what comes
   // before the name (V8's "    at ") and after it.
@@ -135,18 +143,54 @@ function stacks(core: StackCore) {
     /**
      * The component stack of error `e`: a frame per host element and component from the fiber `e`
      * was thrown in (else from `f`) up to the root, innermost first, as React's describeFiber
-     * writes them.
+     * writes them. An object keeps the stack it was first captured with, as in React.
      */
     componentStack(e: Any, f: Any, keep?: boolean): string {
-      if (e === lastThrown) f = thrownBy;
-      if (!keep) {
-        lastThrown = stacks;
-        thrownBy = null;
+      f = source(e, f, keep);
+      // Kept for another stack of the same throw: built anew, and not kept for `e`.
+      if (keep) return stackOf(f);
+      if (e === lastValue) {
+        lastValue = stacks;
+        return lastStack;
       }
-      // With no component rendering, so a component's first hook throws as it does in React.
-      return core.outside(() => describe(f));
+      const object = e !== null && typeof e === "object";
+      let stack = object ? captured.get(e) : undefined;
+      if (stack === undefined) {
+        stack = stackOf(f);
+        if (object) captured.set(e, stack);
+      }
+      return stack;
+    },
+
+    /**
+     * As React's throwException captures an error a render threw: the stack of #520's wrapper
+     * (returned, for the report if the retry renders), then the error's own, kept for its report.
+     */
+    capture(e: Any, f: Any): string {
+      f = source(e, f);
+      const wrapper = stackOf(f);
+      if (e === null || typeof e !== "object") {
+        lastValue = e;
+        lastStack = stackOf(f);
+      } else if (!captured.has(e)) captured.set(e, stackOf(f));
+      return wrapper;
     },
   };
+
+  /** Where `e` was thrown (else `f`); the record is used up, unless `keep`. */
+  function source(e: Any, f: Any, keep?: boolean): Any {
+    if (e === lastThrown) f = thrownBy;
+    if (!keep) {
+      lastThrown = stacks;
+      thrownBy = null;
+    }
+    return f;
+  }
+
+  /** f's stack, with no component rendering, so a component's first hook throws as in React. */
+  function stackOf(f: Any): string {
+    return core.outside(() => describe(f));
+  }
 
   function describe(f: Any): string {
     let out = "",
