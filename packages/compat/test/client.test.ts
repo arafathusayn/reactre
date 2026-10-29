@@ -1237,10 +1237,10 @@ describe("hydration passes", () => {
       };
     };
     const resolve: Step = (_c, log, L) => (log.push("resolve"), go[key(L)]!());
-    // In the shell, with no boundary above it: the root waits, keeping the server's HTML. (Its
-    // renders are not logged: React renders a suspended shell once more, hydrating or not.)
+    // In the shell, with no boundary above it: the root waits, keeping the server's HTML, and
+    // hydrates once more first, as React's prerender.
     const flat = ReactServer.renderToString(h(React)("main", null, h(React)("p", null, "a"), h(React)("p", null, "b")));
-    const shell = await timeline(flat, (L) => h(L)("main", null, h(L)("p", null, "a"), h(L)(late(L, []))), {
+    const shell = await timeline(flat, (L, log) => h(L)("main", null, h(L)("p", null, "a"), h(L)(late(L, log))), {
       steps: [resolve],
     });
     expect(shell.kept).not.toContain("n");
@@ -2904,6 +2904,44 @@ describe("the render loop", () => {
         (_, flush) => flush(() => set(1)),
       ];
     });
+  });
+
+  test("a first render whose shell suspends with no boundary above renders once more, as React's prerender", async () => {
+    // React's prerender: after the shell suspends, the root renders once more, nothing of it
+    // committed; not in a transition. Waits that follow (`waits` of them) are each a render.
+    const h = (L: Lib) => L.createElement;
+    for (const how of ["sync", "default", "transition"] as const)
+      for (const waits of [1, 2])
+        await stepsSame((L, log) => {
+          log.push("case " + how + " " + waits);
+          let left = waits,
+            go: () => void = () => {},
+            p = Promise.resolve();
+          const wait = (): void => {
+            p = new Promise<void>((r) => (go = r)).then(() => void left--);
+          };
+          wait();
+          const Late = named(log, "Late", () => {
+            L.useState(() => log.push("init Late"));
+            if (left) throw p;
+            return "late";
+          });
+          const App = withEffects(L, log, "App"),
+            Sib = named(log, "Sib", () => "sib");
+          const tree = h(L)(App, null, h(L)(Sib), h(L)(Late));
+          const render: Step =
+            how === "sync"
+              ? (root, flush) => flush(() => root.render(tree))
+              : how === "transition"
+                ? (root, _, L) => L.startTransition(() => root.render(tree))
+                : (root) => root.render(tree);
+          const settle: Step = () => {
+            const ready = go;
+            if (left > 1) wait();
+            ready();
+          };
+          return waits === 1 ? [render, settle] : [render, settle, settle];
+        });
   });
 
   test("a render that throws once and then renders is a recoverable error (#520) with its first stack", async () => {

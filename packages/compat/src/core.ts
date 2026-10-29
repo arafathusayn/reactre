@@ -3853,6 +3853,13 @@ class RootImpl implements Root {
   hydrate: Hydration | false = false;
   /** Whether the first render has started (it clears or hydrates the container once). */
   mounted = false;
+  /** Whether the last render() was made in a transition: a shell that suspends prerenders only if not. */
+  tr = false;
+  /**
+   * Whether the first render, neither synchronous (flushSync) nor a transition, waits, nothing
+   * committed: its renders after the wait prerender too (see prerender).
+   */
+  waits = false;
   /** The event listener on each element this root listens on: its container and portals'. */
   readonly listeners = new Map<Node, Listener>();
   constructor(container: Any, opts: RootOptions) {
@@ -3867,6 +3874,7 @@ class RootImpl implements Root {
   render(children: Any): void {
     if (this.f.f & DEAD) throw new Error(prodMessage(409));
     this.f.p = children;
+    this.tr = transition !== null;
     schedule(this.f);
   }
   /** Remove what the root rendered and its listeners. A second call does nothing. */
@@ -3938,9 +3946,14 @@ function runRoot(f: Fiber): void {
   f.x = null;
   // With ./features/retry.ts, a first render that meets an error renders again whole (see
   // firstAgain).
-  let first = false;
+  let first = false,
+    // A first render whose shell suspends prerenders (see prerender), and one after the wait of a
+    // first render that was neither synchronous nor a transition.
+    pre = r.waits;
+  r.waits = false;
   if (!r.mounted) {
     r.mounted = true;
+    pre = true;
     if (r.hydrate) (hydrating = r.hydrate).begin(f);
     else {
       f.d.textContent = "";
@@ -3962,8 +3975,13 @@ function runRoot(f: Fiber): void {
     }
     if (first) thrown = retries!.first(f, thrown);
     if (thrown !== null) {
-      if (isThenable(thrown)) thrown.then(retry(f), retry(f));
-      else {
+      if (isThenable(thrown)) {
+        if (pre && !r.tr) {
+          prerender(f, thrown);
+          r.waits = !syncOnly;
+        }
+        thrown.then(retry(f), retry(f));
+      } else {
         removeAll(f);
         const report = r.opts.onUncaughtError;
         if (report) callReport(report, thrown, { componentStack: stackOf(thrown, f) });
@@ -3976,6 +3994,24 @@ function runRoot(f: Fiber): void {
     hydrating = ph2;
   }
   if (f.f & STRUCT) place(f);
+}
+
+/**
+ * React's prerender of a root's first render whose shell suspended (`wait`), with no Suspense
+ * boundary above, unless it was a transition: the root renders (or hydrates) once more, every node
+ * anew, and nothing of it commits. What it throws is the same wait.
+ */
+function prerender(f: Fiber, wait: Any): void {
+  // A root that hydrates hydrates once more, and drops it as it dropped the first.
+  const hy = f.o.hydrate,
+    ph = hydrating;
+  if (hy) (hydrating = hy).begin(f);
+  else discardAll(f);
+  try {
+    reconcile(f, f.p);
+  } catch {}
+  if (hy) hy.root(f, wait);
+  hydrating = ph;
 }
 
 /**
