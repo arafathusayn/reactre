@@ -3102,7 +3102,9 @@ const serverHooks: ServerHooks = {
       ? "An unsupported type was passed to use(): " + args[0]
       : code === 440
         ? "A function wrapped in useEffectEvent can't be called during rendering."
-        : "Too many re-renders. React limits the number of renders to prevent an infinite loop.";
+        : code === 312
+          ? "Rendered more hooks than during the previous render"
+          : "Too many re-renders. React limits the number of renders to prevent an infinite loop.";
   },
 };
 

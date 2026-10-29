@@ -191,6 +191,16 @@ describe("errors", () => {
         }
         return L.createElement(Loop);
       },
+      // A pass after a render-phase update calls a hook the first did not (#312).
+      (L) => {
+        function More() {
+          const [n, set] = L.useState(0);
+          if (n === 0) set(1);
+          else L.useState(2);
+          return null;
+        }
+        return L.createElement(More);
+      },
       (L) => L.createElement("div", { style: "color: red" }),
       (L) => L.createElement("div", null, { x: 1 }),
       (L) => L.createElement("div", null, L.createElement(undefined)),

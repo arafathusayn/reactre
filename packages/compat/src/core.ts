@@ -475,6 +475,7 @@ const STRUCT = 8; // host: its DOM children changed; place them
 const RERENDER = 16; // function: set state during its own render
 const FORCE = 32; // class: forceUpdate
 const FORWARD = 64; // function: forwardRef render (props, ref)
+const HOOKS = 128; // function: a finished render called hooks, so a render must call as many (see hooksCalled)
 const HIDDEN = 256; // suspense, activity: content hidden
 const CLAIMED = 512; // host: claimed from server HTML while hydrating
 const HOIST = 1024; // host: <title>, <meta> or <link> placed in document.head
@@ -485,6 +486,10 @@ const LATER = 4096; // queued only from outside an event (React's default lane):
 // A Fragment ref's instance is near (see FragmentInstance): a host-level fiber's node has
 // fragment listeners and observers; hosts created under any other look for instances above.
 const FRAGREF = 8192;
+// Function: a later pass of a render (state set while it rendered) with no finished render's hooks
+// to match, so a hook the pass adds is an error (see again); FIRST: and it is the fiber's first.
+const PASS = 16384;
+const FIRST = 32768;
 
 // Namespaces (Fiber.ns), as indexes into NS_URI and into a template's per-namespace arrays.
 const HTML_NS = 0;
@@ -3377,7 +3382,11 @@ function runFunc(f: Fiber, mount = false): void {
       // Effects collected by an abandoned pass are dropped.
       f.x = null;
       out = ref === undefined ? fn(args) : fn(args, ref);
-    } while (f.f & RERENDER);
+    } while (f.f & RERENDER && again(f, mount));
+    // React's renderWithHooks compares the hooks called with the last render's: two integer
+    // compares and a flag test when they match, as every render after the first does.
+    const hs = f.h;
+    if (hs !== null && (hi !== hs.length || !(f.f & HOOKS))) hooksCalled(f, hs.length);
   } catch (e) {
     thrownIn(f, e);
     f.f |= DIRTY;
@@ -3411,6 +3420,38 @@ function runFunc(f: Fiber, mount = false): void {
   } else reconcile(f, out);
   // After the children: React runs a child's effects before its parent's.
   if (f.x !== null) commitEffects(f);
+}
+
+/**
+ * Before another pass of a render that set state while rendering (rare): with no finished
+ * render's hooks to match, the hooks of the first pass are all a later pass may call, as in
+ * React, where a hook it adds is #467 on a mount (#312 on the server) and #310 otherwise.
+ * Returns true, to go on.
+ */
+function again(f: Fiber, mount: boolean): boolean {
+  if (!(f.f & HOOKS)) {
+    f.f |= mount ? PASS | FIRST : PASS;
+    // So the render's end (hooksCalled) clears the flags even if no pass calls a hook.
+    f.h ??= [];
+  }
+  return true;
+}
+
+/**
+ * After a render whose hooks differ in number from the last's (`n`), or the first render that
+ * called any, as React's renderWithHooks and finishRenderingHooks judge them: fewer than a
+ * finished render's is #300 (a render that calls none is not compared: as in React, the next
+ * render with hooks mounts them anew, and the old ones' effects never clean up); otherwise the
+ * fiber's hooks are now the ones to match.
+ */
+function hooksCalled(f: Fiber, n: number): void {
+  const had = f.f & HOOKS;
+  f.f &= ~(PASS | FIRST);
+  if (hi === 0 && (had || n === 0)) {
+    f.h = null;
+    f.f &= ~HOOKS;
+  } else if (had && hi < n) throw new Error(prodMessage(300));
+  else f.f |= HOOKS;
 }
 
 // A component that hosted its block renders something else: the block goes,
@@ -4959,7 +5000,10 @@ class Hook {
   x: Any = undefined;
   /** Setter or other per-hook function; null until first render. */
   s: Any = null;
-  /** Reducer. */
+  /**
+   * Reducer. Any other hook React gives a queue (a store's, an optimistic or action hook's)
+   * marks it non-null, so a state hook reading it on an update is not #311 (see notState).
+   */
   r: Any = null;
   constructor(f: Fiber) {
     this.f = f;
@@ -5092,15 +5136,31 @@ function commitEffects(f: Fiber): void {
 // Hooks are matched to their slots by call order, as in React: the component's hooks live in
 // f.h and `hi` counts the calls of the current render.
 
-/** The current component's next hook slot, created on its first render. */
+/**
+ * The current component's next hook slot, created on its first render. A slot the last render
+ * did not have is React's #310 after a render that called hooks (#467 or #312 in a later pass of
+ * a first render): a flag test where a slot is created, so only on a mount.
+ */
 function hook(): Hook {
   const f = cur;
   if (f === null) throw new Error(prodMessage(321));
   const hs = (f.h ??= []);
   let h = hs[hi];
-  if (h === undefined) hs[hi] = h = new Hook(f);
+  if (h === undefined) {
+    if (f.f & (HOOKS | PASS)) throw new Error(prodMessage(f.f & FIRST ? (server !== null ? 312 : 467) : 310));
+    hs[hi] = h = new Hook(f);
+  }
   hi++;
   return h;
+}
+
+/**
+ * Where a state hook (or an optimistic one) mounts: after a render that called hooks, or in a
+ * later pass of a render, the slot was another kind of hook's, which React's client reports as
+ * #311. Only reached as such a hook mounts.
+ */
+function notState(f: Fiber): void {
+  if (f.f & (HOOKS | PASS) && server === null) throw new Error(prodMessage(311));
 }
 
 /**
@@ -5163,7 +5223,9 @@ export function useReducer<S, A>(
 ): [S, (a: A) => void] {
   const f = cur!,
     h = hook();
-  if (h.s === null) {
+  // A slot with no reducer yet: the hook mounts (h.r is set below on every render).
+  if (h.r === null) {
+    notState(f);
     h.v = init !== undefined ? init(initArg) : initArg;
     h.s = (a: A) => {
       // A setter called after unmount does nothing, as in React.
@@ -5348,7 +5410,7 @@ export function useSyncExternalStore<T>(
   let box = h.s;
   if (box === null) {
     if (server !== null) return server.snapshot(getServerSnapshot, select);
-    box = h.s = { v: undefined, g: getSnapshot };
+    box = h.s = h.r = { v: undefined, g: getSnapshot };
   }
   const v = getSnapshot();
   box.v = v;
@@ -5620,8 +5682,10 @@ export function useDeferredValue<T>(value: T, initial?: T): T {
  */
 export function useOptimistic<S, A>(passthrough: S, reducer?: (s: S, a: A) => S): [S, (a: A) => void] {
   const h = hook();
-  if (h.s === null) {
+  if (h.r === null) {
     const f = h.f;
+    notState(f);
+    h.r = useOptimistic;
     // The pending updates, each in its own box so clear() removes exactly that one.
     h.v = [];
     h.s = (a: A) => {
@@ -5674,6 +5738,7 @@ export function useActionState<S, P>(
     // action rendered last; s: the state the next action starts from; q: the actions queued, the
     // first one running; n: actions dispatched in transitions and not finished.
     const box = (h.v = { a: action as Any, r: action as Any, s: initialState as Any, q: [] as Any[], n: 0 });
+    h.r = box;
     const settle = (node: Any): void => {
       if (node.t === null) return;
       for (const d of node.t.done) d();
@@ -5836,8 +5901,8 @@ export interface ServerHooks {
   actionState(action: Any, initialState: Any, permalink: string | undefined): [Any, Any, boolean];
   /**
    * The full message of React's error `code` with `args`, for the errors a component can meet in a
-   * server render: too many re-renders (301), use() of a value it cannot read (438) and a
-   * useEffectEvent function called while rendering (440).
+   * server render: too many re-renders (301), more hooks in a pass than in the first (312), use()
+   * of a value it cannot read (438) and a useEffectEvent function called while rendering (440).
    */
   message(code: number, args: Any[]): string;
 }
@@ -5866,7 +5931,7 @@ export function __serverRender(s: ServerHooks, fn: Any, props: Any, second: Any)
       f.f &= ~RERENDER;
       hi = 0;
       out = fn(props, second);
-    } while (f.f & RERENDER);
+    } while (f.f & RERENDER && again(f, true));
   } finally {
     f.f |= DEAD;
     cur = prevCur;

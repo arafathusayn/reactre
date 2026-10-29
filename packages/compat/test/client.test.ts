@@ -1169,6 +1169,96 @@ describe("errors", () => {
     expect(log).toEqual(["reached 200", "dom 200"]);
   });
 
+  test("hooks that differ from the last render's (#300, #310, #311, #467)", async () => {
+    // The renders that fail log nothing: React calls a component whose render failed again
+    // (it replays the failed work and retries the render) more times than compat does before
+    // the error is reported. Fewer hooks than the last render (#300), more (#310).
+    const counts = (L: Lib) =>
+      function Counts(props: { more: boolean }) {
+        L.useState(0);
+        if (props.more) L.useState(1);
+        return null;
+      };
+    const fewer = await logsSame((L) => {
+      const C = counts(L);
+      return [L.createElement(C, { more: true }), L.createElement(C, { more: false })];
+    });
+    expect(fewer.at(-2)).toStartWith("uncaught #300\n    at Counts (");
+    const more = await logsSame((L) => {
+      const C = counts(L);
+      return [L.createElement(C, { more: false }), L.createElement(C, { more: true })];
+    });
+    expect(more.at(-2)).toStartWith("uncaught #310\n");
+    // A state hook where the last render had a hook of another kind (#311): an effect, a ref, a
+    // memo, an id; the other way round, a ref reads the state, as in React.
+    for (const other of ["effect", "ref", "memo", "id"])
+      await logsSame((L, log) => {
+        function Swaps(props: { state: boolean }) {
+          if (props.state) log.push("state " + L.useReducer((s: number) => s, 1)[0]);
+          else if (other === "effect") L.useEffect(() => {});
+          else if (other === "ref") L.useRef(0);
+          else if (other === "memo") L.useMemo(() => 2, []);
+          else L.useId();
+          return null;
+        }
+        return [L.createElement(Swaps, { state: false }), L.createElement(Swaps, { state: true })];
+      });
+    await logsSame((L, log) => {
+      function Reads(props: { asRef: boolean }) {
+        log.push("read " + (props.asRef ? L.useRef(5) : L.useState(7)[0]));
+        return null;
+      }
+      return [L.createElement(Reads, { asRef: false }), L.createElement(Reads, { asRef: true })];
+    });
+    // A render that sets state renders again at once: on a mount, a hook that pass adds is #467;
+    // on an update, #310. Fewer hooks in a later pass of a mount are kept for the next render,
+    // which then has too few (#300).
+    const passes = (L: Lib) =>
+      function Passes(props: { go: boolean; drop?: boolean }) {
+        const [n, set] = L.useState(0);
+        if (props.drop && n === 0) L.useRef(0);
+        if (props.go && n === 0) set(1);
+        if (!props.drop && n === 1) L.useState(2);
+        return null;
+      };
+    expect((await logsSame((L) => [L.createElement(passes(L), { go: true })]))[0]).toStartWith("uncaught #467\n");
+    const update = await logsSame((L) => {
+      const P = passes(L);
+      return [L.createElement(P, { go: false }), L.createElement(P, { go: true })];
+    });
+    expect(update[0]).toStartWith("uncaught #310\n");
+    const kept = await logsSame((L) => {
+      const P = passes(L);
+      return [L.createElement(P, { go: true, drop: true }), L.createElement(P, { go: true, drop: true })];
+    });
+    expect(kept[0]).toStartWith("uncaught #300\n");
+  });
+
+  test("a component that stops calling hooks mounts them anew when it calls them again, as React does", async () => {
+    // React's renderWithHooks compares nothing when a render calls no hook: the next render with
+    // hooks mounts them, its state starting over, and the old effects never clean up.
+    const log = await logsSame((L, log) => {
+      function Toggle(props: { on: boolean; n: number }) {
+        if (props.on) {
+          const [v] = L.useState(() => (log.push("init " + props.n), props.n));
+          L.useEffect(() => {
+            log.push("effect " + v);
+            return () => void log.push("cleanup " + v);
+          }, []);
+          log.push("render " + v);
+        }
+        return null;
+      }
+      return [
+        L.createElement(Toggle, { on: true, n: 1 }),
+        L.createElement(Toggle, { on: false, n: 2 }),
+        L.createElement(Toggle, { on: true, n: 3 }),
+        null,
+      ];
+    });
+    expect(log).toEqual(["init 1", "render 1", "effect 1", "init 3", "render 3", "effect 3", "cleanup 3", "dom "]);
+  });
+
   test("use() of a value it cannot read (#438)", async () => {
     const Use = (L: Lib, v: Any) =>
       function Use() {
