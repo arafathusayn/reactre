@@ -17,6 +17,8 @@ type Any = any;
 
 // A symbol, so the link cannot collide with a field of the app's class.
 const INSTANCE = Symbol("fiber"); // class instance -> its fiber
+// An instance's snapshot until its update commits: [prevProps, prevState, snapshot].
+const SNAPSHOT = Symbol("snapshot");
 /** Whether a thrown value is a promise (a suspension), which error boundaries do not catch. */
 const isThenable = (v: Any): boolean => v !== null && typeof v === "object" && typeof v.then === "function";
 
@@ -223,17 +225,27 @@ function support(core: ClassCore): ClassSupport {
           inst.props = props;
           inst.state = state;
           inst.context = context;
-          // Taken before render, so it reads the DOM before this update changes it.
-          if (typeof inst.getSnapshotBeforeUpdate === "function")
-            snapshot = inst.getSnapshotBeforeUpdate(prevProps, prevState);
+          // Taken before render, so it reads the DOM before this update changes it. React takes it
+          // once, as the update commits: an update rendered again (React's retry of a render that
+          // threw, or a transition undone) keeps the one it took first.
+          if (typeof inst.getSnapshotBeforeUpdate === "function") {
+            const kept = inst[SNAPSHOT];
+            if (kept !== undefined && kept[0] === prevProps && kept[1] === prevState) snapshot = kept[2];
+            else
+              inst[SNAPSHOT] = [prevProps, prevState, (snapshot = inst.getSnapshotBeforeUpdate(prevProps, prevState))];
+          }
         }
         try {
           render(f, inst);
           // Did-mount and did-update run after the commit, with layout effects.
           if (mount) {
             if (typeof inst.componentDidMount === "function") core.laterShown(f, () => inst.componentDidMount());
-          } else if (typeof inst.componentDidUpdate === "function") {
-            core.laterShown(f, () => inst.componentDidUpdate(prevProps, prevState, snapshot));
+          } else if (typeof inst.componentDidUpdate === "function" || inst[SNAPSHOT] !== undefined) {
+            core.laterShown(f, () => {
+              inst[SNAPSHOT] = undefined;
+              if (typeof inst.componentDidUpdate === "function")
+                inst.componentDidUpdate(prevProps, prevState, snapshot);
+            });
           }
           classRef(f, old, inst);
           callbacks(f);

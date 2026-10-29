@@ -2876,6 +2876,59 @@ describe("the render loop", () => {
       ]);
   });
 
+  test("an update rendered again calls getSnapshotBeforeUpdate once, with the props and state before it", async () => {
+    // Compat takes the snapshot before the class renders (it writes the DOM as it renders), React
+    // as it commits: the log keeps the snapshots and updates, not where they fall among renders.
+    for (const where of ["self", "child", "class"])
+      for (const withDidUpdate of [true, false]) {
+        const run = async (L: Lib, createRoot: (c: Any, o: Any) => Any, flush: (fn: () => void) => void) => {
+          const log: string[] = [];
+          let throws = 0;
+          class Snap extends L.Component<Any> {
+            getSnapshotBeforeUpdate(pp: Any, ps: Any) {
+              log.push(`snapshot ${pp.k} ${ps.n} -> ${this.props.k} ${this.state.n}`);
+              return "snap" + pp.k;
+            }
+            state = { n: 0 };
+            override render() {
+              if (where === "class" && this.props.k === 1 && throws-- > 0) throw new Error("once");
+              return this.props.children;
+            }
+          }
+          if (withDidUpdate)
+            (Snap.prototype as Any).componentDidUpdate = function (pp: Any, ps: Any, snap: Any) {
+              log.push(`didUpdate ${pp.k} ${ps.n} ${snap}`);
+            };
+          const Leaf = ({ k }: Any) => {
+            if (where === "child" && k === 1 && throws-- > 0) throw new Error("once");
+            return "leaf" + k;
+          };
+          const C = ({ k }: Any) => {
+            if (where === "self" && k === 1 && throws-- > 0) throw new Error("once");
+            return L.createElement(Leaf, { k });
+          };
+          const root = createRoot(box(), { onRecoverableError: () => void log.push("recoverable") });
+          let snap: Any;
+          const App = ({ k }: Any) =>
+            L.createElement(Snap, { k, ref: (s: Any) => void (snap = s) }, L.createElement(C, { k }));
+          flush(() => root.render(L.createElement(App, { k: 0 })));
+          throws = 1;
+          flush(() => root.render(L.createElement(App, { k: 1 })));
+          await tasks();
+          // Later updates take their own snapshot: a state change, then forceUpdate twice.
+          flush(() => snap.setState({ n: 1 }));
+          flush(() => snap.forceUpdate());
+          flush(() => snap.forceUpdate());
+          await tasks();
+          return log;
+        };
+        const react = await run(React, ReactClient.createRoot, ReactDOM.flushSync);
+        expect(await run(Compat, (c, o) => Compat.createRoot(c as unknown as Element, o), Compat.flushSync)).toEqual(
+          react,
+        );
+      }
+  });
+
   test("a component whose own update throws renders again, then its boundary or root has the error", async () => {
     for (const caught of [true, false])
       for (const how of ["sync", "default"])
