@@ -35,6 +35,11 @@
       "bun": "./src/classes.ts",
       "default": "./dist/classes.js"
     },
+    "./server": {
+      "types": "./src/server.ts",
+      "bun": "./src/server.ts",
+      "default": "./dist/server.js"
+    },
     "./compiler": {
       "types": "./src/compiler.ts",
       "bun": "./src/compiler.ts",
@@ -46,10 +51,14 @@
     "dist"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/index.ts src/classes.ts --outdir dist --target browser --format esm --splitting --packages external && bun build src/compiler.ts --outdir dist --target node --format esm --packages external"
+    "build": "rm -rf dist && bun build src/index.ts src/classes.ts src/server.ts --outdir dist --target browser --format esm --splitting --packages external && bun build src/compiler.ts --outdir dist --target node --format esm --packages external"
   },
   "dependencies": {
     "@reactre/compiler": "workspace:*",
     "@reactre/dom": "workspace:*"
+  },
+  "devDependencies": {
+    "react": "catalog:",
+    "react-dom": "catalog:"
   }
 }

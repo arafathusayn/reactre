@@ -36,8 +36,8 @@
 // What differs from React: rendering is synchronous (no time slicing, so a transition renders at
 // once and a suspended update shows its boundary's fallback, with the old content kept hidden
 // and its state intact), and hydration claims matching nodes in order and patches mismatches in
-// place instead of re-rendering on the client. There is no server renderer: use React's own on
-// the server.
+// place instead of re-rendering on the client. The server renderer is @reactre/compat/server; the
+// hooks here serve it too (see "Server rendering" in the hooks region).
 //
 // The file reads top down, in folding regions: elements, children utilities, fibers, child
 // reconciliation, DOM placement, host elements, compiled blocks, hydration, roots and portals,
@@ -4230,28 +4230,35 @@ export function useId(): string {
   const h = hook();
   if (h.s === null) {
     h.s = 1;
-    h.v = "_" + h.f.o.prefix + "r_" + (clientIds++).toString(32) + "_";
+    // On the server, React's server id, from the component's place in the tree.
+    h.v = server !== null ? server.id() : "_" + h.f.o.prefix + "r_" + (clientIds++).toString(32) + "_";
   }
   return h.v;
 }
 let clientIds = 0;
 
 /**
- * A value read from an external store, re-rendering when it changes. The server snapshot is
- * ignored: hydration reads the client's snapshot.
+ * A value read from an external store, re-rendering when it changes. The client ignores the
+ * server snapshot (hydration reads the client's snapshot); a server render reads only it, through
+ * `select` for the selector hook.
  */
 export function useSyncExternalStore<T>(
   subscribe: (cb: () => void) => () => void,
   getSnapshot: () => T,
-  _server?: () => T,
+  getServerSnapshot?: () => T,
+  select?: (s: Any) => T,
 ): T {
   const f = cur!;
-  const v = getSnapshot();
   const h = hook();
   // A box the subscription reads, updated each render: the latest snapshot and getter, without
-  // resubscribing when only getSnapshot changes.
-  if (h.s === null) h.s = { v, g: getSnapshot };
-  const box = h.s;
+  // resubscribing when only getSnapshot changes. A server render keeps no box (so every pass
+  // takes this branch), never calls getSnapshot and never subscribes.
+  let box = h.s;
+  if (box === null) {
+    if (server !== null) return server.snapshot(getServerSnapshot, select);
+    box = h.s = { v: undefined, g: getSnapshot };
+  }
+  const v = getSnapshot();
   box.v = v;
   box.g = getSnapshot;
   effect(PASSIVE, () => {
@@ -4295,8 +4302,8 @@ export function useSyncExternalStoreWithSelector<S, T>(
     memo.current = { s, t };
     return t;
   }, [getSnapshot, selector, isEqual]);
-  void getServerSnapshot;
-  return useSyncExternalStore(subscribe, select);
+  // A server render reads the selection of the server snapshot.
+  return useSyncExternalStore(subscribe, select, (getServerSnapshot ?? undefined) as Any, selector);
 }
 
 /**
@@ -4374,7 +4381,11 @@ export function use<T>(usable: PromiseLike<T> | Context<T>): T {
   if (usable !== null && typeof usable === "object") {
     if (typeof (usable as Any).then === "function") return readThenable(usable);
     const tt = (usable as Any).$$typeof;
-    if (tt === RECOVERABLE_TYPE) return undefined as T;
+    if (tt === RECOVERABLE_TYPE) {
+      // A server render leaves the nearest boundary to the client.
+      if (server !== null) throw server.browser(usable);
+      return undefined as T;
+    }
     if (tt === CONTEXT_TYPE) {
       if (cur === null) throw new Error("Invalid hook call.");
       return readContext(cur, usable);
@@ -4495,11 +4506,14 @@ export function useDeferredValue<T>(value: T, initial?: T): T {
     if (initial !== undefined) {
       // h.v is true while `initial` shows; a layout callback switches to the value at once.
       h.v = true;
-      const f = h.f;
-      later(f, () => {
-        h.v = false;
-        schedule(f);
-      });
+      // A server render shows `initial` and nothing renders after it.
+      if (server === null) {
+        const f = h.f;
+        later(f, () => {
+          h.v = false;
+          schedule(f);
+        });
+      }
       return initial;
     }
   }
@@ -4693,6 +4707,61 @@ export function requestFormReset(form: HTMLFormElement): void {
   };
   if (transition !== null) transition.done.push(due);
   else due();
+}
+
+// #endregion
+
+// #region Server rendering
+
+// @reactre/compat/server renders function components with these same hooks: it calls them through
+// __serverRender, which runs the component on a fiber of its own with `server` set. The hooks
+// read `server` only where they mount (useId, useSyncExternalStore, useDeferredValue) or read a
+// browser() token, so a client render pays nothing for it; effects are collected on the fiber
+// and never run, and no ref is attached, since no host fiber exists.
+
+/** Internal: what the hooks ask of @reactre/compat/server during a server render. */
+export interface ServerHooks {
+  /** useId's next id for the component rendering. */
+  id(): string;
+  /** useSyncExternalStore's value: the server snapshot, through `select` when given. */
+  snapshot(getServerSnapshot: Any, select: Any): Any;
+  /** use(browser()): the error that leaves the nearest Suspense boundary to the client. */
+  browser(token: Any): unknown;
+}
+
+// The server side of the hooks while a server render calls a component, else null.
+let server: ServerHooks | null = null;
+
+/**
+ * Internal (@reactre/compat/server): call function component `fn` with `props` and `second`
+ * (forwardRef's ref) as React's server does, hooks included, again while it sets its own state
+ * during render. Its fiber dies after the render, so a setState later, or from a child during this
+ * render, does nothing, as on React's server.
+ */
+export function __serverRender(s: ServerHooks, fn: Any, props: Any, second: Any): Any {
+  const f = new Fiber(FUNC, fn, 0, null, null as Any);
+  const prevCur = cur,
+    prevHi = hi,
+    prevServer = server;
+  cur = f;
+  server = s;
+  let out: Any,
+    tries = 0;
+  try {
+    do {
+      if (++tries > 25)
+        throw new Error("Too many re-renders. React limits the number of renders to prevent an infinite loop.");
+      f.f &= ~RERENDER;
+      hi = 0;
+      out = fn(props, second);
+    } while (f.f & RERENDER);
+  } finally {
+    f.f |= DEAD;
+    cur = prevCur;
+    hi = prevHi;
+    server = prevServer;
+  }
+  return out;
 }
 
 // #endregion

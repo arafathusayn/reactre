@@ -170,6 +170,10 @@
         "@reactre/compiler": "workspace:*",
         "@reactre/dom": "workspace:*",
       },
+      "devDependencies": {
+        "react": "catalog:",
+        "react-dom": "catalog:",
+      },
     },
     "packages/compiler": {
       "name": "@reactre/compiler",
