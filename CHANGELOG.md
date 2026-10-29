@@ -21,6 +21,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Fixed: when an update arrives while a commit renders, its refs and layout effects still run before its passive effects, as in React (cmdk's list height).
 - Fixed: a `<noscript>` renders its children only as text, as React does (input-otp's fallback style).
 - Fixed: content a settled promise reveals inside `<Suspense>` waits until 300 ms after the last fallback appeared, as React throttles it (jotai's async atoms).
+- Fixed: `useState` calls a lazy initial state with no arguments, as React does, instead of passing it itself (Apollo Client's `useQuery`).
 - Added: an ES module build of `@reactre/compat/compiler` in `dist/`, so Node can load `compileJs`.
 - Docs: setting up Vite, with @reactre/plugin or an alias.
 

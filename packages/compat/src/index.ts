@@ -3635,10 +3635,13 @@ export function useInsertionEffect(create: () => Any, deps?: readonly unknown[])
 
 // useState is useReducer with this reducer: an action is the new state or a function of it.
 const basicReducer = (s: Any, a: Any): Any => (typeof a === "function" ? a(s) : a);
+// React calls a lazy initial state with no arguments; Apollo's useQuery reads its first argument
+// as the previous state.
+const callInit = (init: () => Any): Any => init();
 
 /** A state value and its setter. The setter is stable for the component's life. */
 export function useState<S>(init: S | (() => S)): [S, (action: S | ((prev: S) => S)) => void] {
-  return useReducer(basicReducer, init, typeof init === "function" ? (init as () => S) : undefined) as Any;
+  return useReducer(basicReducer, init, typeof init === "function" ? callInit : undefined) as Any;
 }
 
 /**

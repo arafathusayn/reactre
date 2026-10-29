@@ -301,7 +301,8 @@ export const cases: Record<string, Case> = {
     t.log("renders", renders);
   },
 
-  // Lazy reducer init, a dispatch that returns the same state, and state derived during render.
+  // Lazy reducer and state init, a dispatch that returns the same state, and state derived
+  // during render. A lazy initial state is called with no arguments.
   async "reducer and setState during render"(t) {
     function reducer(s: { n: number }, a: string) {
       return a === "inc" ? { n: s.n + 1 } : a === "same" ? s : { n: 0 };
@@ -311,6 +312,7 @@ export const cases: Record<string, Case> = {
       const [s, dispatch] = useReducer(reducer, 5, (x: number) => ({ n: x }));
       const [prev, setPrev] = useState(v);
       const [derived, setDerived] = useState(0);
+      const [initArgs] = useState((...args: unknown[]) => args.length);
       if (prev !== v) {
         setPrev(v);
         setDerived(v * 2);
@@ -320,7 +322,7 @@ export const cases: Record<string, Case> = {
         <div>
           <button id="inc" onClick={() => dispatch("inc")} />
           <button id="same" onClick={() => dispatch("same")} />
-          {s.n}/{derived}
+          {s.n}/{derived}/{initArgs}
         </div>
       );
     }
