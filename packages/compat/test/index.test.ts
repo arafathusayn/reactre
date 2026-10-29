@@ -6,7 +6,7 @@
 // Covered here: keyed reconciliation and its DOM operation counts, batching and flushSync,
 // context through memo, effect order, event bubbling, compiled blocks hosted by components, list
 // updates from a compiled loop's report (__delta), memo bailouts in lists, lazy initial state, and
-// Suspense's reveal throttle.
+// Suspense's reveal throttle, and keyboard event fields.
 
 import { beforeEach, describe, expect, test } from "bun:test";
 
@@ -743,5 +743,79 @@ describe("suspense", () => {
     await settled;
     await sleep(0);
     expect(html()).toBe("<b>ready</b>");
+  });
+});
+
+describe("keyboard events", () => {
+  /** A keyboard event class whose fields are accessors on its prototype, as a browser's are. */
+  function keyboardEvent() {
+    return class KeyEvent extends FakeEvent {
+      readonly #init: { key?: string; keyCode?: number; charCode?: number; which?: number };
+      constructor(type: string, init: { key?: string; keyCode?: number; charCode?: number; which?: number } = {}) {
+        super(type);
+        this.#init = init;
+      }
+      get key(): string {
+        return this.#init.key ?? "";
+      }
+      get keyCode(): number {
+        return this.#init.keyCode ?? 0;
+      }
+      get charCode(): number {
+        return this.#init.charCode ?? 0;
+      }
+      get which(): number {
+        return this.#init.which ?? 0;
+      }
+    };
+  }
+  /** What a handler for `prop` reads from each event dispatched on a fresh element. */
+  function read(prop: string, events: FakeEvent[]): string[] {
+    const seen: string[] = [];
+    const on = (e: { key: string; keyCode: number; charCode: number; which: number }) =>
+      seen.push(`${e.key} ${e.keyCode} ${e.charCode} ${e.which}`);
+    render(h("input", { [prop]: on }));
+    for (const e of events) (container.firstChild as FakeElement).dispatchEvent(e);
+    return seen;
+  }
+
+  test("a field the event holds as its own, not enumerable, still reaches the handler", () => {
+    const KeyEvent = keyboardEvent();
+    const first = new KeyEvent("keydown", { key: "ArrowRight" });
+    Object.defineProperty(first, "keyCode", { value: 39 });
+    expect(read("onKeyDown", [first, new KeyEvent("keydown", { key: "a", keyCode: 65, which: 65 })])).toEqual([
+      "ArrowRight 39 0 39",
+      "a 65 0 65",
+    ]);
+  });
+
+  test("which, keyCode and charCode follow React's rules for each event type", () => {
+    const KeyEvent = keyboardEvent();
+    expect(read("onKeyDown", [new KeyEvent("keydown", { key: "ArrowLeft", keyCode: 37, charCode: 5 })])).toEqual([
+      "ArrowLeft 37 0 37",
+    ]);
+    expect(
+      read("onKeyPress", [
+        new KeyEvent("keypress", { key: "a", keyCode: 97, charCode: 97 }),
+        new KeyEvent("keypress", { key: "Enter", keyCode: 13, charCode: 0 }),
+        new KeyEvent("keypress", { key: "x", charCode: 10 }),
+        new KeyEvent("keypress", { key: "Tab", charCode: 9 }),
+      ]),
+    ).toEqual(["a 0 97 97", "Enter 0 13 13", "x 0 13 13", "Tab 0 0 0"]);
+  });
+
+  test("key names are normalized as React does", () => {
+    const KeyEvent = keyboardEvent();
+    expect(
+      read("onKeyDown", [
+        new KeyEvent("keydown", { key: "Esc", keyCode: 27 }),
+        new KeyEvent("keydown", { key: "Left", keyCode: 37 }),
+        new KeyEvent("keydown", { key: "Unidentified", keyCode: 13 }),
+        new KeyEvent("keydown", { keyCode: 113 }),
+      ]),
+    ).toEqual(["Escape 27 0 27", "ArrowLeft 37 0 37", "Enter 13 0 13", "F2 113 0 113"]);
+    expect(
+      read("onKeyPress", [new KeyEvent("keypress", { charCode: 97 }), new KeyEvent("keypress", { charCode: 13 })]),
+    ).toEqual(["a 0 97 97", "Enter 0 13 13"]);
   });
 });

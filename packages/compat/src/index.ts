@@ -4585,7 +4585,7 @@ function synProto(e: Any): Any {
   let p = synProtos.get(e.constructor);
   if (p !== undefined) return p;
   p = Object.create(SYN_BASE);
-  for (const k in e) {
+  for (const k of eventFields(e)) {
     // Fields every synthetic event sets are its own, not accessors: setting
     // through an accessor would redefine them on each event (a slow path).
     if (k in SYN_BASE || k === "currentTarget" || k === "type") continue;
@@ -4596,15 +4596,134 @@ function synProto(e: Any): Any {
         const v = this.nativeEvent[k];
         return typeof v === "function" ? v.bind(this.nativeEvent) : v;
       },
-      // A handler or the runtime may set a field: it becomes the event's own.
-      set(this: Any, v: Any): void {
-        Object.defineProperty(this, k, { value: v, writable: true, configurable: true, enumerable: true });
-      },
+      set: setOwn(k),
     });
+  }
+  if ("keyCode" in e && "charCode" in e) {
+    for (const [k, get] of Object.entries(KEYBOARD)) {
+      Object.defineProperty(p, k, { configurable: true, enumerable: true, get, set: setOwn(k) });
+    }
   }
   synProtos.set(e.constructor, p);
   return p;
 }
+
+/**
+ * The names of native event `e`'s fields: its enumerable ones and every one its prototypes
+ * define. An event built with Object.defineProperty can hold a field as its own without
+ * enumerating it, which hides the prototype's from a for-in.
+ */
+function eventFields(e: Any): Set<string> {
+  const names = new Set<string>();
+  for (const k in e) names.add(k);
+  for (let o = Object.getPrototypeOf(e); o !== null && o !== Object.prototype; o = Object.getPrototypeOf(o)) {
+    for (const k of Object.getOwnPropertyNames(o)) if (k !== "constructor") names.add(k);
+  }
+  return names;
+}
+
+/** A setter for field `k`: a handler or the runtime may set a field, which becomes the event's own. */
+function setOwn(k: string): (this: Any, v: Any) => void {
+  return function (this: Any, v: Any): void {
+    Object.defineProperty(this, k, { value: v, writable: true, configurable: true, enumerable: true });
+  };
+}
+
+// React's keyboard fields: keyCode on keydown and keyup, charCode on keypress, which for either,
+// and key names normalized (Esc is Escape), or derived when the browser gives none.
+const KEYBOARD: Record<string, (this: Any) => Any> = {
+  key(this: Any): string {
+    const n = this.nativeEvent;
+    if (n.key) {
+      const k: string = NORMALIZED_KEY[n.key] ?? n.key;
+      if (k !== "Unidentified") return k;
+    }
+    if (n.type === "keypress") {
+      const c = charCodeOf(n);
+      return c === 13 ? "Enter" : String.fromCharCode(c);
+    }
+    return n.type === "keydown" || n.type === "keyup" ? (KEY_OF_CODE[keyCodeOf(n)] ?? "Unidentified") : "";
+  },
+  keyCode(this: Any): number {
+    return keyCodeOf(this.nativeEvent);
+  },
+  charCode(this: Any): number {
+    const n = this.nativeEvent;
+    return n.type === "keypress" ? charCodeOf(n) : 0;
+  },
+  which(this: Any): number {
+    const n = this.nativeEvent;
+    return n.type === "keypress" ? charCodeOf(n) : keyCodeOf(n);
+  },
+};
+
+/** A keydown's or keyup's key code; 0 for other events, as React reads it. */
+function keyCodeOf(n: Any): number {
+  return n.type === "keydown" || n.type === "keyup" ? n.keyCode : 0;
+}
+
+/** A keypress's character code as React reads it: Enter is 13, and control characters are 0. */
+function charCodeOf(n: Any): number {
+  let c: number = n.charCode;
+  if (c === 0 && n.keyCode === 13) c = 13;
+  if (c === 10) c = 13;
+  return c >= 32 || c === 13 ? c : 0;
+}
+
+// Older key names and their standard ones, as React maps them.
+const NORMALIZED_KEY: Record<string, string> = {
+  Esc: "Escape",
+  Spacebar: " ",
+  Left: "ArrowLeft",
+  Up: "ArrowUp",
+  Right: "ArrowRight",
+  Down: "ArrowDown",
+  Del: "Delete",
+  Win: "OS",
+  Menu: "ContextMenu",
+  Apps: "ContextMenu",
+  Scroll: "ScrollLock",
+  MozPrintableKey: "Unidentified",
+};
+// Key names for key codes, for keydown and keyup events whose key the browser left unidentified.
+const KEY_OF_CODE: Record<number, string> = {
+  8: "Backspace",
+  9: "Tab",
+  12: "Clear",
+  13: "Enter",
+  16: "Shift",
+  17: "Control",
+  18: "Alt",
+  19: "Pause",
+  20: "CapsLock",
+  27: "Escape",
+  32: " ",
+  33: "PageUp",
+  34: "PageDown",
+  35: "End",
+  36: "Home",
+  37: "ArrowLeft",
+  38: "ArrowUp",
+  39: "ArrowRight",
+  40: "ArrowDown",
+  45: "Insert",
+  46: "Delete",
+  112: "F1",
+  113: "F2",
+  114: "F3",
+  115: "F4",
+  116: "F5",
+  117: "F6",
+  118: "F7",
+  119: "F8",
+  120: "F9",
+  121: "F10",
+  122: "F11",
+  123: "F12",
+  144: "NumLock",
+  145: "ScrollLock",
+  224: "Meta",
+};
 
 /** A synthetic event over `e` for prop `name`. Its own fields are set in one fixed order. */
 function synthetic(e: Any, name: string): Any {
