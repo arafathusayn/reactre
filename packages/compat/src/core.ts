@@ -3243,6 +3243,8 @@ function boundaryHydration(f: Fiber): void {
     if (f.n === SUSPENSE) suspense(f);
     else activity(f);
   } else if (passing || f.hc.s === null) hydrateBoundary(f);
+  // A render React drops to hydrate it first (see laneDropped) stops here.
+  else if (dropping) throw DROPPED;
   // An update reached it, and could not hydrate it first (see selective): as React's
   // retrySuspenseComponentWithoutHydrating, it renders on the client, the server's nodes going.
   else clientRender(f);
@@ -3279,6 +3281,7 @@ function selective(q: Fiber[]): void {
       break;
     }
     if (r === null) return;
+    if (lanes !== null) lanes.dropped(q);
     runPass(r, list, true);
     flushLayout();
     flushPassive();
@@ -7072,6 +7075,8 @@ interface Lanes {
   skip(f: Fiber, e: Any): boolean;
   /** Boundary `f` shows its content again within the throttle: whether its render is held (see laneReveal). */
   reveal(f: Fiber): boolean;
+  /** Updates `q` reach a dehydrated boundary, hydrated next: React's render it drops for that (see laneDropped). */
+  dropped(q: Fiber[]): void;
 }
 let lanes: Lanes | null = null;
 
@@ -7320,32 +7325,10 @@ function attempt(b: Batch, check: boolean): boolean {
   for (let i = 0; i < b.k.length; i += 2) rs.add(b.k[i].o);
   let watch = typeof MutationObserver === "function";
   for (const r of rs) if (r.hydrate) watch = false;
-  const sv: Any[] = [],
-    hv: Any[] = [],
-    fv: Any[] = [],
-    targets: Any[] = [];
-  let mo: MutationObserver | null = null,
-    ho: MutationObserver | null = null;
-  const head: Node | null | undefined = document.head;
-  const at: Held = { q: [], bad: [], t: [], s: [] };
-  if (watch) {
-    for (const r of rs) {
-      sv.push(r, r.mounted, r.tr, r.waits);
-      targets.push(r.f.d);
-      save(r.f, sv, hv, fv, targets);
-    }
-    // The roots' containers and portals': what other code does elsewhere meanwhile is not undone.
-    mo = new MutationObserver(noop);
-    for (const t of targets) mo.observe(t, WATCH);
-    // <head>, where document metadata is hoisted: only compat's own nodes there are undone.
-    if (head != null) (ho = new MutationObserver(noop)).observe(head, WATCH);
-    holding = at;
-  }
-  const undo: Any[] = [],
-    hidden = hiddenCount,
-    shownAt = fallbackShownAt;
-  let records: MutationRecord[] = [],
-    headRecords: MutationRecord[] = [];
+  const w = watch ? watchRoots(rs) : null,
+    at: Held = { q: [], bad: [], t: [], s: [] },
+    undo: Any[] = [];
+  if (w !== null) holding = at;
   laneRender = flushing = true;
   try {
     // A component whose state the updates leave as it was renders, and bails out (see bailRender).
@@ -7382,22 +7365,15 @@ function attempt(b: Batch, check: boolean): boolean {
     laneRender = flushing = unwinding = false;
     skipped = null;
     holding = null;
-    if (mo !== null) {
-      records = mo.takeRecords();
-      mo.disconnect();
-    }
-    if (ho !== null) {
-      headRecords = ho.takeRecords();
-      ho.disconnect();
-    }
+    if (w !== null) unwatch(w);
   }
   // React's check before a concurrent render commits: a store that moved renders it again.
   let moved = false;
   if (check) for (const box of at.s) if (!Object.is(box.g(), box.v)) moved = true;
-  if (mo !== null) {
+  if (w !== null) {
     // Content a boundary shows again, within React's throttle after the last fallback appeared:
     // React renders it now and commits it when the throttle ends (its retry lanes' timeout).
-    const ms = b.r && !at.bad.length && !moved ? shownAt + FALLBACK_THROTTLE - performance.now() : 0;
+    const ms = b.r && !at.bad.length && !moved ? w.shownAt + FALLBACK_THROTTLE - performance.now() : 0;
     if (at.bad.length || moved || ms > 10) {
       // What the render did, to redo it if it is held: the fibers' fields and the fields' values.
       const p: Pending | null =
@@ -7406,26 +7382,17 @@ function attempt(b: Batch, check: boolean): boolean {
               b,
               at,
               redo: [],
-              sv: resave(sv),
+              sv: resave(w.sv),
               hv: [],
-              fv: fieldsNow(fv),
+              fv: fieldsNow(w.fv),
               hidden: hiddenCount,
               shownAt: fallbackShownAt,
               q: [layoutQ, passiveQ, passiveUnmountQ],
               timer: 0,
             }
           : null;
-      if (p !== null) for (let i = 0; i < hv.length; i += 8) p.hv.push(hv[i], ...hookNow(hv[i]));
-      undoDom(records, null, p && p.redo);
-      undoDom(headRecords, head!, p && p.redo);
-      // The properties the DOM does not reflect in attributes, as the fields had them.
-      restoreFields(fv);
-      restoreFibers(sv, hv);
-      layoutQ = [];
-      passiveQ = [];
-      passiveUnmountQ = [];
-      hiddenCount = hidden;
-      fallbackShownAt = shownAt;
+      if (p !== null) for (let i = 0; i < w.hv.length; i += 8) p.hv.push(w.hv[i], ...hookNow(w.hv[i]));
+      undoWatched(w, p && p.redo);
       if (p !== null) {
         // The DOM and the fibers are as they were, until the throttle ends or an update comes.
         pending = p;
@@ -7457,6 +7424,120 @@ function commit(b: Batch, at: Held): void {
   for (const h of b.h) if (h.f.f & DEAD) pend.delete(h);
   flushWork(false);
   if (waiting) unhold();
+}
+
+/**
+ * A render watched so it can be undone: the fibers of its roots saved (`sv`, their hooks `hv`,
+ * their form fields `fv`), a MutationObserver on the roots' containers and portals' (`mo`) and
+ * one on <head> (`ho`), and the counters a render moves.
+ */
+interface Watch {
+  readonly sv: Any[];
+  readonly hv: Any[];
+  readonly fv: Any[];
+  readonly mo: MutationObserver;
+  readonly ho: MutationObserver | null;
+  readonly head: Node | null;
+  readonly hidden: number;
+  readonly shownAt: number;
+  records: MutationRecord[];
+  headRecords: MutationRecord[];
+}
+
+/** Save roots `rs` whole and watch their DOM, before a render that may be undone. */
+function watchRoots(rs: Set<RootImpl>): Watch {
+  const sv: Any[] = [],
+    hv: Any[] = [],
+    fv: Any[] = [],
+    targets: Any[] = [];
+  for (const r of rs) {
+    sv.push(r, r.mounted, r.tr, r.waits);
+    targets.push(r.f.d);
+    save(r.f, sv, hv, fv, targets);
+  }
+  // The roots' containers and portals': what other code does elsewhere meanwhile is not undone.
+  const mo = new MutationObserver(noop);
+  for (const t of targets) mo.observe(t, WATCH);
+  // <head>, where document metadata is hoisted: only compat's own nodes there are undone.
+  const head: Node | null = document.head ?? null,
+    ho = head === null ? null : new MutationObserver(noop);
+  if (ho !== null) ho.observe(head!, WATCH);
+  return { sv, hv, fv, mo, ho, head, hidden: hiddenCount, shownAt: fallbackShownAt, records: [], headRecords: [] };
+}
+
+/** Stop watching: what the render did to the DOM is in `w`'s records. */
+function unwatch(w: Watch): void {
+  w.records = w.mo.takeRecords();
+  w.mo.disconnect();
+  if (w.ho !== null) {
+    w.headRecords = w.ho.takeRecords();
+    w.ho.disconnect();
+  }
+}
+
+/**
+ * Undo the render `w` watched: its DOM changes (kept in `redo`, given one), the properties the DOM
+ * does not reflect in attributes as the fields had them, the fibers and hooks, and the effects it
+ * queued.
+ */
+function undoWatched(w: Watch, redo: Any[] | null): void {
+  undoDom(w.records, null, redo);
+  undoDom(w.headRecords, w.head, redo);
+  restoreFields(w.fv);
+  restoreFibers(w.sv, w.hv);
+  layoutQ = [];
+  passiveQ = [];
+  passiveUnmountQ = [];
+  hiddenCount = w.hidden;
+  fallbackShownAt = w.shownAt;
+}
+
+// What a render that reaches a dehydrated boundary throws while it is dropped (see laneDropped).
+const DROPPED = {};
+// Whether such a render runs: a dehydrated boundary it reaches throws DROPPED.
+let dropping = false;
+
+/**
+ * Updates `q` reach a boundary still dehydrated, which compat hydrates first (see selective).
+ * React renders them first, up to that boundary, then drops that render to hydrate it (its
+ * SelectiveHydrationException): they render here as far, where the render can be undone, and it
+ * is. Nothing it would run (effects, cleanups, ref detaches) runs.
+ */
+function laneDropped(q: Fiber[]): void {
+  if (typeof MutationObserver !== "function") return;
+  const rs = new Set<RootImpl>();
+  for (const f of q) rs.add(f.o);
+  const w = watchRoots(rs);
+  holding = { q: [], bad: [], t: [], s: [] };
+  dropping = true;
+  try {
+    for (const f of q) if ((f.f & (DIRTY | DEAD)) === DIRTY) renderAlone(f);
+  } catch {
+    // DROPPED, or an error the update's own render throws again.
+  } finally {
+    holding = null;
+    skipped = null;
+    dropping = false;
+    unwatch(w);
+  }
+  undoWatched(w, null);
+  queue.length = 0;
+}
+
+/** Render fiber `f` in its place, as rerender does, errors going on and nothing placed. */
+function renderAlone(f: Fiber): void {
+  let h = f.r;
+  while (h !== null && h.n !== HOST && h.n !== ROOT && h.n !== PORTAL && h.n !== SLOT) h = h.r;
+  const ph = curHost,
+    pn = curNs;
+  curHost = h ?? f;
+  curNs = h === null ? HTML_NS : hostNs(h);
+  try {
+    run(f, f.p, false);
+  } finally {
+    curHost = ph;
+    curNs = pn;
+  }
 }
 
 /**
@@ -7770,6 +7851,7 @@ export function __installConcurrent(): void {
     wake: unhold,
     skip: skipSuspended,
     reveal: laneReveal,
+    dropped: laneDropped,
   };
 }
 

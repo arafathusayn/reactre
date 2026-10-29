@@ -1641,8 +1641,8 @@ describe("hydration passes", () => {
     const ctxs = new Map<Lib, Any>();
     /**
      * A shell whose state reaches two boundaries, the logging one last: by its props, by context,
-     * or by neither (its element made once). React renders the shell again before it hydrates
-     * each boundary it reaches, so the shell does not log.
+     * or by neither (its element made once). React renders the shell before it hydrates each
+     * boundary it reaches, a render it drops, and once more after.
      */
     const tree = (by: "props" | "context" | "neither") => (L: Lib, log: string[]) => {
       if (!ctxs.has(L)) ctxs.set(L, L.createContext("c0"));
@@ -1657,6 +1657,7 @@ describe("hydration passes", () => {
       function App() {
         const [v, set] = L.useState("a");
         sets[key(L)] = set;
+        log.push("render app " + v);
         const once = L.useMemo(() => h(L)(Leaf, { v: "a" }), []);
         const body = h(L)(
           "main",
@@ -1688,13 +1689,14 @@ describe("hydration passes", () => {
     // Content that cannot hydrate yet renders on the client when the update reaches it, as
     // React's client render without hydrating, and nothing is reported.
     const never = new Promise<void>(() => {});
-    const late = (L: Lib) => {
+    const late = (L: Lib, log: string[]) => {
       function Late(): never {
         throw never;
       }
       function App() {
         const [v, set] = L.useState("a");
         sets[key(L)] = set;
+        log.push("render app " + v);
         return h(L)("main", null, h(L)("b", null, v), h(L)(L.Suspense, { fallback: "F" }, h(L)(Late, { v })));
       }
       return h(L)(App);
