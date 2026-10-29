@@ -60,13 +60,17 @@ const EDGES = [
   `const lazy = () => import(/* @vite-ignore */ "./x.js"); export const A = () => <button onClick={lazy}>go</button>;`,
 ];
 
-/** The program, printed by the minifier, with the helpers' suffixes (Bun's and the plugin's) made equal. */
+/**
+ * The program, printed by the minifier, with the helpers' suffixes (Bun's and the plugin's) made
+ * equal. Bun's transpiler writes a `\n` in a template literal as a line break, where oxc keeps the
+ * escape, so line breaks are compared as escapes.
+ */
 const program = (js: string): string =>
   minifySync("x.js", js.replace(/\b(jsxs|jsx|jsxDEV|Fragment)_[a-z0-9]{8}\b/g, "$1_x"), {
     module: true,
     compress: true,
     mangle: false,
-  }).code;
+  }).code.replace(/\n/g, "\\n");
 
 /**
  * The compiled program, or the compile error, whose quoted source is spaced as each transpiler
