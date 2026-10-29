@@ -53,7 +53,7 @@ export class El extends FakeElement {
   }
 
   private removed: [string, unknown][] = [];
-  override removeEventListener(type: string, fn: unknown): void {
+  removeEventListener(type: string, fn: unknown): void {
     this.removed.push([type, fn]);
     const map = (this as unknown as { listeners: Map<string, unknown[]> | null }).listeners;
     if (map)

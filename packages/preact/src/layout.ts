@@ -28,7 +28,7 @@ export function useLayoutEffect(callback: Any, args?: Any[]): void {
 /** Set `ref` to `createHandle()`'s value in the commit. */
 export function useImperativeHandle(ref: Any, createHandle: Any, args?: Any[]): void {
   layoutEffect(
-    () => {
+    (): Any => {
       if (typeof ref == "function") {
         const result = ref(createHandle());
         return () => {

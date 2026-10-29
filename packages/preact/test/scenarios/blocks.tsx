@@ -259,7 +259,7 @@ export const scenarios: Record<string, Scenario> = {
   "a component returning blocks moves its DOM and finds siblings": async (t) => {
     const { render, Component, Fragment } = t.R;
     let set: any;
-    class Swap extends Component<any, any> {
+    const Swap: any = class extends Component<any, any> {
       state = { a: true };
       render() {
         set = (a: boolean) => this.setState({ a });
@@ -272,7 +272,7 @@ export const scenarios: Record<string, Scenario> = {
           </Fragment>
         );
       }
-    }
+    };
     render(
       <div>
         <Swap />
@@ -319,14 +319,14 @@ export const scenarios: Record<string, Scenario> = {
   },
 
   "a ref and a key inside a tree keep it a plain element": (t) => {
-    const { render, createRef } = t.R;
+    const { render, createRef, createElement: h } = t.R;
     const r = createRef();
     render(
       <div>
         <i ref={r}>{"r"}</i>
         {[<b key="k">k</b>]}
         <input value="v" />
-        <x-custom a="1" />
+        {h("x-custom", { a: "1" })}
         <p {...{ id: "spread" }} />
         <p dangerouslySetInnerHTML={{ __html: "<u>h</u>" }} />
         <p class="a" className="b" />
@@ -342,7 +342,7 @@ export const scenarios: Record<string, Scenario> = {
     const Boom = () => {
       throw new Error("boom");
     };
-    class B extends Component<any, any> {
+    const B: any = class extends Component<any, any> {
       state = { e: "" };
       static getDerivedStateFromError(e: Error) {
         return { e: e.message };
@@ -350,7 +350,7 @@ export const scenarios: Record<string, Scenario> = {
       render() {
         return this.state.e ? <p class="err">{this.state.e}</p> : <div>{this.props.children}</div>;
       }
-    }
+    };
     render(
       <B>
         <span>{"before"}</span>

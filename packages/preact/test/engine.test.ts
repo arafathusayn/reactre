@@ -457,7 +457,7 @@ for (const [runtime, R] of Object.entries(runtimes))
       test("getDerivedStateFromProps merges into the next state and skips the will* lifecycles", () => {
         const log: string[] = [];
         class C extends (Component as any) {
-          state = { a: 1 };
+          state: any = { a: 1 };
           static getDerivedStateFromProps(p: { b: number }, s: { a: number }) {
             return { b: p.b + s.a };
           }

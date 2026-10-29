@@ -11,18 +11,18 @@
 import {
   type Any,
   hydrate as engineHydrate,
-  render as engineRender,
   MODE_HYDRATE,
   MODE_SUSPENDED,
   NULL,
   removeNode,
+  render as engineRender,
   slots,
 } from "./engine.ts";
 
 /** The comment closing the server's Suspense range opened by `start`, collecting the nodes between. */
 function rangeEnd(start: Any, nodes?: Any[]): Any {
   if (start && start.nodeType == 8 && start.data.startsWith("$s")) {
-    for (let depth = 1; (start = start.nextSibling); ) {
+    for (let depth = 1; (start = start.nextSibling);) {
       if (start.nodeType == 8) {
         if (start.data.startsWith("$s")) depth++;
         else if (start.data.startsWith("/$s") && !--depth) return start;

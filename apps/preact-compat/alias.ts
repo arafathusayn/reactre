@@ -19,7 +19,9 @@ export function reactAlias(runtime: Runtime): BunPlugin {
       build.onResolve({ filter: /^react\/jsx-(dev-)?runtime$/ }, () => ({ path: jsx }));
       build.onResolve({ filter: /^react(-dom)?(\/.*)?$/ }, () => ({ path: shim }));
       // The shims' own imports resolve from this folder, whoever imports the shim.
-      build.onResolve({ filter: /^(preact|@reactre\/preact)(\/.*)?$/ }, (args) => ({ path: Bun.resolveSync(args.path, dir) }));
+      build.onResolve({ filter: /^(preact|@reactre\/preact)(\/.*)?$/ }, (args) => ({
+        path: Bun.resolveSync(args.path, dir),
+      }));
     },
   };
 }

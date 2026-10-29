@@ -9,27 +9,27 @@
 //
 // Preact is MIT licensed, Copyright (c) 2015-present Jason Miller; see NOTICE.
 
+import { hydrate as preactHydrate } from "./claim.ts";
 import {
   type Any,
   assign,
   blockHooks,
+  cloneElement as preactCloneElement,
   Component,
   COMPONENT_FORCE,
   createContext,
   createElement,
+  createPortal as preactCreatePortal,
   createRef,
   FORCE_PROPS_REVALIDATE,
   Fragment,
   MODE_HYDRATE,
   options,
-  cloneElement as preactCloneElement,
-  createPortal as preactCreatePortal,
-  render as preactRender,
   REF_DETACHED,
+  render as preactRender,
   toChildArray,
   VNODE_MARKER,
 } from "./engine.ts";
-import { hydrate as preactHydrate } from "./claim.ts";
 import {
   useCallback,
   useContext,
@@ -725,7 +725,8 @@ export { __block, __template } from "./block.ts";
 export { jsx, jsxDEV, jsxs } from "./jsx-runtime.ts";
 
 /** React's default export: `import React from "react"`. */
-export default {
+// Typed for isolated declarations; the object is what `import React from "react"` gets.
+const React: Record<string, Any> = {
   useState,
   useId,
   useReducer,
@@ -772,3 +773,4 @@ export default {
   lazy,
   __SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED,
 };
+export default React;

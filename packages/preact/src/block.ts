@@ -126,7 +126,7 @@ function build(t: Template, ns: string): Built {
         b.nm[c] = NULL;
         b.ns[c] = cns;
         b.dp[c] = depth;
-      } else dom.appendChild(make(c, nsOf(c[0], cns), path.concat(k++), depth + 1));
+      } else dom.appendChild(make(c as Desc, nsOf(c[0], cns), path.concat(k++), depth + 1));
     }
     return dom;
   };
@@ -258,7 +258,7 @@ function expand(b: Any): void {
     vn.__e = dom;
     vn.__b = depth;
     vn.__k = kids;
-    for (const k of kids) if (k) (k.__ = vn), (k.__b = depth + 1);
+    for (const k of kids) if (k) ((k.__ = vn), (k.__b = depth + 1));
     return vn;
   };
   const root = tree(t.d, b.__e, b.__b);
@@ -269,7 +269,8 @@ function expand(b: Any): void {
 }
 
 /** Whether a children value is one text node in Preact: a string, number or bigint. */
-const isText = (x: Any): boolean => x != NULL && typeof x != "object" && typeof x != "boolean" && typeof x != "function";
+const isText = (x: Any): boolean =>
+  x != NULL && typeof x != "object" && typeof x != "boolean" && typeof x != "function";
 
 /** Diff block `b` against `old`; returns b's DOM node. Filled into the engine's block slot. */
 function diffBlock(
@@ -288,7 +289,18 @@ function diffBlock(
   if (excess || isHydrating || (old.__e && old.__t !== t)) {
     toPlain(b);
     if (old.__t) expand(old);
-    return diffElementNodes(old.__e, b, old, globalContext, namespace, excess, commitQueue, isHydrating, refQueue, parentDom);
+    return diffElementNodes(
+      old.__e,
+      b,
+      old,
+      globalContext,
+      namespace,
+      excess,
+      commitQueue,
+      isHydrating,
+      refQueue,
+      parentDom,
+    );
   }
   const ns = nsOf(b.type, namespace),
     built = t.b[ns] || build(t, ns),
@@ -308,7 +320,7 @@ function diffBlock(
     let x = v[i],
       y = o[i];
     if (name !== NULL) {
-      if (hv) (x = hv(name, x)), (y = hv(name, y));
+      if (hv) ((x = hv(name, x)), (y = hv(name, y)));
       if (x !== y || (revalidate && x != NULL)) setProperty(el, name, x, y, built.ns[i]);
       continue;
     }

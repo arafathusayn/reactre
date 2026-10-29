@@ -30,7 +30,6 @@ const oldBeforeRender = options.__r;
 const oldAfterDiff = options.diffed;
 const oldRoot = options.__;
 
-
 options.__b = (vnode: Any) => {
   currentComponent = null;
   if (oldBeforeDiff) oldBeforeDiff(vnode);
@@ -235,7 +234,11 @@ export function invokeEffect(hook: Any): void {
 
 /** Whether the deps changed: none before, another length, or an entry not Object.is the old. */
 export function argsChanged(oldArgs: Any, newArgs: Any): boolean {
-  return !oldArgs || oldArgs.length != newArgs.length || newArgs.some((arg: Any, index: number) => !ObjectIs(arg, oldArgs[index]));
+  return (
+    !oldArgs ||
+    oldArgs.length != newArgs.length ||
+    newArgs.some((arg: Any, index: number) => !ObjectIs(arg, oldArgs[index]))
+  );
 }
 
 function invokeOrReturn(arg: Any, f: Any): Any {

@@ -18,8 +18,8 @@ import { join } from "node:path";
 import { reactrePreactCompiler } from "@reactre/preact/compiler";
 import puppeteer from "puppeteer-core";
 
-import { findChrome } from "../react-compat/chrome.ts";
 import { reactAlias as reactOnly } from "../react-compat/alias.ts";
+import { findChrome } from "../react-compat/chrome.ts";
 import { reactAlias, type Runtime } from "./alias.ts";
 
 const scenarios = join(import.meta.dir, "../react-compat");
@@ -114,7 +114,9 @@ try {
         console.log(`  --- ${rt} ---\n  ` + b.join("\n  "));
       }
     }
-    summary.push(`${rt}: ${pass}/${names.length} scenarios match Preact` + (bad.length ? `; differ: ${bad.join("; ")}` : ""));
+    summary.push(
+      `${rt}: ${pass}/${names.length} scenarios match Preact` + (bad.length ? `; differ: ${bad.join("; ")}` : ""),
+    );
     if (bad.length) failed = true;
   }
   console.log("\n" + summary.join("\n"));

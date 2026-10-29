@@ -32,17 +32,17 @@ export type Any = any;
 // #region Constants
 
 /** Hydration attaches to the DOM tree without diffing it. */
-export const MODE_HYDRATE = 1 << 5;
+export const MODE_HYDRATE: number = 1 << 5;
 /** The vnode suspended on its previous render. */
-export const MODE_SUSPENDED = 1 << 7;
+export const MODE_SUSPENDED: number = 1 << 7;
 /** The vnode is to be inserted while its siblings are placed. */
 const INSERT_VNODE = 1 << 2;
 /** The vnode was matched with a new one in the diff. */
 const MATCHED = 1 << 1;
 /** Props are written again on the next diff (the DOM was kept across a suspension). */
-export const FORCE_PROPS_REVALIDATE = 1 << 0;
+export const FORCE_PROPS_REVALIDATE: number = 1 << 0;
 /** The vnode's ref was detached while Suspense parked its subtree. */
-export const REF_DETACHED = 1 << 3;
+export const REF_DETACHED: number = 1 << 3;
 /** A matched vnode that may be part of the longest increasing subsequence. */
 const LIS_CANDIDATE = 1 << 4;
 /** Reset the mode flags. */
@@ -53,7 +53,7 @@ const COMPONENT_PROCESSING_EXCEPTION = 1 << 0;
 /** The component has an error to handle. */
 const COMPONENT_PENDING_ERROR = 1 << 1;
 /** The next render skips shouldComponentUpdate. */
-export const COMPONENT_FORCE = 1 << 2;
+export const COMPONENT_FORCE: number = 1 << 2;
 /** The component is queued to render. */
 const COMPONENT_DIRTY = 1 << 3;
 
@@ -110,8 +110,11 @@ export const slots: { block: Any; copy: Any; drop: Any; expand: Any; claim: Any;
  * prop as its vnode hook would (onDoubleClick to ondblclick), `v` changes a value (numbers in
  * style to px), and `s` is the `$$typeof` its elements carry.
  */
-export const blockHooks: { n: ((name: string) => string) | null; v: ((name: string, value: Any) => Any) | null; s: Any } =
-  { n: NULL, v: NULL, s: undefined };
+export const blockHooks: {
+  n: ((name: string) => string) | null;
+  v: ((name: string, value: Any) => Any) | null;
+  s: Any;
+} = { n: NULL, v: NULL, s: undefined };
 
 // #endregion
 
@@ -120,6 +123,7 @@ export const blockHooks: { n: ((name: string) => string) | null; v: ((name: stri
 let vnodeId = 0;
 
 /** Preact's createElement (h): `key` and, for host elements, `ref` are taken out of the props. */
+export function createElement(type: Any, props?: Any, ...children: Any[]): Any;
 export function createElement(type: Any, props?: Any, children?: Any): Any {
   let normalizedProps: Any = {},
     key,
@@ -136,6 +140,7 @@ export function createElement(type: Any, props?: Any, children?: Any): Any {
 }
 
 /** A copy of `vnode` with props merged in and, when given, its children replaced. */
+export function cloneElement(vnode: Any, props?: Any, ...children: Any[]): Any;
 export function cloneElement(vnode: Any, props?: Any, children?: Any): Any {
   let normalizedProps: Any = assign({}, vnode.props),
     key,
@@ -428,7 +433,7 @@ export function hydrate(vnode: Any, parentDom: Any): void {
  */
 function catchError(error: Any, vnode: Any, _oldVNode?: Any, errorInfo?: Any): void {
   let component, ctor, handled;
-  for (; (vnode = vnode.__); ) {
+  for (; (vnode = vnode.__);) {
     if ((component = vnode.__c) && !(component.__g & COMPONENT_PROCESSING_EXCEPTION)) {
       component.__g |= COMPONENT_FORCE;
       try {
@@ -700,7 +705,7 @@ function markAsForce(vnode: Any): void {
 
 /** Apply the queued refs, then run each queued component's render callbacks. */
 export function commitRoot(commitQueue: Any[], root: Any, refQueue: Any[]): void {
-  for (let i = 0; i < refQueue.length; ) applyRef(refQueue[i++], refQueue[i++], refQueue[i++]);
+  for (let i = 0; i < refQueue.length;) applyRef(refQueue[i++], refQueue[i++], refQueue[i++]);
   if (options.__c) options.__c(root, commitQueue);
   commitQueue.some((c) => {
     try {
@@ -791,10 +796,7 @@ export function diffElementNodes(
     }
 
     if (newHtml) {
-      if (
-        !isHydrating &&
-        (!oldHtml || (newHtml.__html != oldHtml.__html && newHtml.__html != dom.innerHTML))
-      )
+      if (!isHydrating && (!oldHtml || (newHtml.__html != oldHtml.__html && newHtml.__html != dom.innerHTML)))
         dom.innerHTML = newHtml.__html;
       newVNode.__k = [];
     } else {
@@ -988,7 +990,12 @@ function constructNewChildrenArray(
     const skewedIndex = i + skew;
     childVNode.__ = newParentVNode;
     childVNode.__b = newParentVNode.__b + 1;
-    const matchingIndex = (childVNode.__i = findMatchingIndex(childVNode, oldChildren, skewedIndex, remainingOldChildren));
+    const matchingIndex = (childVNode.__i = findMatchingIndex(
+      childVNode,
+      oldChildren,
+      skewedIndex,
+      remainingOldChildren,
+    ));
     oldVNode = NULL;
     if (~matchingIndex) {
       oldVNode = oldChildren[matchingIndex];
@@ -1109,13 +1116,19 @@ export function toChildArray(children: Any, out?: Any[]): Any[] {
  * match, else the nearest unmatched one with the same key and type, searching backward then
  * forward. -1 when none.
  */
-function findMatchingIndex(childVNode: Any, oldChildren: Any[], skewedIndex: number, remainingOldChildren: number): number {
+function findMatchingIndex(
+  childVNode: Any,
+  oldChildren: Any[],
+  skewedIndex: number,
+  remainingOldChildren: number,
+): number {
   const key = childVNode.key;
   const type = childVNode.type;
   let oldVNode = oldChildren[skewedIndex];
   const matched = oldVNode && !(oldVNode.__u & MATCHED);
   const shouldSearch = remainingOldChildren > (matched ? 1 : 0);
-  if ((oldVNode === NULL && key == NULL) || (matched && key == oldVNode.key && type == oldVNode.type)) return skewedIndex;
+  if ((oldVNode === NULL && key == NULL) || (matched && key == oldVNode.key && type == oldVNode.type))
+    return skewedIndex;
   if (shouldSearch) {
     let x;
     for (x = skewedIndex - 1; x >= 0; x--) {
@@ -1161,7 +1174,8 @@ export function setProperty(dom: Any, name: string, value: Any, oldValue: Any, n
     else {
       if (typeof oldValue == "string") dom.style.cssText = oldValue = "";
       if (oldValue) for (name in oldValue) if (!(value && name in value)) setStyle(dom.style, name);
-      if (value) for (name in value) if (!oldValue || value[name] != oldValue[name]) setStyle(dom.style, name, value[name]);
+      if (value)
+        for (name in value) if (!oldValue || value[name] != oldValue[name]) setStyle(dom.style, name, value[name]);
     }
   } else if (name[0] == "o" && name[1] == "n") {
     // Each prop name has one proxy listener; swapping the handler is a store.

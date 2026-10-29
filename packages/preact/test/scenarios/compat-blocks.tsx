@@ -11,14 +11,20 @@ export const scenarios: Record<string, Scenario> = {
   "React names and values in statics and holes": (t) => {
     const { render } = t.X;
     const view = (n: number, s: unknown) => (
-      <div className="root" title={null as any} translate="no" data-n={n}>
+      <div className="root" title={null as any} translate={"no" as any} data-n={n}>
         <svg strokeWidth={2} viewBox="0 0 1 1">
           <path strokeLinecap="round" fillOpacity={n} />
         </svg>
         <a download={true} href="#" style={{ width: 10, flexGrow: 1 }}>
           d
         </a>
-        <b style={s as any} className={n > 1 ? "big" : "small"} download={n > 1} translate={n > 1 ? "no" : "yes"}>
+        <b
+          style={s as any}
+          className={n > 1 ? "big" : "small"}
+          // @ts-expect-error download is an anchor's prop; compat writes it on any element
+          download={n > 1}
+          translate={(n > 1 ? "no" : "yes") as any}
+        >
           {n}
         </b>
         <p class="lit" id={String(n)} />
@@ -36,7 +42,13 @@ export const scenarios: Record<string, Scenario> = {
     const { render } = t.X;
     const log = (name: string) => (e: any) => t.log(name, e.type, typeof e.persist);
     render(
-      <div onDoubleClick={log("dbl")} onFocus={log("focus")} onBlur={log("blur")} onClick={null as any}>
+      <div
+        // @ts-expect-error React's name, which compat renames
+        onDoubleClick={log("dbl")}
+        onFocus={log("focus")}
+        onBlur={log("blur")}
+        onClick={null as any}
+      >
         <span onChange={log("change")} onInput={log("input")}>
           {"x"}
         </span>
@@ -58,7 +70,7 @@ export const scenarios: Record<string, Scenario> = {
         <b>{"x"}</b>
       </p>
     );
-    t.log("valid", isValidElement(el), typeof el.$$typeof);
+    t.log("valid", isValidElement(el), typeof (el as any).$$typeof);
     t.log("count", Children.count(el.props.children));
     render(cloneElement(el, { className: "c" }), t.c);
     t.snap("cloned");

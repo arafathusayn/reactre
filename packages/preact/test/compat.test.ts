@@ -127,7 +127,7 @@ describe("props", () => {
     }
     render(h(C, null), t.c);
     render(h(C, { x: 1 }), t.c);
-    const c = new C({});
+    const c = new (C as any)({});
     c.componentWillMount = () => t.log("own");
     c.componentWillMount();
     t.log("isReactComponent", C.prototype.isReactComponent);
@@ -252,7 +252,7 @@ describe("elements", () => {
     Children.forEach(
       kids,
       function (this: unknown, c: unknown) {
-        seen.push(this);
+        seen.push([this, typeof c]);
       },
       "ctx",
     );
@@ -319,7 +319,7 @@ describe("components", () => {
     t.log("object ref cleared", r1.current);
     render(h(R, { ref: r1 }), t.c);
     t.log("object ref", r1.current === t.c.firstChild);
-    const p = new P({ a: 1 });
+    const p = new (P as any)({ a: 1 });
     p.state = { s: 1 };
     t.log(
       "pure state",

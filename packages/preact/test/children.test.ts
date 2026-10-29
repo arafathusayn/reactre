@@ -10,7 +10,7 @@ describe("placement", () => {
     const { createElement: h, render } = t.R;
     // Mounting before <b>, a component removes <b> from the DOM while it renders.
     function Thief() {
-      const b = t.c.querySelector?.("b") ?? (t.c.firstChild as any)?.lastChild;
+      const b = (t.c.firstChild as any)?.lastChild;
       if (b && b.localName == "b") b.remove();
       return h("i", null, "new");
     }
