@@ -24,6 +24,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### @reactre/compat
 
+- Changed: `version` is `"19.3.1"`, the React release compat matches.
 - Added: `@reactre/compat/server`, React 19.3.1's server rendering API: `renderToString`, `renderToStaticMarkup`, `renderToReadableStream` and `renderToPipeableStream` write the HTML React's production build writes, byte for byte, running compat's own hooks. `prerender`, `prerenderToNodeStream`, `resume` and `resumeToPipeableStream` are exported so imports resolve, and throw: compat does not implement partial prerendering. The README lists what else differs.
 - Fixed: the class build (`@reactre/compat/classes`) is declared as having side effects, so bundlers that trust `sideEffects`, such as Vite's, keep the code that installs class support.
 - Fixed: when an update arrives while a commit renders, its refs and layout effects still run before its passive effects, as in React (cmdk's list height).

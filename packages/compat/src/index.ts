@@ -47,7 +47,7 @@
 import { lis } from "@reactre/dom";
 
 /** The React version this module implements, as libraries read it. */
-export const version: string = "19.2.0";
+export const version: string = "19.3.1";
 
 // #region Elements and types
 
