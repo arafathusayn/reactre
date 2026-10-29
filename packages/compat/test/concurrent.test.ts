@@ -875,7 +875,7 @@ describe("updates that suspend", () => {
     }));
 
   test("a commit on another root leaves a transition that waits for data waiting", () =>
-    same(async ({ L, log, root, flushSync, snap, task }) => {
+    same(async ({ L, log, root, flushSync, snap, task, settle }) => {
       const d = data();
       await d.ready("a");
       let set: Any;
@@ -904,7 +904,9 @@ describe("updates that suspend", () => {
       await task();
       snap("other committed");
       d.resolve("b");
-      await task();
+      // Settled before the snapshot: what this checks is which components render, not when the
+      // passive effects run against the test's timer.
+      await settle();
       snap("resolved");
       r2.unmount();
     }));
