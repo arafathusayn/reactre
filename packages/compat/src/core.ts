@@ -6088,35 +6088,38 @@ export function useSyncExternalStore<T>(
 ): T {
   const f = cur!;
   const h = hook();
-  // A box the subscription reads, updated each render: the latest snapshot and getter, without
-  // resubscribing when only getSnapshot changes. A server render keeps no box (so every pass
-  // takes this branch), never calls getSnapshot and never subscribes.
+  // A box the subscription reads, updated each render: the latest snapshot, getter and subscribe,
+  // and the check, made once. A server render keeps no box (so every pass takes this branch),
+  // never calls getSnapshot and never subscribes.
   let box = h.s;
-  if (box === null) {
+  // React's updateStoreInstance: after a commit that mounted the hook, rendered a new snapshot or
+  // brought a new getSnapshot or subscribe, getSnapshot is called once more (the store may have
+  // moved on since the render, and a hydrated snapshot, the server's, may not be the store's).
+  let check = box === null;
+  if (check) {
     if (server !== null) return server.snapshot(getServerSnapshot, select);
-    box = h.s = h.r = { v: undefined, g: getSnapshot };
-  }
-  // While hydrating, the server snapshot (hydrating.store throws #407 without one), as React's
-  // client reads it: one test per call, as React's isHydrating.
-  const v = hydrating ? hydrating.store(getServerSnapshot) : getSnapshot();
-  box.v = v;
-  box.g = getSnapshot;
-  effect(PASSIVE, () => {
+    box = h.s = h.r = { v: undefined, g: getSnapshot, u: subscribe, c: null };
     // A throwing getSnapshot counts as a change, as in React: the re-render rethrows it to the
     // nearest boundary.
-    const check = (): void => {
+    box.c = (): void => {
       let changed = true;
       try {
         changed = !Object.is(box.g(), box.v);
       } catch {}
       if (changed) schedule(f);
     };
-    // React subscribes, then checks: the store may have changed between render and subscribing,
-    // and a hydrated snapshot (the server's) may not be the store's.
-    const unsubscribe = subscribe(check);
-    check();
-    return unsubscribe;
-  }, [subscribe]);
+  }
+  // While hydrating, the server snapshot (hydrating.store throws #407 without one), as React's
+  // client reads it: one test per call, as React's isHydrating.
+  const v = hydrating ? hydrating.store(getServerSnapshot) : getSnapshot();
+  if (!check) check = box.g !== getSnapshot || box.u !== subscribe || !Object.is(box.v, v);
+  box.v = v;
+  box.g = getSnapshot;
+  box.u = subscribe;
+  effect(PASSIVE, () => subscribe(box.c), [subscribe]);
+  // The check is the store hook's own slot, queued as a passive callback after the subscription's
+  // effect, as React orders them: no allocation, and nothing queued when nothing changed.
+  if (check) (f.x ??= []).push(h, box.c, null);
   return v;
 }
 

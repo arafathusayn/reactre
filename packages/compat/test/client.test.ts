@@ -2524,6 +2524,107 @@ describe("errors", () => {
 
 // #endregion
 
+// #region The render loop
+
+describe("the render loop", () => {
+  // React reads window.event as it schedules an update made outside flushSync.
+  beforeEach(() => void ((globalThis as Any).window = globalThis));
+  afterEach(() => void delete (globalThis as Any).window);
+
+  /** What a step does with a library: render into its root, set state, flush. */
+  type Step = (root: Any, flush: (fn: () => void) => void, L: Lib) => void;
+
+  /**
+   * Runs the steps `make(L, log)` returns with each library, on one root apiece, and expects the
+   * same: the log the tree writes, the errors reported in order with it (React's code or the
+   * message, a cause's, then the component stack, locations and all) and the markup after each
+   * step. Returns compat's log.
+   */
+  async function stepsSame(make: (L: Lib, log: string[]) => Step[]): Promise<string[]> {
+    const message = (e: Any): string =>
+      String(e?.message ?? e).replace(/^Minified React error #(\d+);.*$/s, "#$1") +
+      (e?.cause ? " cause " + message(e.cause) : "");
+    const run = async (L: Lib, createRoot: (c: Any, o: Any) => Any, flush: (fn: () => void) => void) => {
+      const log: string[] = [],
+        c = box();
+      const report = (kind: string) => (e: Any, info: Any) => void log.push(`${kind} ${message(e)}${info.componentStack}`);
+      const root = createRoot(c, {
+        onUncaughtError: report("uncaught"),
+        onCaughtError: report("caught"),
+        onRecoverableError: report("recoverable"),
+      });
+      for (const step of make(L, log)) {
+        step(root, flush, L);
+        await tasks();
+        log.push("dom " + markup(c));
+      }
+      return log;
+    };
+    const react = await run(React, ReactClient.createRoot, ReactDOM.flushSync);
+    const compat = await run(Compat, (c, o) => Compat.createRoot(c as unknown as Element, o), Compat.flushSync);
+    expect(compat).toEqual(react);
+    return compat;
+  }
+
+  test("useSyncExternalStore checks the store after a commit whose snapshot or getSnapshot changed", async () => {
+    // React's updateStoreInstance: after a commit that rendered a new snapshot, or with a new
+    // getSnapshot (or subscribe), a passive effect calls getSnapshot once more and renders again
+    // if the store moved on meanwhile. It runs after the subscription's own effect.
+    const log = await stepsSame((L, log) => {
+      let value = 0,
+        setP: Any = null;
+      const listeners = new Set<() => void>();
+      const get = () => (log.push("get " + value), value);
+      const subscribe = (cb: () => void) => {
+        log.push("subscribe");
+        listeners.add(cb);
+        return () => void (log.push("unsubscribe"), listeners.delete(cb));
+      };
+      const other = (cb: () => void) => subscribe(cb);
+      function Read() {
+        const [p, set] = L.useState(0);
+        setP = set;
+        // An odd p brings a getSnapshot of its own, 10 another subscribe.
+        const v = L.useSyncExternalStore(p === 10 ? other : subscribe, p % 2 ? () => get() : get);
+        L.useEffect(() => void log.push("passive"));
+        // The store moves on after this render without notifying: after 6, no check sees it
+        // (nothing changed); after 7, a new getSnapshot's check does, and renders again.
+        L.useLayoutEffect(() => {
+          if (p === 6 || p === 7) value = p - 4;
+        });
+        log.push("render " + v + " " + p);
+        return v;
+      }
+      const notify = () => {
+        for (const l of listeners) l();
+      };
+      return [
+        (root, flush) => flush(() => root.render(L.createElement(Read))),
+        (_, flush) => flush(() => setP(2)),
+        (_, flush) => flush(() => setP(3)),
+        (_, flush) => flush(() => setP(5)),
+        (_, flush) => flush(() => setP(4)),
+        (_, flush) =>
+          flush(() => {
+            value = 1;
+            notify();
+          }),
+        (_, flush) => flush(() => setP(6)),
+        (_, flush) => flush(() => setP(7)),
+        (_, flush) => flush(() => setP(10)),
+        (_, flush) => flush(() => setP(12)),
+        // A transition that changes neither: React checks a store whose snapshot or getSnapshot
+        // changed once more as a transition finishes rendering, before it commits, where compat,
+        // rendering it at once, has no such check.
+        (_, __, L) => L.startTransition(() => setP(14)),
+      ];
+    });
+    expect(log.filter((l) => l.startsWith("get")).length).toBeGreaterThan(10);
+  });
+});
+
+// #endregion
+
 // #region The core entry
 
 describe("@reactre/compat/core", () => {
