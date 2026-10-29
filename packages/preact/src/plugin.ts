@@ -96,7 +96,7 @@ export const reactrePreact: UnpluginInstance<CompilerOptions | undefined, false>
   const check = (code: string, id: string): string | null => {
     if (!switched) return null;
     const path = pathOf(id);
-    checkOff(code, path, off);
+    checkOff(code, path, off, options.allowUnresolved);
     return off.has("Component") && path.startsWith(DIST) ? classesOff(code) : null;
   };
 

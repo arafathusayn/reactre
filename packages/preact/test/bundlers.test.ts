@@ -47,6 +47,7 @@ const FILES: Record<string, string> = {
   `,
   "effect.jsx": `import { useEffect } from "react"; export const a = useEffect;`,
   "dep.js": `import { x } from "dep"; export { x };`,
+  "dynamic.js": `import * as R from "react";\nexport const get = (k) => R[k];`,
   "node_modules/dep/package.json": `{ "name": "dep", "type": "module", "main": "index.js" }`,
   "node_modules/dep/index.js": `import { Component } from "preact"; export const x = Component;`,
 };
@@ -179,13 +180,16 @@ describe.each(Object.keys(bundlers))("%s", (name) => {
     ]);
   }, 60_000);
 
-  test("a switched-off import fails the build, in the app and in a dependency", async () => {
+  test("a switched-off import fails the build, in the app and in a dependency, and so does an unresolved read", async () => {
     const options = { source: "react", off: ["@classes", "useEffect"] } as const;
     expect(await failure(bundle, join(out, "effect.jsx"), join(out, `${name}-effect.js`), options)).toContain(
       "effect.jsx: uses useEffect",
     );
     expect(await failure(bundle, join(out, "dep.js"), join(out, `${name}-dep.js`), options)).toContain(
       "index.js: uses Component",
+    );
+    expect(await failure(bundle, join(out, "dynamic.js"), join(out, `${name}-dynamic.js`), options)).toContain(
+      "dynamic.js:2:27: reads a module object with a key the build cannot work out",
     );
   }, 60_000);
 });

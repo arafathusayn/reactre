@@ -8,7 +8,9 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { offKeys, usedApis } from "../src/api.ts";
+import { checkOff, offKeys, scanApis } from "../src/api.ts";
+
+const usedApis = (code: string, file: string) => scanApis(code, file).used;
 import { reactrePreactCompiler } from "../src/compiler.ts";
 import * as dom from "../src/dom.ts";
 import { container, html, installDom } from "./dom.ts";
@@ -18,7 +20,12 @@ const dir = mkdtempSync(join(tmpdir(), "reactre-plugin-preact-off-"));
 const src = join(import.meta.dir, "../src");
 
 /** Bundle `files` (the first is the entry) with the plugin and `off`; the bundle's code, or the build's error. */
-async function bundle(files: Record<string, string>, off: string[], source: "preact" | "react" = "preact") {
+async function bundle(
+  files: Record<string, string>,
+  off: string[],
+  source: "preact" | "react" = "preact",
+  allowUnresolved?: (path: string) => boolean,
+) {
   const sub = mkdtempSync(join(dir, "app-"));
   for (const [name, code] of Object.entries(files)) await Bun.write(join(sub, name), code);
   try {
@@ -28,7 +35,7 @@ async function bundle(files: Record<string, string>, off: string[], source: "pre
       // Minified, as an app's build is: the class code goes only where dead code is dropped.
       minify: true,
       plugins: [
-        reactrePreactCompiler({ source, off }),
+        reactrePreactCompiler({ source, off, ...(allowUnresolved ? { allowUnresolved } : {}) }),
         {
           // The aliases an app sets; with APIs off, the plugin resolves preact and react first.
           name: "alias",
@@ -75,12 +82,104 @@ describe("keys", () => {
       P.useEffect; React.useMemo; R.flushSync; require("react").useContext; P["computed"];
     `;
     expect([...usedApis(code, "a.ts")].sort()).toEqual(
-      ["createPortal", "flushSync", "memo", "useContext", "useEffect", "useId", "useMemo", "useRef", "useState"].sort(),
+      [
+        "computed",
+        "createPortal",
+        "flushSync",
+        "memo",
+        "useContext",
+        "useEffect",
+        "useId",
+        "useMemo",
+        "useRef",
+        "useState",
+      ].sort(),
     );
     expect([...usedApis("import { useState } from 'preact/hooks'; <a/>", "a.jsx")]).toEqual(["useState"]);
     expect([...usedApis("import { x } from 'react'; let a: number = 1;", "a.tsx")]).toEqual(["x"]);
     // Code that does not parse reads nothing.
     expect(usedApis("import {", "a.js").size).toBe(0);
+  });
+});
+
+describe("what the scan can resolve", () => {
+  const scan = (code: string, file = "a.tsx") => {
+    const r = scanApis(code, file);
+    return { used: [...r.used].sort(), unresolved: r.unresolved.map((u) => u.why) };
+  };
+  const head = `import React from "react"; import * as P from "preact"; const R = require("react-dom");\n`;
+
+  test("keys the build can work out are uses, as a name is", () => {
+    const code =
+      head +
+      `
+      React["useEffect"]; React[\`useMemo\`]; React[\`useInsertion\${"Effect"}\`];
+      const k = "useRef"; P[k]; React["use" + "Id"]; React["useCallback".toString()];
+      (React as any).useReducer; (P!).useContext; (React satisfies object)["useDebugValue"];
+      const { ["useLayoutEffect"]: l, useState } = React; R["flushSync"]; require("react")["memo"];
+      const C = () => <React.Suspense><P.Fragment /></React.Suspense>;
+    `;
+    expect(scan(code)).toEqual({
+      used: [
+        "Fragment",
+        "Suspense",
+        "flushSync",
+        "memo",
+        "useCallback",
+        "useContext",
+        "useDebugValue",
+        "useEffect",
+        "useId",
+        "useInsertionEffect",
+        "useLayoutEffect",
+        "useMemo",
+        "useReducer",
+        "useRef",
+        "useState",
+      ],
+      unresolved: [],
+    });
+  });
+
+  test("a module object read with a key the build cannot work out, or handed on, is unresolved", () => {
+    const cases: Record<string, string> = {
+      "a key known only at run time": "export const f = (k: string) => React[k];",
+      "a key that may be one of two": 'declare const c: boolean; React[c ? "useMemo" : "useRef"];',
+      "a const declared twice": 'const k = "useRef"; { const k = "useMemo"; P[k]; }',
+      "a module object handed to other code": "take(P);",
+      "a module object spread": "export const all = { ...React };",
+      "a module object iterated": "Object.values(R);",
+      "the rest of a module object": "const { useState, ...rest } = React;",
+      "a pattern key the build cannot work out": "declare const k: string; const { [k]: x } = React;",
+      "a module object exported": "export { P };",
+      "a module re-exported whole": 'export * from "preact/hooks";',
+      "a module imported at run time": 'import("react");',
+      "a key from a call": "declare const pick: () => string; React[pick()];",
+      "a const shadowed by a parameter": 'const k = "useRef"; class A { constructor(private k: string) { P[k]; } }',
+      "a module from require handed on": 'take(require("react"));',
+    };
+    for (const [name, code] of Object.entries(cases)) {
+      const r = scan(head + code);
+      expect({ name, unresolved: r.unresolved.length }).toEqual({ name, unresolved: 1 });
+    }
+  });
+
+  test("reads that use no API are fine: typeof and types", () => {
+    const code =
+      head + "typeof React; let n: React.ReactNode; type T = typeof P; const x = null as unknown as typeof R;";
+    expect(scan(code)).toEqual({ used: [], unresolved: [] });
+  });
+
+  test("with APIs off, an unresolved read fails the build, naming the place, unless the file is allowed", () => {
+    const code = "import * as P from 'preact';\nexport const f = (k) => P[k];";
+    const off = new Set(["useEffect"]);
+    expect(() => checkOff(code, "a.js", off)).toThrow(
+      "a.js:2:25: reads a module object with a key the build cannot work out, so it cannot prove that the switched-off APIs (useEffect) stay unused.",
+    );
+    expect(() => checkOff(code, "a.js", off, () => true)).not.toThrow();
+    expect(() => checkOff('import { useEffect } from "preact/hooks";', "a.js", off, () => true)).toThrow(
+      "a.js: uses useEffect",
+    );
   });
 });
 
@@ -93,18 +192,35 @@ describe("builds", () => {
     expect(error).toContain("main.jsx: uses useEffect");
   });
 
-  test("a switched-off API the scan cannot see throws when called; the rest work, and JSX still compiles", async () => {
+  test("a use through a key the build can work out fails the build too", async () => {
+    const { error } = await bundle(
+      { "main.jsx": `import * as P from "preact"; export const a = () => P["use" + "Effect"];` },
+      ["useEffect"],
+    );
+    expect(error).toContain("main.jsx: uses useEffect");
+  });
+
+  test("an unresolved read fails the build", async () => {
+    const { error } = await bundle({ "main.jsx": `import * as P from "preact"; export const a = (k) => P[k];` }, [
+      "useEffect",
+    ]);
+    expect(error).toContain("main.jsx:1:54: reads a module object with a key the build cannot work out");
+  });
+
+  test("in an allowed file, a switched-off API throws when called; the rest work, and JSX still compiles", async () => {
     const { code, error } = await bundle(
       {
         "main.jsx": `
           import * as P from "preact";
           import { useState } from "preact/hooks";
-          export const call = () => P["useEffect"]();
+          export const call = (k = "useEffect") => P[k]();
           export const ok = typeof useState;
           export const view = <p class="x">{1}</p>;
         `,
       },
       ["useEffect", "@transitions"],
+      "preact",
+      (path) => path.endsWith("main.jsx"),
     );
     expect(error).toBe("");
     const m = await run(code);
@@ -123,10 +239,9 @@ describe("builds", () => {
   test("class support off: a class the scan cannot see throws when it renders, and the class code is gone", async () => {
     const files = {
       "main.jsx": `
-        import * as P from "preact";
         import { render } from "preact";
-        const Base = P["Comp" + "onent"];
-        class K extends Base { render() { return null; } }
+        // A class with no Component import: the scan cannot tell it is one.
+        class K { render() { return null; } }
         export const go = (c) => render(<K />, c);
         import { e } from "./engine.ts";
         export const fn = (c) => render(<p>{"f" + e}</p>, c);

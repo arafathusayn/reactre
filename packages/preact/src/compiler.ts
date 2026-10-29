@@ -52,6 +52,12 @@ export interface CompilerOptions {
    * and a module that imports one fails the build. "Component" switches class support off.
    */
   readonly off?: readonly string[];
+  /**
+   * With APIs off, files allowed to read `preact` or `react` in ways the build cannot follow
+   * (`React[name]`, `{ ...React }`); there a switched-off API throws when called. Elsewhere such a
+   * read fails the build, as it could reach any API.
+   */
+  readonly allowUnresolved?: (path: string) => boolean;
 }
 
 const SRC = import.meta.dir;
@@ -101,7 +107,7 @@ export function reactrePreactCompiler(options: CompilerOptions = {}): BunPlugin 
         );
       build.onLoad({ filter: /\.[cm]?[jt]sx?$/ }, async ({ path }) => {
         const source = await Bun.file(path).text();
-        checkOff(source, path, off);
+        checkOff(source, path, off, options.allowUnresolved);
         return filter.test(path) && !skip(path) ? compile(source, path) : undefined;
       });
     },
