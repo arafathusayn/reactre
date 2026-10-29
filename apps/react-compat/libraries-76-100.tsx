@@ -777,7 +777,11 @@ export const libraries76To100: Record<string, (t: T) => Promise<void>> = {
   // floating-ui, and hidden when the pointer leaves.
   async "react-tooltip: hover anchors, content, hide"(t) {
     // Hiding ends after a transition: the scenario waits for both the event and the removal.
-    let hidden = false;
+    // Moving between anchors may hide and show again or not, by timing, so the scenario logs
+    // whether the tip was shown, not how often, and waits for what it checks.
+    let shown = false,
+      hidden = false;
+    const tip = () => document.querySelector("[role=tooltip]")?.textContent ?? "none";
     mount(
       t,
       <div style={{ padding: 40 }}>
@@ -792,7 +796,7 @@ export const libraries76To100: Record<string, (t: T) => Promise<void>> = {
           place="bottom"
           delayShow={0}
           delayHide={0}
-          afterShow={() => t.log("shown")}
+          afterShow={() => (shown = true)}
           afterHide={() => (hidden = true)}
         />
       </div>,
@@ -800,18 +804,18 @@ export const libraries76To100: Record<string, (t: T) => Promise<void>> = {
     await t.step("idle");
     mouse(t.$("#a"), "mouseover");
     mouse(t.$("#a"), "mouseenter");
-    await wait(100);
-    t.log("tip", document.querySelector("[role=tooltip]")?.textContent ?? "none");
+    await until(() => shown && tip() === "first tip", 3000);
+    t.log("shown", shown, "tip", tip());
     mouse(t.$("#a"), "mouseout");
     mouse(t.$("#a"), "mouseleave");
     mouse(t.$("#b"), "mouseover");
     mouse(t.$("#b"), "mouseenter");
-    await wait(100);
-    t.log("tip", document.querySelector("[role=tooltip]")?.textContent ?? "none");
+    await until(() => tip() === "second tip", 3000);
+    t.log("tip", tip());
     mouse(t.$("#b"), "mouseout");
     mouse(t.$("#b"), "mouseleave");
     await until(() => hidden && document.querySelector("[role=tooltip]") === null, 3000);
-    t.log("hidden", hidden, "tip", document.querySelector("[role=tooltip]")?.textContent ?? "none");
+    t.log("hidden", hidden, "tip", tip());
   },
 
   // Colour pickers from class components: a hex typed into the Sketch picker's field and a
