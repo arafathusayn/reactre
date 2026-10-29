@@ -1,8 +1,8 @@
 name: CI
 
 # Every push to main and every pull request: formatting, both type checks,
-# the unit tests, the plugin under Node, and the React compatibility check in
-# headless Chrome.
+# the unit tests with full coverage, the plugin under Node, and the React
+# compatibility check in headless Chrome.
 
 on:
   push:
@@ -29,7 +29,8 @@ jobs:
       - run: bun fmt --check
       - run: bun check
       - run: bun run check:strict
-      - run: bun test
+      # Fails unless every function and line of the packages' sources is covered (bunfig.toml).
+      - run: bun test --coverage
       - name: Build and pack the published packages
         run: |
           for dir in dom core compiler compat plugin; do

@@ -346,23 +346,9 @@ export class FakeElement extends FakeNode {
   hasAttribute(k: string): boolean {
     return k === "class" ? this.cls !== "" : (this.attrs?.has(k) ?? false);
   }
-  /** data-* attributes as a plain object view, enough for h()'s Object.assign. */
-  get dataset(): Record<string, string> {
-    return new Proxy({} as Record<string, string>, {
-      // camelCase key -> data-kebab-case attribute, as the DOM maps them.
-      set: (_t, k, v) => {
-        this.setAttribute("data-" + String(k).replace(/[A-Z]/g, (c) => "-" + c.toLowerCase()), String(v));
-        return true;
-      },
-    });
-  }
   addEventListener(type: string, fn: (e: { type: string; target: FakeNode }) => void): void {
     const map = (this.listeners ??= new Map());
     map.set(type, [...(map.get(type) ?? []), fn]);
-  }
-  /** Calls this element's listeners for `type` with this element as `this`. */
-  fire(type: string): void {
-    for (const fn of this.listeners?.get(type) ?? []) fn.call(this, { type, target: this });
   }
   /**
    * Dispatches a bubbling event from this element: at each element up to the

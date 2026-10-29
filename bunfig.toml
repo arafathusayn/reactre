@@ -6,6 +6,12 @@ embeddedLanguageFormatting = "off"
 [test]
 root = "packages"
 preload = ["./packages/testdom/src/setup.ts"]
+# `bun test --coverage` measures the packages' sources: every function and line is covered, and
+# a run below that fails. Tests and their helpers, and the bundles the plugin tests build in a
+# temp folder, are not sources.
+coverageSkipTestFiles = true
+coveragePathIgnorePatterns = ["packages/*/test/**", "**/reactre-plugin-*/**"]
+coverageThreshold = { lines = 1.0, functions = 1.0 }
 
 [install]
 ignoreScripts = true
