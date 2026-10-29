@@ -7,8 +7,12 @@
 // object, so it runs with no bundler, and the result is compared with what jsx() builds.
 
 import { describe, expect, test } from "bun:test";
+import { rmdirSync, unlinkSync } from "node:fs";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import { compileSource } from "../src/compiler.ts";
+import { compileSource, reactreCompatCompiler } from "../src/compiler.ts";
 import { __block, __defaults, __key, __template, Fragment, jsx, jsxs } from "../src/index.ts";
 
 // The descriptions of the templates hoisted in compiled output, parsed back from their JSON.
@@ -272,5 +276,33 @@ describe("@reactre/compat/compiler", () => {
     expect(c.map((x) => [x.key, x.props])).toEqual(
       rows.map((r) => [String(r.id), jsx(Row, { row: r, on: r.id === 3 }).props]),
     );
+  });
+});
+
+describe("reactreCompatCompiler", () => {
+  /** The plugin's load hook, from a stand-in for Bun's build object. */
+  const loadHook = (options?: Parameters<typeof reactreCompatCompiler>[0]) => {
+    let hook!: (args: { path: string }) => Promise<{ contents: string; loader: string } | undefined>;
+    reactreCompatCompiler(options).setup({ onLoad: (_: unknown, cb: typeof hook) => (hook = cb) } as never);
+    return hook;
+  };
+
+  test("compiles the app's .tsx and .jsx files, and leaves node_modules and excluded files to Bun", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "reactre-compat-compiler-"));
+    try {
+      await Bun.write(join(dir, "a.tsx"), `export const A = (p: { n: number }) => <b>{p.n}</b>;`);
+      await Bun.write(join(dir, "b.jsx"), `export const B = () => <i>x</i>;`);
+      const hook = loadHook({ exclude: (path) => path.endsWith("skip.jsx") });
+      const tsx = await hook({ path: join(dir, "a.tsx") });
+      expect(tsx!.loader).toBe("js");
+      expect(tsx!.contents).toContain("__hrTemplate");
+      expect((await hook({ path: join(dir, "b.jsx") }))!.contents).toContain("__hrBlock");
+      expect(await hook({ path: "/app/node_modules/pkg/c.jsx" })).toBeUndefined();
+      expect(await hook({ path: join(dir, "skip.jsx") })).toBeUndefined();
+      expect(await loadHook()({ path: "/app/node_modules/pkg/c.jsx" })).toBeUndefined();
+    } finally {
+      for (const f of ["a.tsx", "b.jsx"]) unlinkSync(join(dir, f));
+      rmdirSync(dir);
+    }
   });
 });
