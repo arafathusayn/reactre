@@ -33,7 +33,6 @@ describe("API manifest", () => {
         "createRoot",
         "useState",
         "Suspense",
-        "SuspenseList",
         "lazy",
         "PureComponent",
         "Component",
@@ -77,5 +76,16 @@ describe("API manifest", () => {
     );
     expect(() => enabledApis(["@forms"], [])).toThrow("an app needs createRoot or hydrateRoot");
     expect(() => enabledApis("all", ["createRoot", "hydrateRoot"])).toThrow("needs createRoot or hydrateRoot");
+  });
+
+  test("SuspenseList is not exported, as React 19.3.1's stable react does not export it", async () => {
+    const R = await import("react");
+    for (const k of ["SuspenseList", "unstable_SuspenseList"]) {
+      expect(k in R).toBe(false);
+      expect(k in Core).toBe(false);
+      expect(k in React).toBe(false);
+    }
+    // ViewTransition and addTransitionType are stable exports of 19.3.1.
+    for (const k of ["ViewTransition", "addTransitionType"]) expect([k in R, k in Core, k in React]).toEqual([true, true, true]);
   });
 });

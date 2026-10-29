@@ -113,8 +113,9 @@ export const StrictMode: symbol = Symbol.for("react.strict_mode");
 export const Profiler: symbol = Symbol.for("react.profiler");
 /** Shows `fallback` while a child suspends. */
 export const Suspense: symbol = Symbol.for("react.suspense");
-/** Renders its children in order; reveal order is not coordinated. */
-export const SuspenseList: symbol = Symbol.for("react.suspense_list");
+// <SuspenseList>: React 19.3.1's stable `react` does not export it, so only an element made with
+// its symbol reaches here; it renders its children in order, reveal order not coordinated.
+const SuspenseList: symbol = Symbol.for("react.suspense_list");
 /** Hides its children with `mode="hidden"`, keeping their state; their effects are cleaned up while hidden. */
 export const Activity: symbol = Symbol.for("react.activity");
 /** Renders its children; view transitions are not started. */
@@ -122,11 +123,7 @@ export const ViewTransition: symbol = Symbol.for("react.view_transition");
 
 /** Names the transition for view transition types; with no view transitions started, it has no effect. */
 export function addTransitionType(_type: string): void {}
-export {
-  Activity as unstable_Activity,
-  SuspenseList as unstable_SuspenseList,
-  ViewTransition as unstable_ViewTransition,
-};
+export { Activity as unstable_Activity, ViewTransition as unstable_ViewTransition };
 
 // #endregion
 
@@ -8710,7 +8707,6 @@ const React: Record<string, unknown> = {
   StrictMode,
   Profiler,
   Suspense,
-  SuspenseList,
   Activity,
   ViewTransition,
   addTransitionType,

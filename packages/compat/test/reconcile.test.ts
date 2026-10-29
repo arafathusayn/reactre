@@ -33,7 +33,6 @@ import {
   shallowEqual,
   StrictMode,
   Suspense,
-  SuspenseList,
   useState,
   ViewTransition,
 } from "../src/core.ts";
@@ -141,7 +140,7 @@ describe("element types", () => {
         h(Fragment, null, "f", n),
         h(StrictMode, null, h("b", null, "s")),
         h(Profiler, { id: "p", onRender: () => {} }, "p"),
-        h(SuspenseList, null, "l"),
+        h(Symbol.for("react.suspense_list"), null, "l"),
         h(ViewTransition, null, "v"),
       );
     render(wrap("1"));

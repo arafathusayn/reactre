@@ -15,7 +15,10 @@
 //     stack of #520's wrapper, for the report if the render that follows succeeds, then the
 //     error's own, which an object keeps for every later report, as React's CapturedStacks does.
 
-import { __installStacks, type StackCore, SuspenseList, ViewTransition } from "../core.ts";
+import { __installStacks, type StackCore, ViewTransition } from "../core.ts";
+
+// <SuspenseList>, which React 19.3.1's stable `react` does not export: an element made with its symbol.
+const SuspenseList = Symbol.for("react.suspense_list");
 
 // biome-ignore lint: fibers and thrown values are opaque here.
 type Any = any;

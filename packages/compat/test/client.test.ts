@@ -569,7 +569,7 @@ describe("component stacks", () => {
     });
     const h = Compat.createElement;
     Compat.flushSync(() =>
-      root.render(h(Compat.Suspense, null, h("div", null, h(Compat.SuspenseList, null, h(Boom))))),
+      root.render(h(Compat.Suspense, null, h("div", null, h(Symbol.for("react.suspense_list"), null, h(Boom))))),
     );
     const frames = ["Boom", "SuspenseList", "div", "Suspense"];
     expect(stacks.map(names)).toEqual([frames.map((n) => `\n    at ${n} (<anonymous>)`).join("")]);

@@ -31,7 +31,6 @@ export const KEYS: readonly string[] = [
   "StrictMode",
   "Profiler",
   "Suspense",
-  "SuspenseList",
   "Activity",
   "ViewTransition",
   "addTransitionType",
@@ -111,7 +110,7 @@ export const MODULES: Readonly<Record<string, string>> = {
 
 /** Groups of keys, by the feature they make up. A group is written where a key may be. */
 export const GROUPS: Readonly<Record<string, readonly string[]>> = {
-  "@suspense": ["Suspense", "SuspenseList", "lazy"],
+  "@suspense": ["Suspense", "lazy"],
   "@transitions": ["startTransition", "useTransition", "useDeferredValue", "useOptimistic", "addTransitionType"],
   "@forms": ["useActionState", "useFormState", "useFormStatus", "requestFormReset"],
   "@hints": ["preconnect", "prefetchDNS", "preload", "preloadModule", "preinit", "preinitModule"],
