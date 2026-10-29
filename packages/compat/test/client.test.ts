@@ -1271,9 +1271,14 @@ describe("hydration passes", () => {
     const loaded: Any[] = [];
     Object.defineProperties(fakeDoc, {
       readyState: { configurable: true, writable: true, value: "loading" },
-      addEventListener: { configurable: true, value: (type: string, fn: Any) => void loaded.push(type, fn) },
+      addEventListener: {
+        configurable: true,
+        writable: true,
+        value: (type: string, fn: Any) => void loaded.push(type, fn),
+      },
       removeEventListener: {
         configurable: true,
+        writable: true,
         value: (_type: string, fn: Any) => void loaded.splice(loaded.indexOf(fn) - 1, 2),
       },
     });
@@ -1315,7 +1320,10 @@ describe("hydration passes", () => {
     // Once the document has loaded, a boundary still pending renders on the client at once.
     fakeDoc.readyState = "complete";
     await timeline(pending, client);
+    // The shared document goes back to how other files find it.
     delete fakeDoc.readyState;
+    delete fakeDoc.addEventListener;
+    delete fakeDoc.removeEventListener;
   });
 
   test("an Activity hydrates in a pass of its own and recovers on its own; a hidden one renders on the client", async () => {
