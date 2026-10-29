@@ -4,8 +4,8 @@
 // React's production client runs on the fake DOM with the few additions below (a window for its
 // selection code, localName and splitText for hydration). Each test builds one tree twice, once
 // from React and once from compat, renders each with its own library and expects the same: the
-// ids useId gives while hydrating server HTML, the rows and their state when keys repeat, and the
-// component stacks errors are reported with.
+// ids useId gives while hydrating server HTML, the rows and their state when keys repeat, the
+// component stacks errors are reported with, and the errors themselves: React's production codes.
 
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
 
@@ -388,8 +388,8 @@ describe("component stacks", () => {
   /** A stack with each frame's location replaced with "<anonymous>", to read the names alone. */
   const names = (stack: string): string => stack.replace(/^( +at \S+) \(.*\)$/gm, "$1 (<anonymous>)");
 
-  // A test error's message; React's own errors are minified, compat's are not.
-  const message = (e: Any): string => (e.message.length < 20 ? e.message : "(React's error)");
+  // An error's message: React's own errors are minified, and compat's must be the same.
+  const message = (e: Any): string => e.message;
 
   /**
    * Renders `make(L)` with React and with compat into roots with both error callbacks, and
@@ -591,21 +591,18 @@ describe("component stacks", () => {
 // #region Hydration mismatches
 
 describe("hydration mismatches", () => {
-  /** An error's code: React's are minified (#418 and its argument), compat's carry the text. */
-  const code = (e: Any): string => {
+  /** An error's code and first argument (#418 HTML), to read the logs by; the messages are compared whole. */
+  const short = (e: Any): string => {
     const m = /^Minified React error #(\d+);[^?]*(?:\?args\[\]=(\w+))?/.exec(e.message);
-    if (m) return m[1] + (m[2] ? " " + m[2] : "");
-    if (e.message.startsWith("Hydration failed because the server rendered text didn't match")) return "418 text";
-    if (e.message.startsWith("Hydration failed because the server rendered HTML didn't match")) return "418 HTML";
-    if (e.message.startsWith("The server could not finish this Suspense boundary")) return "419";
-    return e.message;
+    return m ? m[1] + (m[2] ? " " + m[2] : "") : e.message;
   };
 
   /**
    * Renders `server(React)` on React's server, hydrates that HTML with `client(L, log)` on React's
    * client and on compat's, and expects the same: the markup after, which of the server's nodes
    * stayed (Y) or were replaced (n), and the log: what onRecoverableError got, component stack
-   * included, in order with the effects and anything else the tree logs.
+   * included, in order with the effects and anything else the tree logs, and each error's whole
+   * message.
    */
   async function recovers(
     server: (L: Lib) => Any,
@@ -617,7 +614,9 @@ describe("hydration mismatches", () => {
       const c = box();
       c.innerHTML = html;
       const before = nodes(c);
-      const log: string[] = [];
+      const log: string[] = [],
+        messages: string[] = [];
+      const code = (e: Any): string => (messages.push(e.message), short(e));
       hydrate(c, client(L, log), {
         onRecoverableError: (e: Any, info: Any) =>
           void log.push(`recoverable ${code(e)}${e.digest === undefined ? "" : " " + e.digest}${info.componentStack}`),
@@ -631,11 +630,12 @@ describe("hydration mismatches", () => {
           .map((n) => (before.includes(n) ? "Y" : "n"))
           .join(""),
         log,
+        messages,
       };
     };
     const react = await run(React, (c, el, o) => ReactDOM.flushSync(() => ReactClient.hydrateRoot(c, el, o)));
-    const compat = await run(Compat, (c, el, o) => Compat.hydrateRoot(c, el, o));
-    expect(compat).toEqual(react);
+    const { messages, ...compat } = await run(Compat, (c, el, o) => Compat.hydrateRoot(c, el, o));
+    expect({ ...compat, messages }).toEqual(react);
     return compat;
   }
 
@@ -864,6 +864,288 @@ describe("hydration mismatches", () => {
     // No component stack: React reports this one with null. (renderToString writes no digest.)
     expect(r).toEqual({ dom: "<main><p>ok</p></main>", kept: "Ynn", log: ["recoverable 419null"] });
   });
+});
+
+// #endregion
+
+// #region Errors
+
+describe("errors", () => {
+  // React's production client throws minified errors: a code and its arguments in a react.dev
+  // link. Each test makes both libraries throw in one situation and expects the same message.
+
+  /** What `fn` throws, as its message. */
+  const thrown = (fn: () => unknown): string => {
+    try {
+      fn();
+    } catch (e) {
+      return (e as Error).message;
+    }
+    return "(nothing thrown)";
+  };
+
+  /** Expects both libraries to throw one message from `fn(L)`, React's error `code`; returns it. */
+  function throwsSame(fn: (L: Lib, dom: Any) => unknown, code: number): string {
+    const message = thrown(() => fn(React, ReactDOM));
+    expect(message).toStartWith(`Minified React error #${code}; visit https://react.dev/errors/${code}`);
+    expect(thrown(() => fn(Compat, Compat))).toBe(message);
+    return message;
+  }
+
+  /**
+   * Renders `make(L)` into a root with each library and expects each to report one error to
+   * onUncaughtError with the same message, React's error `code`; returns it.
+   */
+  async function reportsSame(make: (L: Lib) => Any, code: number): Promise<string> {
+    const run = async (L: Lib, createRoot: (c: Any, o: Any) => Any, flush: (fn: () => void) => void) => {
+      const out: string[] = [];
+      const root = createRoot(box(), { onUncaughtError: (e: Any) => void out.push(e.message) });
+      flush(() => root.render(make(L)));
+      await tasks();
+      return out;
+    };
+    const react = await run(React, ReactClient.createRoot, ReactDOM.flushSync);
+    const compat = await run(Compat, (c, o) => Compat.createRoot(c as unknown as Element, o), Compat.flushSync);
+    expect(react).toHaveLength(1);
+    expect(react[0]).toStartWith(`Minified React error #${code}; visit https://react.dev/errors/${code}`);
+    expect(compat).toEqual(react);
+    return react[0]!;
+  }
+
+  /** Renders once with React, so its hooks outside a render throw as after any render. */
+  const renderedOnce = (): void => ReactDOM.flushSync(() => ReactClient.createRoot(box()).render(null));
+
+  test("the message is React's, the arguments encoded into the link (#31)", async () => {
+    expect(await reportsSame((L) => L.createElement("div", null, { x: 1, "a b": 2 }), 31)).toBe(
+      "Minified React error #31; visit https://react.dev/errors/31?args[]=object%20with%20keys%20%7Bx%2C%20a%20b%7D for the full message or use the non-minified dev environment for full errors and additional helpful warnings.",
+    );
+    await reportsSame((L) => L.createElement("div", null, new Date(0)), 31);
+  });
+
+  test("an element from an older React (#525)", () =>
+    reportsSame(
+      (L) => L.createElement("div", null, { $$typeof: Symbol.for("react.element"), type: "b", props: {} }),
+      525,
+    ));
+
+  test("an element type that is not one (#130)", async () => {
+    await reportsSame((L) => L.createElement("div", null, L.createElement(undefined)), 130);
+    await reportsSame((L) => L.createElement("div", null, L.createElement(null)), 130);
+    await reportsSame((L) => L.createElement("div", null, L.createElement({})), 130);
+    await reportsSame((L) => L.createElement("div", null, L.createElement(5)), 130);
+  });
+
+  /** A lazy type whose thenable resolves to `type` as it is read, so it renders at once. */
+  const lazyOf = (L: Lib, type: Any) => L.lazy(() => ({ then: (ok: Any) => ok({ default: type }) }));
+
+  test("a lazy type that loads what is not a component (#306)", async () => {
+    await reportsSame((L) => L.createElement(lazyOf(L, "div")), 306);
+    await reportsSame((L) => L.createElement(lazyOf(L, undefined)), 306);
+    await reportsSame((L) => L.createElement(lazyOf(L, L.Suspense)), 306);
+    await reportsSame((L) => L.createElement(lazyOf(L, {})), 306);
+    // What it may load: a function, forwardRef, memo or context.
+    const ok = async (make: (L: Lib) => Any) => {
+      const c = box();
+      const root = Compat.createRoot(c as unknown as Element);
+      Compat.flushSync(() => root.render(make(Compat)));
+      expect(markup(c)).toBe("<p>x</p>");
+    };
+    const P = (L: Lib) => () => L.createElement("p", null, "x");
+    await ok((L) => L.createElement(lazyOf(L, P(L))));
+    await ok((L) => L.createElement(lazyOf(L, L.forwardRef(P(L)))));
+    await ok((L) => L.createElement(lazyOf(L, L.memo(P(L)))));
+    await ok((L) => L.createElement(lazyOf(L, L.createContext(0)), { value: 1 }, L.createElement(P(L))));
+  });
+
+  // React names what a lazy type loaded with getComponentNameFromType, so a lazy type that loads
+  // another names every type the inner one can load.
+  test("a lazy type that loads a lazy type is named by what that one loads, as React names it (#306)", async () => {
+    const types = (L: Lib): Any[] => {
+      const Ctx = L.createContext(0);
+      const Theme = L.createContext(0);
+      Theme.displayName = "Theme";
+      return [
+        L.Fragment,
+        L.Profiler,
+        L.StrictMode,
+        L.Suspense,
+        Symbol.for("react.suspense_list"),
+        L.Activity,
+        L.ViewTransition,
+        "b",
+        (L === React ? ReactDOM : L).createPortal("x", new FakeElement("DIV")),
+        Ctx,
+        Theme,
+        Ctx.Consumer,
+        Theme.Consumer,
+        L.forwardRef(function Named() {
+          return null;
+        }),
+        L.forwardRef(() => null),
+        Object.assign(
+          L.forwardRef(() => null),
+          { displayName: "Shown" },
+        ),
+        L.memo(function Inner() {
+          return null;
+        }),
+        L.memo(() => null),
+        Object.assign(
+          L.memo(() => null),
+          { displayName: "Outer" },
+        ),
+        function Plain() {},
+        Object.assign(() => {}, { displayName: "Shown" }),
+        () => {},
+        Object.assign(function Client() {}, { $$typeof: Symbol.for("react.client.reference") }),
+        L.lazy(() => new Promise(() => {})),
+        { $$typeof: Symbol("other") },
+      ];
+    };
+    const names: string[] = [];
+    for (let i = 0; i < types(React).length; i++) {
+      const message = await reportsSame((L) => L.createElement(lazyOf(L, lazyOf(L, types(L)[i]))), 306);
+      names.push(decodeURIComponent(/\?args\[\]=(.*?)&/.exec(message)![1]!));
+    }
+    expect(names).toEqual([
+      "Fragment",
+      "Profiler",
+      "StrictMode",
+      "Suspense",
+      "SuspenseList",
+      "Activity",
+      "ViewTransition",
+      "b",
+      "Portal",
+      "Context",
+      "Theme",
+      "Context.Consumer",
+      "Theme.Consumer",
+      "ForwardRef(Named)",
+      "ForwardRef",
+      "Shown",
+      "Inner",
+      "Memo",
+      "Outer",
+      "Plain",
+      "Shown",
+      "[object Object]",
+      "[object Object]",
+      "[object Object]",
+      "[object Object]",
+    ]);
+  });
+
+  test("a style prop that is not an object (#62)", () =>
+    reportsSame((L) => L.createElement("div", { style: "color: red" }), 62));
+
+  test("a component that sets state on every render (#301)", () =>
+    reportsSame((L) => {
+      function Loop() {
+        const [n, set] = L.useState(0);
+        set(n + 1);
+        return null;
+      }
+      return L.createElement(Loop);
+    }, 301));
+
+  test("use() of a value it cannot read (#438)", async () => {
+    const Use = (L: Lib, v: Any) =>
+      function Use() {
+        L.use(v);
+        return null;
+      };
+    expect(await reportsSame((L) => L.createElement(Use(L, 5)), 438)).toContain("?args[]=5 ");
+    await reportsSame((L) => L.createElement(Use(L, {})), 438);
+  });
+
+  test("a useEffectEvent function called while rendering (#440)", () =>
+    reportsSame((L) => {
+      function Early() {
+        const fn = L.useEffectEvent(() => 1);
+        fn();
+        return null;
+      }
+      return L.createElement(Early);
+    }, 440));
+
+  test("hooks called outside a render (#321, #308)", () => {
+    renderedOnce();
+    throwsSame((L) => L.useState(0), 321);
+    throwsSame((L) => L.useContext(L.createContext(0)), 321);
+    // use() of a context reads it, and reading one outside a render is #308.
+    throwsSame((L) => L.use(L.createContext(0)), 308);
+  });
+
+  test("render() of an unmounted root (#409)", () => {
+    throwsSame((L, D) => {
+      // Unmounting takes the root's listeners off its container.
+      const c = Object.assign(box(), { removeEventListener: () => {} });
+      const root = L === React ? ReactClient.createRoot(c) : Compat.createRoot(c as unknown as Element);
+      D.flushSync(() => root.render(null));
+      root.unmount();
+      root.render(null);
+    }, 409);
+  });
+
+  test("requestFormReset of a form React did not render (#522)", () => {
+    throwsSame((_L, D) => D.requestFormReset(new FakeElement("FORM")), 522);
+  });
+
+  test("a Fragment ref's scrollIntoView with options (#566)", () => {
+    throwsSame((L, D) => {
+      const ref = L.createRef();
+      const root = L === React ? ReactClient.createRoot(box()) : Compat.createRoot(box() as unknown as Element);
+      D.flushSync(() => root.render(L.createElement(L.Fragment, { ref }, L.createElement("p"))));
+      ref.current.scrollIntoView({});
+    }, 566);
+  });
+
+  test("hydration mismatches, text and HTML (#418)", async () => {
+    // The hydration tests above compare every message whole, #419 included; here, the exact text.
+    const messages: string[] = [];
+    const c = box();
+    c.innerHTML = ReactServer.renderToString(React.createElement("p", null, "a"));
+    Compat.hydrateRoot(c as unknown as Element, Compat.createElement("p", null, "b"), {
+      onRecoverableError: (e: Any) => void messages.push(e.message),
+    });
+    const d = box();
+    d.innerHTML = ReactServer.renderToString(React.createElement("div", null, React.createElement("p")));
+    Compat.hydrateRoot(d as unknown as Element, Compat.createElement("div", null, Compat.createElement("b")), {
+      onRecoverableError: (e: Any) => void messages.push(e.message),
+    });
+    await tasks();
+    const tail =
+      " for the full message or use the non-minified dev environment for full errors and additional helpful warnings.";
+    expect(messages).toEqual([
+      "Minified React error #418; visit https://react.dev/errors/418?args[]=text&args[]=" + tail,
+      "Minified React error #418; visit https://react.dev/errors/418?args[]=HTML&args[]=" + tail,
+    ]);
+  });
+
+  test("React's Children throw their error in full, even in production, and pass over functions", () => {
+    // React's isomorphic package keeps its messages: they are not minified.
+    const message = throwsFull((L) => L.Children.toArray({ x: 1 }));
+    expect(message).toBe(
+      "Objects are not valid as a React child (found: object with keys {x}). If you meant to render a collection of children, use an array instead.",
+    );
+    // An object's String() form, as React names it (a date's, not its tag).
+    throwsFull((L) => L.Children.toArray([new Date(0)]));
+    throwsFull((L) => L.Children.only([]));
+    for (const L of [React, Compat]) {
+      expect(L.Children.toArray([() => 1, Symbol.for("x"), "a"])).toHaveLength(1);
+      expect(L.Children.count(() => 1)).toBe(0);
+    }
+  });
+
+  /** Expects both libraries to throw one message from `fn(L)`, not a minified one; returns it. */
+  function throwsFull(fn: (L: Lib) => unknown): string {
+    const message = thrown(() => fn(React));
+    expect(message).not.toStartWith("Minified");
+    expect(message).not.toBe("(nothing thrown)");
+    expect(thrown(() => fn(Compat))).toBe(message);
+    return message;
+  }
 });
 
 // #endregion

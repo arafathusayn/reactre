@@ -378,7 +378,17 @@ function mapInto(
     : isIterable(children)
       ? Array.from(children as Iterable<Any>)
       : null;
-  if (items === null) throw new Error("Objects are not valid as a React child");
+  // React's Children throw this one in full, even in production; a function or a symbol is
+  // passed over.
+  if (items === null) {
+    if (t === "object")
+      throw new Error(
+        "Objects are not valid as a React child (found: " +
+          found(children, String(children)) +
+          "). If you meant to render a collection of children, use an array instead.",
+      );
+    return;
+  }
   // Nested levels are joined with ':'; unkeyed items are named by their index in base 36.
   const base = name === "" ? "." : name + ":";
   for (let i = 0; i < items.length; i++) {
@@ -624,29 +634,36 @@ function kindOf(type: Any): number {
       }
     }
   }
-  throw new Error(invalidType(type));
+  throw new Error(prodMessage(130, type === null ? "null" : typeof type, ""));
 }
 
-/** React's message for an element type it cannot render, with its hints. */
-function invalidType(type: Any): string {
-  let got: string,
-    hint =
-      type === undefined || (typeof type === "object" && type !== null && Object.keys(type).length === 0)
-        ? " You likely forgot to export your component from the file it's defined in, or you might have mixed up default and named imports."
-        : "";
-  if (type === null) got = "null";
-  else if (Array.isArray(type)) got = "array";
-  else if (type !== undefined && type.$$typeof === ELEMENT) {
-    got = "<" + (nameOfType(type.type) || "Unknown") + " />";
-    hint = " Did you accidentally export a JSX literal instead of a component?";
-  } else got = typeof type;
+// #region Errors
+
+/**
+ * The message of React's production error `code`, as React's client builds it
+ * (formatProdErrorMessage): a link to react.dev/errors carrying each argument, which that page
+ * fills into the full message. (Where React's production client throws a full message, as
+ * Children does, compat throws the same text without this.) Only code that throws or reports an
+ * error calls this. Each site makes its own Error, so the error's stack starts where it is thrown,
+ * as React's does.
+ */
+function prodMessage(code: number, ...args: Any[]): string {
+  let url = "https://react.dev/errors/" + code;
+  for (let i = 0; i < args.length; i++) url += (i > 0 ? "&" : "?") + "args[]=" + encodeURIComponent(args[i]);
   return (
-    "Element type is invalid: expected a string (for built-in components) or a class/function (for composite components) but got: " +
-    got +
-    "." +
-    hint
+    "Minified React error #" +
+    code +
+    "; visit " +
+    url +
+    " for the full message or use the non-minified dev environment for full errors and additional helpful warnings."
   );
 }
+
+/** What React's error for an object rendered as a child names: a plain object's keys, else `tag`. */
+const found = (x: Any, tag: string): string =>
+  tag === "[object Object]" ? "object with keys {" + Object.keys(x).join(", ") + "}" : tag;
+
+// #endregion
 
 // A server component reference, which React gives no name.
 const CLIENT_REFERENCE = Symbol.for("react.client.reference");
@@ -1440,16 +1457,10 @@ function create(it: Any, p: Fiber, key: Key): Fiber {
     f = new Fiber(PORTAL, null, key, p, p.o);
     f.p = it;
     f.d = it.containerInfo;
-  } else {
-    if (tt === LEGACY_ELEMENT)
-      throw new Error(
-        'A React Element from an older version of React was rendered. This is not supported. It can happen if:\n- Multiple copies of the "react" package is used.\n- A library pre-bundled an old copy of "react" or "react/jsx-runtime".\n- A compiler tries to "inline" JSX instead of using the runtime.',
-      );
-    const tag = Object.prototype.toString.call(it);
+  } else
     throw new Error(
-      `Objects are not valid as a React child (found: ${tag === "[object Object]" ? `object with keys {${Object.keys(it).join(", ")}}` : tag}). If you meant to render a collection of children, use an array instead.`,
+      tt === LEGACY_ELEMENT ? prodMessage(525) : prodMessage(31, found(it, Object.prototype.toString.call(it))),
     );
-  }
   try {
     if (f.n === FRAG && f.t === ARRAY) reconcile(f, Array.isArray(it) ? it : (f.p = Array.from(it as Iterable<Any>)));
     else if (f.n === PORTAL) runPortal(f, true);
@@ -1534,8 +1545,12 @@ function run(f: Fiber, old: Props | null, mount: boolean): void {
     case ACTIVITY:
       return runActivity(f);
     case LAZY: {
-      // Throws the load's promise until it resolves; the nearest Suspense catches it.
-      const type = f.t._init(f.t._payload);
+      // Throws the load's promise until it resolves; the nearest Suspense catches it. As React's,
+      // what it loads must be a function, forwardRef, memo or context.
+      const type = f.t._init(f.t._payload),
+        tt = type?.$$typeof;
+      if (typeof type !== "function" && tt !== FORWARD_TYPE && tt !== MEMO_TYPE && tt !== CONTEXT_TYPE)
+        throw new Error(prodMessage(306, nameOfType(type) || type, ""));
       return reconcile(f, element(type, null, f.p));
     }
     case MEMO:
@@ -2320,10 +2335,7 @@ function removeAttr(dom: Any, ns: string | null, attr: string): void {
  * from `old`. Anything else throws, as React's setValueForStyles does.
  */
 function setStyle(dom: Any, v: Any, old: Any): void {
-  if (v != null && typeof v !== "object")
-    throw new Error(
-      "The `style` prop expects a mapping from style properties to values, not a string. For example, style={{marginRight: spacing + 'em'}} when using JSX.",
-    );
+  if (v != null && typeof v !== "object") throw new Error(prodMessage(62));
   const s = dom.style;
   if (old != null && typeof old === "object") for (const k in old) if (v == null || !(k in v)) styleProp(s, k, null);
   if (v != null) for (const k in v) if (old == null || v[k] !== old[k]) styleProp(s, k, v[k]);
@@ -2871,9 +2883,7 @@ let hydrationErrors: Any[] | null = null;
 
 /** Queue React's error for a mismatch at `f` and throw MISMATCH. */
 function mismatch(f: Fiber, text: boolean): never {
-  const e = new Error(
-    `Hydration failed because the server rendered ${text ? "text" : "HTML"} didn't match the client. As a result this tree will be regenerated on the client. This can happen if a SSR-ed Client Component used:\n\n- A server/client branch \`if (typeof window !== 'undefined')\`.\n- Variable input such as \`Date.now()\` or \`Math.random()\` which changes each time it's called.\n- Date formatting in a user's locale which doesn't match the server.\n- External changing data without sending a snapshot of it along with the HTML.\n- Invalid HTML tag nesting.\n\nIt can also happen if the client has a browser extension installed which messes with the HTML before React loaded.\n\nhttps://react.dev/link/hydration-mismatch`,
-  );
+  const e = new Error(prodMessage(418, text ? "text" : "HTML", ""));
   (hydrationErrors ??= []).push(e, stackOf(e, f));
   // A host that claimed nothing has no node for the unmount that follows to remove.
   f.d ??= { parentNode: null };
@@ -3012,9 +3022,7 @@ function hydrateSuspense(f: Fiber): void {
     const t = start.nextSibling,
       digest = t !== null && t.nodeType === 1 ? (t.getAttribute("data-dgst") ?? undefined) : undefined;
     if (digest !== "") {
-      const e: Any = new Error(
-        "The server could not finish this Suspense boundary, likely due to an error during server rendering. Switched to client rendering.",
-      );
+      const e: Any = new Error(prodMessage(419));
       e.stack = "";
       e.digest = digest;
       (hydrationErrors ??= []).push(e, null);
@@ -3149,7 +3157,7 @@ class RootImpl implements Root {
   }
   /** Schedule a render of `children`; throws after unmount, as React does. */
   render(children: Any): void {
-    if (this.f.f & DEAD) throw new Error("Cannot update an unmounted root.");
+    if (this.f.f & DEAD) throw new Error(prodMessage(409));
     this.f.p = children;
     schedule(this.f);
   }
@@ -3311,8 +3319,7 @@ function runFunc(f: Fiber, mount = false): void {
     // State set during render re-runs the component at once, before its children, as React
     // does; React's limit of 25 passes stops an endless loop.
     do {
-      if (++tries > 25)
-        throw new Error("Too many re-renders. React limits the number of renders to prevent an infinite loop.");
+      if (++tries > 25) throw new Error(prodMessage(301));
       f.f &= ~(RERENDER | DIRTY);
       hi = 0;
       // Effects collected by an abandoned pass are dropped.
@@ -4073,10 +4080,7 @@ class FragmentInstance {
   }
 
   scrollIntoView(alignToTop?: boolean): void {
-    if (typeof alignToTop === "object")
-      throw new Error(
-        "FragmentInstance.scrollIntoView() does not support scrollIntoViewOptions. Use the alignToTop boolean instead.",
-      );
+    if (typeof alignToTop === "object") throw new Error(prodMessage(566));
     const ns = this.n(false),
       top = alignToTop !== false;
     if (ns.length === 0) {
@@ -5005,8 +5009,7 @@ function commitEffects(f: Fiber): void {
 /** The current component's next hook slot, created on its first render. */
 function hook(): Hook {
   const f = cur;
-  if (f === null)
-    throw new Error("Invalid hook call. Hooks can only be called inside of the body of a function component.");
+  if (f === null) throw new Error(prodMessage(321));
   const hs = (f.h ??= []);
   let h = hs[hi];
   if (h === undefined) hs[hi] = h = new Hook(f);
@@ -5127,7 +5130,7 @@ export function useCallback<T>(fn: T, deps?: readonly unknown[]): T {
 
 /** The value of the nearest provider of `ctx` above, or its default. Uses no hook slot. */
 export function useContext<T>(ctx: Context<T>): T {
-  if (cur === null) throw new Error("Invalid hook call.");
+  if (cur === null) throw new Error(prodMessage(321));
   return readContext(cur, ctx);
 }
 
@@ -5320,7 +5323,7 @@ export function useEffectEvent<F extends (...args: Any[]) => Any>(fn: F): F {
   // the function run after the render that set it.
   h.v = fn;
   return ((...args: Any[]) => {
-    if (cur !== null) throw new Error("A function wrapped in useEffectEvent can't be called during rendering.");
+    if (cur !== null) throw new Error(prodMessage(440));
     return h.v(...args);
   }) as F;
 }
@@ -5391,11 +5394,11 @@ export function use<T>(usable: PromiseLike<T> | Context<T>): T {
       return undefined as T;
     }
     if (tt === CONTEXT_TYPE) {
-      if (cur === null) throw new Error("Invalid hook call.");
+      if (cur === null) throw new Error(prodMessage(308));
       return readContext(cur, usable);
     }
   }
-  throw new Error("An unsupported type was passed to use(): " + String(usable));
+  throw new Error(prodMessage(438, String(usable)));
 }
 
 // The $$typeof of a browser() token.
@@ -5708,8 +5711,7 @@ function runFormAction(form: Fiber, action: Any, data: FormData): void {
 /** Reset a form when its running action finishes (forms with actions reset anyway). */
 export function requestFormReset(form: HTMLFormElement): void {
   const f = (form as Any)[FIBER] as Fiber | undefined;
-  if (f === undefined || f.n !== HOST || f.t !== "form")
-    throw new Error("Invalid form element. requestFormReset must be passed a form that was rendered by React.");
+  if (f === undefined || f.n !== HOST || f.t !== "form") throw new Error(prodMessage(522));
   // While the form's action runs, its end resets the form: one reset, as in React's one commit.
   if (f.s !== null && f.s.pending) return;
   // As React's state update of the form: reset at the next commit, after the transition it was
@@ -5766,8 +5768,7 @@ export function __serverRender(s: ServerHooks, fn: Any, props: Any, second: Any)
     tries = 0;
   try {
     do {
-      if (++tries > 25)
-        throw new Error("Too many re-renders. React limits the number of renders to prevent an infinite loop.");
+      if (++tries > 25) throw new Error(prodMessage(301));
       f.f &= ~RERENDER;
       hi = 0;
       out = fn(props, second);

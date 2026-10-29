@@ -177,7 +177,7 @@ describe("roots", () => {
     root.unmount();
     expect(listenerCount(container)).toBe(0);
     root.unmount();
-    expect(() => root.render(h("p"))).toThrow("Cannot update an unmounted root.");
+    expect(() => root.render(h("p"))).toThrow("Minified React error #409;");
   });
 });
 
@@ -350,9 +350,7 @@ describe("function components", () => {
       return n;
     }
     render(h(Loop));
-    expect((reports[0] as Error).message).toBe(
-      "Too many re-renders. React limits the number of renders to prevent an infinite loop.",
-    );
+    expect((reports[0] as Error).message).toStartWith("Minified React error #301;");
   });
 
   test("a component that hosted a block with rows renders text instead: the block and its rows go", () => {

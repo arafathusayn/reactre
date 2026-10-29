@@ -226,90 +226,20 @@ describe("element types", () => {
     expect(container.firstChild).toBe(i);
   });
 
-  test("an invalid element type is an error naming what it got, with React's hints", () => {
+  // React's production message names the type's typeof alone (see ./client.test.ts).
+  test("an invalid element type is React's error, giving what it got", () => {
     const B = () => null;
     for (const type of [undefined, {}, [], null, 5, h("b"), h(B)]) render(h("div", null, h(type as never)));
-    const invalid =
-      "Element type is invalid: expected a string (for built-in components) or a class/function (for composite components) but got: ";
-    const forgot =
-      " You likely forgot to export your component from the file it's defined in, or you might have mixed up default and named imports.";
-    const literal = " Did you accidentally export a JSX literal instead of a component?";
-    expect(uncaught.map((e) => (e as Error).message)).toEqual([
-      invalid + "undefined." + forgot,
-      invalid + "object." + forgot,
-      invalid + "array." + forgot,
-      invalid + "null.",
-      invalid + "number.",
-      invalid + "<b />." + literal,
-      invalid + "<B />." + literal,
+    expect(uncaught.map((e) => /\?args\[\]=(\w*)&args\[\]= /.exec((e as Error).message)?.[1])).toEqual([
+      "undefined",
+      "object",
+      "object",
+      "null",
+      "number",
+      "object",
+      "object",
     ]);
     expect(html()).toBe("");
-  });
-
-  // React's getComponentNameFromType names an element rendered as a type, for its message.
-  test("an element rendered as a type is named as React names its type", () => {
-    const Ctx = createContext(0);
-    const Theme = createContext(0);
-    Theme.displayName = "Theme";
-    const named = forwardRef(function Named() {
-      return null;
-    });
-    const shown = Object.assign(forwardRef(() => null) as object, { displayName: "Shown" });
-    const outer = Object.assign(
-      memo(() => null),
-      { displayName: "Outer" },
-    );
-    const client = Object.assign(function Client() {}, { $$typeof: Symbol.for("react.client.reference") });
-    const types: unknown[] = [
-      Fragment,
-      Profiler,
-      StrictMode,
-      Suspense,
-      SuspenseList,
-      Activity,
-      ViewTransition,
-      createPortal("x", new FakeElement("DIV") as unknown as Element),
-      Ctx,
-      Theme,
-      Ctx.Consumer,
-      Theme.Consumer,
-      named,
-      forwardRef(() => null),
-      shown,
-      memo(function Inner() {
-        return null;
-      }),
-      memo(() => null),
-      outer,
-      lazy(() => new Promise(() => {})),
-      { $$typeof: Symbol("other") },
-      client,
-    ];
-    for (const type of types) render(h("div", null, h(h(type as never) as never)));
-    const names = uncaught.map((e) => /got: <(.*) \/>/.exec((e as Error).message)?.[1]);
-    expect(names).toEqual([
-      "Fragment",
-      "Profiler",
-      "StrictMode",
-      "Suspense",
-      "SuspenseList",
-      "Activity",
-      "ViewTransition",
-      "Portal",
-      "Context",
-      "Theme",
-      "Context.Consumer",
-      "Theme.Consumer",
-      "ForwardRef(Named)",
-      "ForwardRef",
-      "Shown",
-      "Inner",
-      "Memo",
-      "Outer",
-      "Unknown",
-      "Unknown",
-      "Unknown",
-    ]);
   });
 
   // React calls a consumer's children with the value whatever they are.
@@ -442,24 +372,20 @@ describe("children of every shape", () => {
     const old = { $$typeof: Symbol.for("react.element"), type: "b", key: null, ref: null, props: {} };
     expect(isValidElement(old)).toBe(false);
     render(h("p", null, old));
-    expect((uncaught[0] as Error).message).toBe(
-      'A React Element from an older version of React was rendered. This is not supported. It can happen if:\n- Multiple copies of the "react" package is used.\n- A library pre-bundled an old copy of "react" or "react/jsx-runtime".\n- A compiler tries to "inline" JSX instead of using the runtime.',
+    expect((uncaught[0] as Error).message).toStartWith(
+      "Minified React error #525; visit https://react.dev/errors/525 for",
     );
   });
 
   test("an object of another class is named by its tag", () => {
     render(h("p", null, new Date(0)));
-    expect((uncaught[0] as Error).message).toBe(
-      "Objects are not valid as a React child (found: [object Date]). If you meant to render a collection of children, use an array instead.",
-    );
+    expect((uncaught[0] as Error).message).toContain("/errors/31?args[]=%5Bobject%20Date%5D for");
   });
 
   test("an object that is not an element is an error listing its keys", () => {
     render(h("p", null, h("i"), "b"));
     render(h("p", null, { x: 1, y: 2 }, "b"));
-    expect((uncaught[0] as Error).message).toBe(
-      "Objects are not valid as a React child (found: object with keys {x, y}). If you meant to render a collection of children, use an array instead.",
-    );
+    expect((uncaught[0] as Error).message).toContain("/errors/31?args[]=object%20with%20keys%20%7Bx%2C%20y%7D for");
   });
 });
 
@@ -715,12 +641,12 @@ describe("hydration", () => {
     const p = container.firstChild;
     const seen: string[] = [];
     hydrateRoot(container as unknown as Element, h("p", null, "hello", "world"), {
-      onRecoverableError: (e, info) => void seen.push((e as Error).message.slice(0, 56), info.componentStack!),
+      onRecoverableError: (e, info) => void seen.push((e as Error).message.split(" for ")[0]!, info.componentStack!),
     });
     expect(container.firstChild).not.toBe(p);
     expect(container.firstChild!.childNodes.map((n) => (n as FakeText).data)).toEqual(["hello", "world"]);
     // The component stack is checked against React's in ./client.test.ts.
-    expect(seen[0]).toBe("Hydration failed because the server rendered text didn't");
+    expect(seen[0]).toBe("Minified React error #418; visit https://react.dev/errors/418?args[]=text&args[]=");
   });
 
   test("without onRecoverableError, a mismatch goes to reportError, else to console.error", () => {
@@ -728,18 +654,18 @@ describe("hydration", () => {
     const real = globalThis.reportError,
       log = console.error;
     try {
-      globalThis.reportError = (e) => void seen.push("reportError", (e as Error).message.slice(0, 17));
+      globalThis.reportError = (e) => void seen.push("reportError", (e as Error).message.slice(0, 26));
       container.innerHTML = "<p>a</p>";
       hydrateRoot(container as unknown as Element, h("b", null, "a"));
       (globalThis as { reportError?: unknown }).reportError = undefined;
-      console.error = (e: Error) => void seen.push("console.error", e.message.slice(0, 17));
+      console.error = (e: Error) => void seen.push("console.error", e.message.slice(0, 26));
       container.innerHTML = "<p>a</p>";
       hydrateRoot(container as unknown as Element, h("b", null, "a"));
     } finally {
       globalThis.reportError = real;
       console.error = log;
     }
-    expect(seen).toEqual(["reportError", "Hydration failed ", "console.error", "Hydration failed "]);
+    expect(seen).toEqual(["reportError", "Minified React error #418;", "console.error", "Minified React error #418;"]);
     expect(html()).toBe("<b>a</b>");
   });
 

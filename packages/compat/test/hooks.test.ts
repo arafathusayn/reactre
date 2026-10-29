@@ -237,10 +237,10 @@ describe("effects", () => {
 });
 
 describe("hooks outside a component", () => {
-  test("throw an invalid hook call error", () => {
-    expect(() => useState(0)).toThrow("Invalid hook call");
-    expect(() => useContext(createContext(0))).toThrow("Invalid hook call");
-    expect(() => use(createContext(0))).toThrow("Invalid hook call");
+  test("throw React's invalid hook call error; use() of a context, its error for reading one", () => {
+    expect(() => useState(0)).toThrow("Minified React error #321;");
+    expect(() => useContext(createContext(0))).toThrow("Minified React error #321;");
+    expect(() => use(createContext(0))).toThrow("Minified React error #308;");
   });
 });
 
@@ -646,7 +646,7 @@ describe("useEffectEvent", () => {
     render(h(App, { n: 2 }));
     expect(seen[0]).not.toBe(seen[1]);
     expect(seen[0]!()).toBe(2);
-    expect(caught).toBe("A function wrapped in useEffectEvent can't be called during rendering.");
+    expect(caught).toStartWith("Minified React error #440;");
   });
 
   test("the function from any render calls the latest render's callback", () => {
@@ -717,9 +717,9 @@ describe("use", () => {
     }
     render(h(App, { v: 5 }));
     render(h(App, { v: { a: 1 } }));
-    expect(uncaught.map((e) => (e as Error).message)).toEqual([
-      "An unsupported type was passed to use(): 5",
-      "An unsupported type was passed to use(): [object Object]",
+    expect(uncaught.map((e) => (e as Error).message.split(" for ")[0])).toEqual([
+      "Minified React error #438; visit https://react.dev/errors/438?args[]=5",
+      "Minified React error #438; visit https://react.dev/errors/438?args[]=%5Bobject%20Object%5D",
     ]);
   });
 
@@ -1250,7 +1250,7 @@ describe("forms", () => {
 
   test("requestFormReset of a form React did not render throws React's error", () => {
     render(h("div", null));
-    const message = "Invalid form element. requestFormReset must be passed a form that was rendered by React.";
+    const message = "Minified React error #522;";
     expect(() => requestFormReset(new FakeElement("FORM") as unknown as HTMLFormElement)).toThrow(message);
     expect(() => requestFormReset(container.firstChild as unknown as HTMLFormElement)).toThrow(message);
   });

@@ -638,9 +638,7 @@ describe("geometry", () => {
     const r = createRef<Any>();
     render(h("div", null, h(Fragment, { ref: r }, h("p"), "txt", h("i"))));
     const fi = r.current;
-    expect(() => fi.scrollIntoView({ block: "end" })).toThrow(
-      "FragmentInstance.scrollIntoView() does not support scrollIntoViewOptions. Use the alignToTop boolean instead.",
-    );
+    expect(() => fi.scrollIntoView({ block: "end" })).toThrow("Minified React error #566;");
     fi.scrollIntoView();
     expect(scrolls).toEqual([
       ["i", undefined],

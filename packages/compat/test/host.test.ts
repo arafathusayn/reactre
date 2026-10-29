@@ -671,9 +671,7 @@ describe("styles", () => {
   });
 
   test("a string style throws, as React's does", () => {
-    expect(() => render(h("div", { style: "color: red" }))).toThrow(
-      "The `style` prop expects a mapping from style properties to values, not a string.",
-    );
+    expect(() => render(h("div", { style: "color: red" }))).toThrow("Minified React error #62;");
   });
 
   test("React's unitless list decides which numbers get px; strings are trimmed", () => {
