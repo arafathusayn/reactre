@@ -11,7 +11,7 @@ Or with npm: `npm install -D @reactre/plugin`.
 It has two modes:
 
 - **reactre** (the default): your `.jsx` and `.tsx` files are compiled by [`@reactre/compiler`](https://www.npmjs.com/package/@reactre/compiler) into templates and the code that updates them.
-- **compat**: `react`, `react-dom` and their subpaths resolve to [`@reactre/compat`](https://www.npmjs.com/package/@reactre/compat), and `react-dom/server` and `react-dom/static` to `@reactre/compat/server`, in your code and in your dependencies. Your `.jsx` and `.tsx` files are compiled too, so trees of HTML elements become templates. Server Components stay on React: a Vite environment named `rsc`, or a build that resolves with the `react-server` condition, is left alone.
+- **compat**: `react`, `react-dom` and their subpaths resolve to [`@reactre/compat`](https://www.npmjs.com/package/@reactre/compat), and `react-dom/server` and `react-dom/static` to `@reactre/compat/server` and `/static`, in your code and in your dependencies. Those pick the build for the bundle's target as `react-dom`'s do: a browser bundle's server renderer throws React's minified error codes, as React's browser build does, and a Node SSR build's React's full messages. `react-dom/server.browser`, `.edge`, `.bun` and `.node` resolve to compat's entry for that build. Your `.jsx` and `.tsx` files are compiled too, so trees of HTML elements become templates. Server Components stay on React: a Vite environment named `rsc`, or a build that resolves with the `react-server` condition, is left alone.
 
 ## Vite
 

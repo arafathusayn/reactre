@@ -60,6 +60,41 @@ try {
   await assert.rejects(narrow(fixtures + "compat/uses-off.jsx", "uses-off.js"), /uses React's useEffect/);
   console.log("ok - vite build, compat with APIs switched off");
 
+  // The server renderer's entry follows the build's target: a browser build resolves
+  // react-dom/server to compat's browser entry, whose errors are React's minified codes, and a
+  // Node SSR build (bundled whole) to its Node entry, with React's full messages.
+  const errorsEntry = fixtures + "compat/server-errors.jsx";
+  for (const [target, ssr, expected] of [
+    ["browser", false, /^Minified React error #62; visit https:\/\/react\.dev\/errors\/62 for /],
+    ["ssr", true, /^The `style` prop expects a mapping from style properties to values/],
+  ]) {
+    const fileName = `server-errors-${target}.js`;
+    await build({
+      configFile: false,
+      logLevel: "silent",
+      plugins: [reactre({ compat: true })],
+      ssr: { noExternal: true },
+      build: ssr
+        ? {
+            ssr: errorsEntry,
+            outDir: out,
+            emptyOutDir: false,
+            minify: false,
+            rolldownOptions: { output: { entryFileNames: fileName } },
+          }
+        : {
+            outDir: out,
+            emptyOutDir: false,
+            minify: false,
+            lib: { entry: errorsEntry, formats: ["es"], fileName: () => fileName },
+          },
+    });
+    const app = await import(join(out, fileName));
+    assert.match(app.message(), expected, `${target}: renderToString's error`);
+    assert.match(await app.streamMessage(), expected, `${target}: renderToReadableStream's error`);
+    console.log(`ok - vite build, react-dom/server for the ${target === "ssr" ? "Node SSR" : "browser"} target`);
+  }
+
   // The dev server: the dependency scan finds the app's imports without errors, the transformed
   // module has the compiled templates, and imports of react (compat) go to @reactre/compat through
   // Vite's dependency optimizer.

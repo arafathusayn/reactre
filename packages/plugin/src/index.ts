@@ -6,10 +6,10 @@
 //     the code that updates them, as the Bun plugin compiles them.
 //   - compat: `react`, `react-dom` and their subpaths resolve to @reactre/compat (or, with anything
 //     switched off, class support included, a module built on @reactre/compat/core for the
-//     options; see ./api.ts), and `react-dom/server` and `react-dom/static` (with their .browser, .edge, .node
-//     and .bun forms) to @reactre/compat/server, in the app and in its dependencies, and the
-//     app's .jsx and .tsx files are compiled by @reactre/compat/compiler, whose host element
-//     trees become templates. Server Components stay on React: a Vite environment named `rsc`,
+//     options; see ./api.ts), and `react-dom/server` and `react-dom/static` to
+//     @reactre/compat/server and /static (and their .browser, .edge, .node and .bun forms to the
+//     entry for that build), in the app and in its dependencies, and the app's .jsx and .tsx
+//     files are compiled by @reactre/compat/compiler, whose host element trees become templates. Server Components stay on React: a Vite environment named `rsc`,
 //     or a build that resolves with the `react-server` condition, is left alone.
 //
 // Each bundler's entry (`@reactre/plugin/vite`, `/rollup`, `/rolldown`, `/esbuild`, `/webpack`,
@@ -27,6 +27,13 @@
 //     a directory that reaches @reactre/compat (see `baseFor`), so a dependency installed in
 //     isolation gets the copy the app's own imports get. Vite's `resolve.alias` would be simpler, but it applies to every
 //     environment, the RSC one too.
+//   - The server renderer resolves as React's does. The bare `react-dom/server` and
+//     `react-dom/static` go to @reactre/compat/server and /static, whose export conditions copy
+//     react-dom's, so the bundler picks the build for its target: a bundle for the browser or a
+//     web worker gets compat's browser entry, which throws React's minified error codes as
+//     React's browser build does, and a Node SSR build the Node entry, with React's full
+//     messages. A named build (`react-dom/server.browser`, `.edge`, `.node`, `.bun`) goes to
+//     compat's entry for that build whatever the target, as it reaches that build of React's.
 //   - No source maps yet: the compilers rewrite text without tracking positions. A transformed
 //     file maps to nothing rather than to the wrong line.
 
@@ -101,6 +108,19 @@ const OWN = Symbol("@reactre/plugin");
 /** React's server renderer and its prerender entry, in each of their builds. */
 const SERVER = /^react-dom\/(?:server|static)(?:\.(?:browser|edge|node|bun))?(?:\.js)?$/;
 
+/**
+ * The compat entry for a request SERVER matches: for the bare `react-dom/server` and
+ * `react-dom/static`, compat's of the same name, whose export conditions pick the build as
+ * react-dom's do; for a named build, compat's entry for it (React's Bun build throws as its edge
+ * build does).
+ */
+function serverEntry(id: string): string {
+  const [, entry, build] = /^react-dom\/(server|static)(?:\.(browser|edge|node|bun))?/.exec(id)!;
+  return build === undefined
+    ? "@reactre/compat/" + entry
+    : "@reactre/compat/server." + (build === "bun" ? "edge" : build);
+}
+
 /** The export condition React Server Components resolve with. */
 const REACT_SERVER = "react-server";
 
@@ -134,7 +154,7 @@ export const reactre: UnpluginInstance<ReactreOptions | undefined, boolean> = cr
   /** What `react` resolves to: the package entry, or the module written for the options. */
   const client = (): string => (custom ? (entry ??= writeEntry(root, entrySource(on))) : "@reactre/compat");
   /** What a request for `react`, one of its subpaths, or a compat entry resolves to. */
-  const target = (id: string): string => (SERVER.test(id) ? "@reactre/compat/server" : COMPAT.test(id) ? id : client());
+  const target = (id: string): string => (SERVER.test(id) ? serverEntry(id) : COMPAT.test(id) ? id : client());
   /** Throws where `code` uses an API the options switch off. */
   const scan = (code: string, id: string): null => {
     if (!code.includes("react")) return null;

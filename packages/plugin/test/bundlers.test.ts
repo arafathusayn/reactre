@@ -2,7 +2,8 @@
 // runs each bundle on the fake DOM: the reactre app (core mode) and the React
 // app (compat mode, class build) must render and update, and their JSX must
 // have been compiled to templates. A React app's server render must resolve to
-// @reactre/compat/server and write React's HTML.
+// @reactre/compat/server and write React's HTML, through the entry for the build's target: in
+// Vite, a browser build's errors are React's minified codes and a Node SSR build's its full text.
 //
 // The bundlers resolve the workspace packages as an app resolves them from
 // npm, to their dist builds, so those are built first.
@@ -249,6 +250,44 @@ describe.each(Object.keys(bundlers))("%s", (name) => {
       (e: unknown) => messages(e),
     );
     expect(failure).toContain("uses React's useEffect, which @reactre/plugin's compat options switch off");
+  }, 60_000);
+});
+
+describe("vite: the server renderer's entry follows the build's target", () => {
+  /** React's minified message for #62, the `style` prop given a string, as its browser build throws it. */
+  const minified =
+    "Minified React error #62; visit https://react.dev/errors/62 for the full message or use the non-minified dev environment for full errors and additional helpful warnings.";
+  const full =
+    "The `style` prop expects a mapping from style properties to values, not a string. For example, style={{marginRight: spacing + 'em'}} when using JSX.";
+  type Errors = { message(): string; streamMessage(): Promise<string> };
+
+  test("a browser build resolves react-dom/server to the browser entry: React's minified codes", async () => {
+    const file = join(out, "vite-server-browser.js");
+    await bundlers["vite"]!(FIXTURES + "compat/server-errors.jsx", file, { compat: true });
+    const app = (await import(file)) as Errors;
+    expect(app.message()).toBe(minified);
+    expect(await app.streamMessage()).toBe(minified);
+  }, 60_000);
+
+  test("a Node SSR build resolves it to the Node entry: React's full messages", async () => {
+    const name = "vite-server-ssr.js";
+    await vite({
+      configFile: false,
+      logLevel: "silent",
+      plugins: [vitePlugin({ compat: true })],
+      // Bundled whole, so the build resolves the server renderer itself, with Vite's SSR conditions.
+      ssr: { noExternal: true },
+      build: {
+        ssr: FIXTURES + "compat/server-errors.jsx",
+        outDir: out,
+        emptyOutDir: false,
+        minify: false,
+        rolldownOptions: { output: { entryFileNames: name } },
+      },
+    });
+    const app = (await import(join(out, name))) as Errors;
+    expect(app.message()).toBe(full);
+    expect(await app.streamMessage()).toBe(full);
   }, 60_000);
 });
 

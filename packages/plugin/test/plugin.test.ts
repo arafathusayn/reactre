@@ -35,14 +35,20 @@ const targets = (client: string): [string, string][] => [
   ["react/jsx-runtime", client],
   ["react-dom", client],
   ["react-dom/client", client],
+  // The bare forms: compat's entries whose export conditions pick the build, as react-dom's do.
   ["react-dom/server", "@reactre/compat/server"],
-  ["react-dom/server.browser", "@reactre/compat/server"],
-  ["react-dom/server.edge", "@reactre/compat/server"],
-  ["react-dom/server.node", "@reactre/compat/server"],
-  ["react-dom/server.bun", "@reactre/compat/server"],
   ["react-dom/server.js", "@reactre/compat/server"],
-  ["react-dom/static", "@reactre/compat/server"],
-  ["react-dom/static.edge", "@reactre/compat/server"],
+  ["react-dom/static", "@reactre/compat/static"],
+  ["react-dom/static.js", "@reactre/compat/static"],
+  // A named build: compat's entry for it (React's Bun build throws as its edge build does).
+  ["react-dom/server.browser", "@reactre/compat/server.browser"],
+  ["react-dom/server.browser.js", "@reactre/compat/server.browser"],
+  ["react-dom/static.browser", "@reactre/compat/server.browser"],
+  ["react-dom/server.edge", "@reactre/compat/server.edge"],
+  ["react-dom/static.edge", "@reactre/compat/server.edge"],
+  ["react-dom/server.bun", "@reactre/compat/server.edge"],
+  ["react-dom/server.node", "@reactre/compat/server.node"],
+  ["react-dom/static.node", "@reactre/compat/server.node"],
 ];
 
 /** The plugin's transform handler for `options`, as Vite would get it. */
@@ -225,11 +231,11 @@ describe("compat: where react resolves", () => {
     expect(setup(["react-server"]).onResolve).toBeNull();
     const { onResolve, asked, data } = setup();
     expect(await onResolve({ path: "react-dom/server.edge", kind: "import-statement", resolveDir: "/app" })).toEqual({
-      path: "/r/@reactre/compat/server",
+      path: "/r/@reactre/compat/server.edge",
       sideEffects: true,
     });
     await onResolve({ path: "react", kind: "import-statement", resolveDir: "/app" });
-    expect(asked).toEqual(["@reactre/compat/server", "@reactre/compat"]);
+    expect(asked).toEqual(["@reactre/compat/server.edge", "@reactre/compat"]);
     // The plugin's own resolve of a compat entry comes back through it, and is left to esbuild.
     expect(
       await onResolve({ path: "@reactre/compat", kind: "import-statement", resolveDir: "/", pluginData: data[1] }),
