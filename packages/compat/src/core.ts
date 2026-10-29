@@ -1007,6 +1007,12 @@ function reconcile(p: Fiber, children: Any): void {
     // siblings still render in order.
     const ne = matchSuffix(items, old, i, oi, n, m),
       oe = suffixOld;
+    // React has no suffix pass or swap: its map gives a repeated key's first new child the last
+    // old one. Where keys repeat, a list with a suffix, or one the swap below could take, is
+    // matched by React's algorithm instead, once the keys feature installed it (see
+    // __installKeys); otherwise the map below finds them.
+    if (keysRepeat !== null && (ne < n - 1 || (ne > i && ne - i === oe - oi)) && keysRepeat(items, old, i, oi))
+      return dupList!(p, items, old, i, oi, nc);
     const tail = oe + 1;
     if (i > ne && oi <= oe && p === curHost && n - i === m - tail) {
       // Only removals (a row deleted): their nodes go, the children array
@@ -2910,6 +2916,8 @@ function patchDelta(p: Fiber, items: Any[]): boolean {
       sameType(x, ib) &&
       sameType(y, ia)
     ) {
+      // React matches repeated keys through its map, not by position: reconcile does (see repeats).
+      if (keysRepeat !== null && keysRepeat(items, old, 0, 0)) return false;
       const nx = single(x),
         ny = single(y);
       if (nx === null || ny === null) return false;
@@ -4516,6 +4524,30 @@ export function __installStacks(make: (core: StackCore) => StackSupport): void {
  */
 export function __installKeys(): void {
   dupList = dupKeys;
+  keysRepeat = repeats;
+}
+
+// Whether a list's keys repeat (repeats), once the keys feature installed it.
+let keysRepeat: typeof repeats | null = null;
+
+/** Whether two of old[oi..] or two of items[i..] share a key (a settled promise's by its element's). */
+function repeats(items: Any[], old: Fiber[], i: number, oi: number): boolean {
+  let seen = new Set<Key>();
+  for (let j = oi; j < old.length; j++) {
+    const k = old[j]!.k;
+    if (seen.has(k)) return true;
+    seen.add(k);
+  }
+  seen = new Set<Key>();
+  for (let j = i; j < items.length; j++) {
+    let it = items[j];
+    if (it == null || typeof it === "boolean") continue;
+    if (typeof it === "object" && it.$$typeof !== ELEMENT && isThenable(it)) it = items[j] = unwrap(it);
+    const k = keyOf(it, j);
+    if (seen.has(k)) return true;
+    seen.add(k);
+  }
+  return false;
 }
 
 /** The error for a class component rendered while class support is not loaded. */

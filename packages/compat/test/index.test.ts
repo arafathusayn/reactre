@@ -586,6 +586,28 @@ describe("list updates from a loop's report", () => {
     expect((tbody().childNodes[3] as FakeElement).className).toBe("danger");
   });
 
+  test("with repeated keys, two rows that traded places are matched as a whole reconcile matches them", async () => {
+    // React's handling of repeated keys, which the default entry loads.
+    await import("../src/features/keys.ts");
+    const rs = [
+      { id: "1", label: "r1" },
+      { id: "2", label: "a" },
+      { id: "2", label: "b" },
+      { id: "3", label: "r3" },
+    ];
+    const swapped = [rs[3]!, rs[1]!, rs[2]!, rs[0]!];
+    const run = (report: boolean) => {
+      render(h("p"));
+      prev = [];
+      render(list(rs, "", report));
+      render(list(swapped, "", report));
+      return text();
+    };
+    // The row a repeated key hid stays in the DOM, as React leaves it.
+    expect(run(false)).toBe("2a,3r3,2a,2b,1r1");
+    expect(run(true)).toBe("2a,3r3,2a,2b,1r1");
+  });
+
   test("a stale report, or one for another list, is ignored", () => {
     const rs = rows(3);
     render(list(rs, ""));

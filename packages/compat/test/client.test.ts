@@ -299,7 +299,8 @@ describe("duplicate keys", () => {
   /**
    * A list of rows with React and with compat: each row is a component with state (its mount
    * number) and a layout effect whose cleanup logs it. render(keys) renders one row per key (a
-   * key written "k:other" is a row of another type, "k:none" one that renders nothing); each
+   * key written "k:other" is a row of another type, "k:none" one that renders nothing,
+   * "k:settled" a row in a settled promise, and "-" is a hole, null); each
    * render expects both DOMs and both logs of unmounted rows to be equal. `shape` is where the rows go: straight in a <ul>, or returned
    * by a component inside it, between two other rows.
    */
@@ -319,8 +320,10 @@ describe("duplicate keys", () => {
         None = (props: Any) => (row(props), null);
       const rows = (keys: string[]) =>
         keys.map((k) => {
+          if (k === "-") return null;
           const [key, type] = k.split(":");
-          return h(type === "other" ? Other : type === "none" ? None : Row, { key, k: key });
+          const el = h(type === "other" ? Other : type === "none" ? None : Row, { key, k: key });
+          return type === "settled" ? { then() {}, status: "fulfilled", value: el } : el;
         });
       const List = (props: Any) => rows(props.keys);
       const root = createRoot(c);
@@ -364,6 +367,29 @@ describe("duplicate keys", () => {
     l.render(["c", "x", "b", "a"]);
     l.render(["x", "y", "x", "z"]);
     l.render(["z", "y", "x", "w", "x"]);
+  });
+
+  test("rows matching at the end, where an old key repeats: matched through the key map, as React does", () => {
+    const l = lists();
+    // A removal at the front leaves a common end.
+    l.render(["a", "x", "b", "x"]);
+    l.render(["x"]);
+    // A changed front with the same end.
+    l.render(["a", "x", "x"]);
+    l.render(["b", "x", "x"]);
+    // The two ends traded places around a repeated key, with and without a common end.
+    l.render(["p", "x", "x", "q", "z"]);
+    l.render(["q", "x", "x", "p", "z"]);
+    l.render(["p", "y", "y", "q"]);
+    l.render(["q", "y", "y", "p"]);
+  });
+
+  test("rows matching at the end, where a new key repeats, around holes and settled promises", () => {
+    const l = lists();
+    l.render(["x"]);
+    l.render(["a", "-", "x", "x"]);
+    l.render(["b", "x:settled", "-", "x:settled", "z"]);
+    l.render(["c", "x", "z"]);
   });
 
   test("a row whose key matches in place but whose type changed is replaced in place", () => {
