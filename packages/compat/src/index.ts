@@ -90,9 +90,20 @@ const MEMO_TYPE = Symbol.for("react.memo");
 const FORWARD_TYPE = Symbol.for("react.forward_ref");
 const LAZY_TYPE = Symbol.for("react.lazy");
 const MEMO_SENTINEL = Symbol.for("react.memo_cache_sentinel");
+// The fragment type as the runtime itself uses it: only the app's use of the `Fragment` export
+// below keeps that export, and with it Fragment refs, in a bundle.
+const FRAGMENT = Symbol.for("react.fragment");
 
-/** `<>...</>`: children with no element of their own. */
-export const Fragment: symbol = Symbol.for("react.fragment");
+/** Fragment refs (see FragmentInstance), once the `Fragment` export installed them. */
+let fragmentRefs: FragmentRefs | null = null;
+/**
+ * `<>...</>`: children with no element of their own. It brings Fragment refs: an app that never
+ * imports Fragment renders no `<Fragment ref>`, so its bundle leaves their code out.
+ */
+export const Fragment: symbol = /* @__PURE__ */ (() => {
+  fragmentRefs = { of: fragmentOf, hosts: fragmentHosts };
+  return FRAGMENT;
+})();
 /** Renders its children; development checks are not run. */
 export const StrictMode: symbol = Symbol.for("react.strict_mode");
 /** Renders its children; nothing is measured. */
@@ -452,6 +463,9 @@ const HOIST = 1024; // host: <title>, <meta> or <link> placed in document.head
 // function component that hosts the block it renders (see runFunc).
 const BOX = 2048;
 const LATER = 4096; // queued only from outside an event (React's default lane): flushSync leaves it
+// A Fragment ref's instance is near (see FragmentInstance): a host-level fiber's node has
+// fragment listeners and observers; hosts created under any other look for instances above.
+const FRAGREF = 8192;
 
 // Namespaces (Fiber.ns), as indexes into NS_URI and into a template's per-namespace arrays.
 const HTML_NS = 0;
@@ -526,14 +540,15 @@ class Fiber {
   h: Hook[] | null = null;
   /**
    * Class instance; function component's render function; provider subscribers; form status;
-   * suspense primary; activity's inner fragment; a slot's anchor text node.
+   * suspense primary; activity's inner fragment; a slot's anchor text node; a Fragment's
+   * FragmentInstance, once its ref attached.
    */
   s: Any = null;
   /** Memo compare; class update queue; suspense fallback; form status subscribers. */
   q: Any = null;
   /** Pending effects of a function's render; a value thrown to this boundary. */
   x: Any = null;
-  /** Callback ref cleanup. */
+  /** Callback ref cleanup (a host's or a Fragment's). */
   rx: Any = null;
   /** Host: its text content when it holds only text, else null. */
   tx: string | null = null;
@@ -581,7 +596,7 @@ const isThenable = (v: Any): boolean => v !== null && typeof v === "object" && t
 function kindOf(type: Any): number {
   if (typeof type === "string") return HOST;
   if (typeof type === "function") return type.prototype && type.prototype.isReactComponent ? CLASS : FUNC;
-  if (type === Fragment || type === StrictMode || type === Profiler || type === SuspenseList || type === ViewTransition)
+  if (type === FRAGMENT || type === StrictMode || type === Profiler || type === SuspenseList || type === ViewTransition)
     return FRAG;
   if (type === Suspense) return SUSPENSE;
   if (type === Activity) return ACTIVITY;
@@ -640,7 +655,7 @@ function nameOfType(type: Any): string | null {
     return type.$$typeof === CLIENT_REFERENCE ? null : type.displayName || type.name || null;
   if (typeof type === "string") return type;
   switch (type) {
-    case Fragment:
+    case FRAGMENT:
       return "Fragment";
     case Profiler:
       return "Profiler";
@@ -1193,8 +1208,8 @@ function removeAll(p: Fiber, old: Fiber[] = p.c): void {
       for (let ix = 0, xs = old; ix < xs.length; ix++) {
         const o = xs[ix]!;
         // A row with nothing to clean up (a component hosting its block, no
-        // hooks, no slots) is only marked: no call per row.
-        if (o.n === FUNC && o.h === null && o.c === NO_FIBERS && o.f & BOX) o.f |= DEAD;
+        // hooks, no slots, no Fragment ref's listeners) is only marked: no call per row.
+        if (o.n === FUNC && o.h === null && o.c === NO_FIBERS && (o.f & (BOX | FRAGREF)) === BOX) o.f |= DEAD;
         else unmount(o, false);
       }
       p.d.textContent = "";
@@ -1251,6 +1266,7 @@ function create(it: Any, p: Fiber, key: Key): Fiber {
     f.p = "" + it;
     f.d = (hydrating && claimText(f.p)) || document.createTextNode(f.p);
     f.d[OWN] = curHost;
+    if (curHost.f & FRAGREF) fragmentRefs!.hosts(f, true);
     return f;
   }
   // Elements first: a list mount creates one per row.
@@ -1302,6 +1318,8 @@ function create(it: Any, p: Fiber, key: Key): Fiber {
     unmount(f, true);
     throw e;
   }
+  // A new node under a Fragment ref gets its instance's listeners and observers.
+  if (curHost.f & FRAGREF) fragmentRefs!.hosts(f, true);
   return f;
 }
 
@@ -1346,8 +1364,15 @@ function run(f: Fiber, old: Props | null, mount: boolean): void {
     case CLASS:
       if (classes === null) throw noClasses(f.t);
       return classes.run(f, old, mount);
-    case FRAG:
-      return reconcile(f, f.t === ARRAY ? f.p : f.p.children);
+    case FRAG: {
+      if (f.t === ARRAY) return reconcile(f, f.p);
+      // A Fragment's ref (React 19.3) changes before its children render: React detaches it
+      // before theirs and attaches it before their refs and layout effects.
+      const ref = f.p.ref,
+        oref = old === null ? undefined : old["ref"];
+      if (ref !== oref && f.t === FRAGMENT) swapRef(f, ref, oref);
+      return reconcile(f, f.p.children);
+    }
     case PROVIDER: {
       // A new value re-renders every reader (subscribed by readContext), even below a memo
       // bailout, as React propagates context. Dead readers are dropped on the way.
@@ -1629,11 +1654,7 @@ function runHost(f: Fiber, old: Props | null, mount: boolean): void {
   // Refs attach with layout effects (after the whole render), detach at once.
   const ref = p.ref,
     oref = old === null ? undefined : old["ref"];
-  if (ref !== oref) {
-    // Hidden content detached its refs when it hid, and attaches them when it shows.
-    if (oref != null && (hiddenCount === 0 || hiddenLevel(f) === 0)) detachRef(f, oref);
-    if (ref != null) laterShown(f, () => attachRef(f, ref, dom));
-  }
+  if (ref !== oref) swapRef(f, ref, oref);
   if (mount && p.autoFocus && AUTO_FOCUS.has(f.t)) laterShown(f, () => dom.focus());
 }
 
@@ -2913,7 +2934,11 @@ function runRoot(f: Fiber): void {
  * The root listens on the container too, so events inside reach handlers through the fiber tree.
  */
 function runPortal(f: Fiber, mount: boolean): void {
-  if (mount) listenOn(f.d, f.o);
+  if (mount) {
+    listenOn(f.d, f.o);
+    // Hosts that mount in it look for Fragment ref instances above, as they would without it.
+    if (curHost.f & FRAGREF) f.f |= FRAGREF;
+  }
   const ph = curHost,
     pn = curNs;
   curHost = f;
@@ -2991,8 +3016,11 @@ function runFunc(f: Fiber, mount = false): void {
     f.b = out;
     runBlock(f, out[VALS], null, true);
     // A mount is placed by whoever created it; a component that fuses later
-    // (after rendering nothing) has its host place the new node.
-    if (!mount) curHost.f |= STRUCT;
+    // (after rendering nothing) has its host place the new node, as a new host.
+    if (!mount) {
+      curHost.f |= STRUCT;
+      if (curHost.f & FRAGREF) fragmentRefs!.hosts(f, true);
+    }
   } else reconcile(f, out);
   // After the children: React runs a child's effects before its parent's.
   if (f.x !== null) commitEffects(f);
@@ -3001,6 +3029,7 @@ function runFunc(f: Fiber, mount = false): void {
 // A component that hosted its block renders something else: the block goes,
 // and the component's children are reconciled as anyone's.
 function unfuse(f: Fiber): void {
+  if (f.f & FRAGREF) fragmentRefs!.hosts(f, false);
   for (let ix = 0, xs = f.c; ix < xs.length; ix++) {
     const c = xs[ix]!;
     unmount(c, false);
@@ -3192,6 +3221,490 @@ function detachRef(f: Fiber, ref: Any): void {
   else if (ref !== null && typeof ref === "object") ref.current = null;
 }
 
+/**
+ * A host's or Fragment's ref changed from `oref` to `ref`: the old one detaches at once, the new
+ * one attaches with layout effects. Hidden content detached its refs when it hid, and attaches
+ * them when it shows.
+ */
+function swapRef(f: Fiber, ref: Any, oref: Any): void {
+  if (oref != null && (hiddenCount === 0 || hiddenLevel(f) === 0)) detachRef(f, oref);
+  if (ref != null) laterShown(f, () => attachRef(f, ref, f.n === HOST ? f.d : fragmentRefs!.of(f)));
+}
+
+// #endregion
+
+// #region Fragment refs
+
+// React 19.3's Fragment refs: `<Fragment ref={r}>` gives a FragmentInstance, which adds event
+// listeners to, observes, focuses, measures and scrolls the fragment's top-level host nodes. Its
+// methods follow react-dom's: the nodes are the visible ones (hidden Activity and Suspense
+// content is left out), found by walking the fibers, and the fragment's parent is the nearest
+// host, root or block slot above it (a portal is passed through, as React does).
+//
+// Hosts that come and go while an instance exists get or lose its listeners and observers, as
+// React's commit gives them. While no Fragment has a ref this costs one flag test where a host
+// mounts or unmounts: an instance flags (FRAGREF) the fibers from its fragment up to its parent
+// host and down to its top-level hosts, and only a host created under a flagged one, or a flagged
+// host that unmounts, hides or shows, looks for instances above it.
+
+/** Whether `f` is a fragment's parent as React finds it: a host, a root, or a block's slot. */
+const isParent = (f: Fiber): boolean => f.n === HOST || f.n === ROOT || f.n === SLOT;
+
+/** Fragment `f`'s parent fiber; null once it is unmounted, as React detaches it. */
+function parentOf(f: Fiber): Fiber | null {
+  if (f.f & DEAD) return null;
+  let p = f.r!;
+  while (!isParent(p)) p = p.r!;
+  return p;
+}
+
+/** The node of the nearest portal between fragment `f` and its parent, if any. */
+function portalOf(f: Fiber): Any {
+  for (let p = f.r!; !isParent(p); p = p.r!) if (p.n === PORTAL) return p.d;
+  return null;
+}
+
+/**
+ * The visible host-level nodes among `f`'s children, in order (React's
+ * traverseVisibleInstancesAndTextInstances): elements and text, through portals, not into hidden
+ * Activity or Suspense content; hoisted <head> nodes are not the fragment's. `deep` lists what is
+ * inside each host too, a compiled block's nodes as its DOM holds them. Fiber `mark` is listed
+ * where it is met, with nothing of it.
+ */
+function nodesOf(f: { c: Fiber[] }, deep: boolean, out: Any[] = [], mark?: Fiber): Any[] {
+  for (const c of f.c) {
+    if (c.f & BOX) {
+      if (c.f & HOIST) continue;
+      out.push(c.d);
+      if (deep) {
+        if (c.n === HOST) nodesOf(c, true, out);
+        else if (c.n !== TEXT) domNodes(c.d, out);
+      }
+    } else if (c === mark) out.push(c);
+    else if (!(c.f & HIDDEN)) nodesOf(c, deep, out, mark);
+  }
+  return out;
+}
+function domNodes(n: Any, out: Any[]): void {
+  for (let x = n.firstChild; x !== null; x = x.nextSibling) {
+    out.push(x);
+    domNodes(x, out);
+  }
+}
+
+/**
+ * Fragment `f`'s instance, made when its ref first attaches (React's safelyAttachRef). It flags
+ * the fibers up to its parent and down to its top-level hosts, hidden ones included, so hosts
+ * that mount, unmount, hide or show there look for it (see fragmentHosts).
+ */
+function fragmentOf(f: Fiber): FragmentInstance {
+  if (f.s === null) {
+    const fi = (f.s = new FragmentInstance(f));
+    for (const n of nodesOf(f, false)) (n.reactFragments ??= new Set()).add(fi);
+    for (let p = f; ; p = p.r!) {
+      p.f |= FRAGREF;
+      if (isParent(p)) break;
+    }
+    flagDown(f);
+  }
+  return f.s;
+}
+function flagDown(f: Fiber): void {
+  for (const c of f.c) {
+    c.f |= FRAGREF;
+    if (!(c.f & BOX)) flagDown(c);
+  }
+}
+
+/**
+ * Host-level fiber `f` mounted or showed (`add`), or unmounted or hid: its node gets or loses the
+ * listeners and observers of each Fragment ref instance between it and its parent, innermost
+ * first, as React's commit does (commitFragmentInstanceInsertionEffects and the like). A
+ * fragment with an instance that unmounts or hides detaches its ref.
+ */
+function fragmentHosts(f: Fiber, add: boolean): void {
+  if (!(f.f & BOX) || f.f & HOIST) {
+    if (!add && f.s !== null && f.t === FRAGMENT && f.p.ref != null) safely(f, () => detachRef(f, f.p.ref));
+    return;
+  }
+  for (let p = f.r!; !isParent(p); p = p.r!) {
+    const fi: FragmentInstance | null = p.n === FRAG ? p.s : null;
+    if (fi === null) continue;
+    f.f |= FRAGREF;
+    const node = f.d;
+    listen(node, fi.l, add);
+    if (node.nodeType === 3) continue;
+    if (fi.o !== null)
+      for (const ob of fi.o) {
+        if (add) {
+          dropUnobserves(fi, ob, node);
+          ob.observe(node);
+        } else if (typeof ob.rootMargin === "string") unobserveLater(fi, ob, node);
+        else ob.unobserve(node);
+      }
+    if (add) (node.reactFragments ??= new Set()).add(fi);
+    else node.reactFragments?.delete(fi);
+  }
+}
+
+// An IntersectionObserver unobserves a node that left a fragment after the next paint, as React
+// does, so it still reports the node leaving: flat triples of instance, observer and node.
+let unobserves: Any[] = [];
+function unobserveLater(fi: FragmentInstance, ob: Any, node: Any): void {
+  if (unobserves.push(fi, ob, node) > 3) return;
+  const frame = (fn: () => void): void =>
+    void (typeof requestAnimationFrame === "function" ? requestAnimationFrame(fn) : setTimeout(fn));
+  frame(() =>
+    frame(() => {
+      const q = unobserves;
+      unobserves = [];
+      for (let i = 0; i < q.length; i += 3) q[i + 1].unobserve(q[i + 2]);
+    }),
+  );
+}
+/** Drop the waiting unobserves of `ob` by `fi`: of `node`, or of every node, unobserved now. */
+function dropUnobserves(fi: FragmentInstance, ob: Any, node: Any): void {
+  const q = unobserves;
+  let w = 0;
+  for (let i = 0; i < q.length; i += 3) {
+    if (q[i] === fi && q[i + 1] === ob && (node === null || q[i + 2] === node)) {
+      if (node === null) ob.unobserve(q[i + 2]);
+    } else {
+      q[w++] = q[i];
+      q[w++] = q[i + 1];
+      q[w++] = q[i + 2];
+    }
+  }
+  q.length = w;
+}
+
+/** Add a FragmentInstance's listeners `ls` to `node`, or take them off. */
+function listen(node: Any, ls: FragmentListener[] | null, add: boolean): void {
+  if (ls !== null)
+    for (const l of ls) node[add ? "addEventListener" : "removeEventListener"](l.t, l.a, attachOptions(l.o));
+}
+/** The options a fragment's listener is added to nodes with: `once` and `signal` are the instance's. */
+const attachOptions = (o: Any): Any =>
+  o != null && typeof o !== "boolean" && (o.once === true || o.signal instanceof AbortSignal)
+    ? { capture: o.capture, passive: o.passive }
+    : o;
+/** Where a listener with type `t` and options `o` is in `ls`: type, function and capture flag identify it. */
+const indexOfListener = (ls: FragmentListener[], t: string, l: Any, o: Any): number =>
+  ls.findIndex((x) => x.t === t && x.l === l && captures(x.o) === captures(o));
+const captures = (o: Any): boolean => (typeof o === "boolean" ? o : !!o?.capture);
+
+/**
+ * Focus the first element of `nodes` that takes focus: one already focused does, else one whose
+ * focus() fires a focus event (React's setFocusIfFocusable).
+ */
+function focusFirst(nodes: Any[], options: Any): void {
+  for (const node of nodes) {
+    if (node.nodeType !== 1) continue;
+    const doc = node.ownerDocument;
+    if (doc.activeElement === node) return;
+    let did = false;
+    const on = (): void => void (did = true);
+    try {
+      doc.addEventListener("focus", on, true);
+      node.focus(options);
+    } finally {
+      doc.removeEventListener("focus", on, true);
+    }
+    if (did) return;
+  }
+}
+
+/** A range over text node `n`'s contents. */
+function rangeOf(n: Any): Range {
+  const r = n.ownerDocument.createRange();
+  r.selectNodeContents(n);
+  return r;
+}
+
+/**
+ * The host-level nodes just before and after fragment `f` among its parent's (null where there is
+ * none), as React finds an empty fragment's siblings: one in hidden content has only the last.
+ */
+function siblingsOf(f: Fiber): [Any, Any] {
+  const p = parentOf(f),
+    ns = p === null ? [] : nodesOf(p, false, [], f);
+  let i = ns.indexOf(f);
+  if (i === -1) i = ns.length;
+  return [ns[i - 1] ?? null, ns[i + 1] ?? null];
+}
+
+/** The fiber that rendered `node`, or the nearest node above it (React's getClosestInstanceFromNode). */
+function fiberOf(node: Any): Fiber | null {
+  for (let n = node; n != null; n = n.parentNode) {
+    if (n[FIBER] !== undefined) return n[FIBER];
+    // Text keeps no link to its fiber: it is found among the fibers its host places.
+    const t = n.nodeType === 3 && n[OWN] != null ? textFiber(n[OWN], n) : null;
+    if (t !== null) return t;
+  }
+  return null;
+}
+function textFiber(f: Fiber, node: Any): Fiber | null {
+  for (const c of f.c) {
+    const t = c.d === node ? c : c.f & BOX ? null : textFiber(c, node);
+    if (t !== null) return t;
+  }
+  return null;
+}
+
+/** The nearest host-level fiber or root above `f` (React's getParentForFragmentAncestors). */
+function hostAbove(f: Fiber): Fiber | null {
+  let p = f.r;
+  while (p !== null && !(p.f & BOX) && p.n !== ROOT) p = p.r;
+  return p;
+}
+/** The lowest host-level fiber or root at or above both `a` and `b`, if they share one. */
+function commonHost(a: Fiber, b: Fiber): Fiber | null {
+  const above = new Set<Fiber>();
+  for (let x: Fiber | null = a; x !== null; x = hostAbove(x)) above.add(x);
+  for (let x: Fiber | null = b; x !== null; x = hostAbove(x)) if (above.has(x)) return x;
+  return null;
+}
+
+/**
+ * Whether the fiber tree agrees with document position `pos` of `other` to the fragment `frag`
+ * whose first and last nodes are `first` and `last` (React's validateDocumentPositionWithFiberTree):
+ * a portal can put nodes where the tree does not.
+ */
+function treeAgrees(pos: number, frag: Fiber, first: Any, last: Any, other: Any): boolean {
+  const of = fiberOf(other);
+  if (pos & 16) {
+    for (let x = of; x !== null; x = x.r) if (x === frag) return true;
+    return false;
+  }
+  if (pos & 8) {
+    if (of !== null) return true;
+    const doc = other.ownerDocument;
+    return other === doc || other === doc.documentElement || other === doc.body;
+  }
+  if (!(pos & 6) || of === null) return false;
+  // Preceding: `other` comes before the first node in a walk of their common host; following,
+  // after the last.
+  const edge = pos & 2 ? first : last,
+    top = commonHost(fiberOf(edge)!, of);
+  if (top === null) return false;
+  const ns = nodesOf({ c: [top] }, true),
+    oi = ns.indexOf(of.d),
+    ei = ns.indexOf(edge);
+  return pos & 2 ? oi !== -1 && (ei === -1 || oi < ei) : ei !== -1 && oi > ei;
+}
+
+/** Scroll the window to text node `n` (React's scrollTextNodeIntoView). */
+function scrollToText(n: Any, top: boolean): void {
+  const r = rangeOf(n).getBoundingClientRect(),
+    w = window;
+  w.scrollTo(w.scrollX + r.left, w.scrollY + (top ? r.top : r.bottom - w.innerHeight));
+}
+
+/** What the `Fragment` export installs: a fragment's instance, and a host's part in its fragments. */
+interface FragmentRefs {
+  of(f: Fiber): FragmentInstance;
+  hosts(f: Fiber, add: boolean): void;
+}
+
+/**
+ * A listener added through a FragmentInstance: its type, listener and options, the function nodes
+ * get (a wrapper for `once`), and the removal of its abort signal's listener.
+ */
+interface FragmentListener {
+  t: string;
+  l: Any;
+  o: Any;
+  a: Any;
+  x: (() => void) | null;
+}
+
+/**
+ * What a ref on a Fragment receives (React 19.3's FragmentInstance): one per fragment, made when
+ * its ref first attaches and kept for the fragment's life.
+ */
+class FragmentInstance {
+  /** The fragment's fiber. */
+  readonly f: Fiber;
+  /** Listeners added, in order; null until the first. */
+  l: FragmentListener[] | null = null;
+  /** Observers observing its nodes; null until the first. */
+  o: Set<Any> | null = null;
+  constructor(f: Fiber) {
+    this.f = f;
+  }
+  /** Its visible host-level nodes (see nodesOf); none once it is unmounted. */
+  private n(deep: boolean): Any[] {
+    return this.f.f & DEAD ? [] : nodesOf(this.f, deep);
+  }
+
+  addEventListener(type: string, listener: Any, options?: Any): void {
+    const obj = options != null && typeof options !== "boolean";
+    const signal = obj ? options.signal || null : null;
+    if (signal !== null && signal.aborted) return;
+    const ls = (this.l ??= []);
+    if (indexOfListener(ls, type, listener, options) !== -1) return;
+    let a = listener,
+      x: (() => void) | null = null;
+    if (obj && options.once === true) {
+      const fi = this;
+      a = function (this: Any, e: Any): void {
+        fi.removeEventListener(type, listener, options);
+        if (typeof listener === "function") listener.call(this, e);
+        else listener.handleEvent(e);
+      };
+    }
+    if (signal !== null) {
+      const off = (): void => this.removeEventListener(type, listener, options);
+      signal.addEventListener("abort", off, { once: true });
+      x = () => signal.removeEventListener("abort", off);
+    }
+    ls.push({ t: type, l: listener, o: options, a, x });
+    const ao = attachOptions(options);
+    for (const n of this.n(false)) n.addEventListener(type, a, ao);
+  }
+
+  removeEventListener(type: string, listener: Any, options?: Any): void {
+    const ls = this.l;
+    const i = ls === null ? -1 : indexOfListener(ls, type, listener, options);
+    if (i === -1) return;
+    const l = ls![i]!,
+      ao = attachOptions(l.o);
+    for (const n of this.n(false)) n.removeEventListener(type, l.a, ao);
+    ls!.splice(i, 1);
+    if (l.x !== null) l.x();
+  }
+
+  /**
+   * Dispatch `event` as the fragment's own: on its parent, or (when the fragment has listeners or
+   * the event does not bubble) on a node put in the parent for the dispatch, which carries the
+   * fragment's listeners and lets the event bubble on from there.
+   */
+  dispatchEvent(event: Event): boolean {
+    const p = parentOf(this.f);
+    if (p === null) return true;
+    const parent = p.d,
+      ls = this.l;
+    if ((ls === null || ls.length === 0) && event.bubbles) return parent.dispatchEvent(event);
+    const tmp = parent.nodeType === 9 ? parent.createComment("") : document.createTextNode("");
+    listen(tmp, ls, true);
+    parent.appendChild(tmp);
+    const ok = tmp.dispatchEvent(event);
+    listen(tmp, ls, false);
+    parent.removeChild(tmp);
+    return ok;
+  }
+
+  /** Focus the first element in the fragment that takes focus, searching inside its hosts. */
+  focus(options?: FocusOptions): void {
+    focusFirst(this.n(true), options);
+  }
+
+  /** Focus the last element in the fragment that takes focus. */
+  focusLast(options?: FocusOptions): void {
+    focusFirst(this.n(true).reverse(), options);
+  }
+
+  /** Blur the focused element if it is one of the fragment's nodes or inside one. */
+  blur(): void {
+    const p = parentOf(this.f);
+    if (p === null) return;
+    const active = (p.d.nodeType === 9 ? p.d : p.d.ownerDocument).activeElement;
+    if (active === null) return;
+    for (const n of this.n(false))
+      if (n.nodeType !== 3 && (n === active || n.contains(active))) return void active.blur();
+  }
+
+  observeUsing(observer: Any): void {
+    (this.o ??= new Set()).add(observer);
+    for (const n of this.n(false)) if (n.nodeType !== 3) observer.observe(n);
+  }
+
+  unobserveUsing(observer: Any): void {
+    if (this.o === null || !this.o.delete(observer)) return;
+    for (const n of this.n(false)) if (n.nodeType !== 3) observer.unobserve(n);
+    dropUnobserves(this, observer, null);
+  }
+
+  getClientRects(): DOMRect[] {
+    const rects: DOMRect[] = [];
+    for (const n of this.n(false)) rects.push(...(n.nodeType === 3 ? rangeOf(n) : n).getClientRects());
+    return rects;
+  }
+
+  getRootNode(options?: GetRootNodeOptions): Node | FragmentInstance {
+    const p = parentOf(this.f);
+    return p === null ? this : p.d.getRootNode(options);
+  }
+
+  compareDocumentPosition(other: Node): number {
+    // Node.DOCUMENT_POSITION_*: DISCONNECTED 1, PRECEDING 2, FOLLOWING 4, CONTAINS 8,
+    // CONTAINED_BY 16, IMPLEMENTATION_SPECIFIC 32.
+    const p = parentOf(this.f);
+    if (p === null) return 1;
+    const ns = this.n(false),
+      portal = portalOf(this.f);
+    if (ns.length === 0) {
+      // No nodes: its place among its parent's (or its portal's) children decides.
+      const at = portal ?? p.d,
+        pos = at.compareDocumentPosition(other);
+      let r = pos;
+      if (at === other) r = 8;
+      else if (pos & 16) {
+        // Inside the parent: before or after the fragment's next sibling, if it has one.
+        const next = siblingsOf(this.f)[1],
+          q = next === null ? 2 : next.compareDocumentPosition(other);
+        r = q === 0 || q & 4 ? 4 : 2;
+      }
+      return r | 32;
+    }
+    const first = ns[0],
+      last = ns[ns.length - 1],
+      at = portal !== null ? first.parentElement : p.d;
+    if (at == null) return 1;
+    const firstIn = at.compareDocumentPosition(first) & 16,
+      lastIn = at.compareDocumentPosition(last) & 16,
+      fr = first.compareDocumentPosition(other),
+      lr = last.compareDocumentPosition(other);
+    const r =
+      (firstIn && first === other) ||
+      (lastIn && last === other) ||
+      fr & 16 ||
+      lr & 16 ||
+      (firstIn && lastIn && fr & 4 && lr & 2)
+        ? 16
+        : (!firstIn && first === other) || (!lastIn && last === other)
+          ? 32
+          : fr;
+    return r & 1 || r & 32 || treeAgrees(r, this.f, first, last, other) ? r : 32;
+  }
+
+  scrollIntoView(alignToTop?: boolean): void {
+    if (typeof alignToTop === "object")
+      throw new Error(
+        "FragmentInstance.scrollIntoView() does not support scrollIntoViewOptions. Use the alignToTop boolean instead.",
+      );
+    const ns = this.n(false),
+      top = alignToTop !== false;
+    if (ns.length === 0) {
+      // No nodes: a sibling (the next one first when aligning to the top), else the parent.
+      const [before, after] = siblingsOf(this.f);
+      const n = top ? after || before || parentOf(this.f)?.d : before || after;
+      if (n == null) return;
+      if (n.nodeType === 3) scrollToText(n, top);
+      else if (n.nodeType === 11) {
+        const host = "host" in n ? n.host : null;
+        if (host !== null) host.scrollIntoView(alignToTop);
+      } else if (n.nodeType !== 9) n.scrollIntoView(alignToTop);
+      return;
+    }
+    // The last one ends in view when aligning to the top, the first one otherwise.
+    for (const n of top ? ns.reverse() : ns) {
+      if (n.nodeType === 3) scrollToText(n, top);
+      else n.scrollIntoView(alignToTop);
+    }
+  }
+}
+
 // #endregion
 
 // #region Context
@@ -3237,7 +3750,7 @@ function setHidden(f: Fiber, hide: boolean): void {
 
 /** An internal fragment fiber under `p`: the wrapper Suspense and Activity keep content in. */
 function frag(p: Fiber, k: Key): Fiber {
-  return new Fiber(FRAG, Fragment, k, p, p.o);
+  return new Fiber(FRAG, FRAGMENT, k, p, p.o);
 }
 
 /**
@@ -3422,6 +3935,9 @@ function disappear(f: Fiber): void {
     if (f.p.ref != null) safely(f, () => detachRef(f, f.p.ref));
     if (classes !== null) safely(f, () => classes!.unmount(f));
   }
+  // A Fragment's ref detaches; a hidden host is no Fragment ref's and loses their listeners and
+  // observers.
+  if (f.f & FRAGREF) fragmentRefs!.hosts(f, false);
   for (let ix = 0, xs = f.c; ix < xs.length; ix++) {
     const c = xs[ix]!;
     if (walks(c)) disappear(c);
@@ -3449,6 +3965,11 @@ function disconnectPassive(f: Fiber): void {
  * effects run, classes mount, refs attach.
  */
 function reappear(f: Fiber): void {
+  // A Fragment's ref attaches before its children's refs and layout effects, as in React; a host
+  // shown again gets the listeners and observers of the Fragment refs it is under, unless a
+  // fallback inside still hides it.
+  if (f.t === FRAGMENT) swapRef(f, f.p.ref, null);
+  if (f.f & FRAGREF && hiddenLevel(f) === 0) fragmentRefs!.hosts(f, true);
   for (let ix = 0, xs = f.c; ix < xs.length; ix++) {
     const c = xs[ix]!;
     if (walks(c)) reappear(c);
@@ -3502,6 +4023,8 @@ function unmount(f: Fiber, rm: boolean): void {
       if ((rm || f.f & HOIST) && f.d.parentNode !== null) f.d.parentNode.removeChild(f.d);
       // Hidden content detached its refs when it hid.
       if (f.p.ref != null && (hiddenCount === 0 || hiddenLevel(f) === 0)) safely(f, () => detachRef(f, f.p.ref));
+      // Then it loses Fragment refs' listeners and observers, as in React.
+      if (f.f & FRAGREF) fragmentRefs!.hosts(f, false);
       for (let ix = 0, xs = f.c; ix < xs.length; ix++) {
         const c = xs[ix]!;
         unmount(c, false);
@@ -3509,9 +4032,11 @@ function unmount(f: Fiber, rm: boolean): void {
       return;
     case TEXT:
       if (rm && f.d.parentNode !== null) f.d.parentNode.removeChild(f.d);
+      if (f.f & FRAGREF) fragmentRefs!.hosts(f, false);
       return;
     case BLOCK:
       if (rm && f.d.parentNode !== null) f.d.parentNode.removeChild(f.d);
+      if (f.f & FRAGREF) fragmentRefs!.hosts(f, false);
       for (let ix = 0, xs = f.c; ix < xs.length; ix++) {
         const c = xs[ix]!;
         unmount(c, false);
@@ -3532,6 +4057,7 @@ function unmount(f: Fiber, rm: boolean): void {
       if (f.f & BOX) {
         // Its block: one node, its slots' nodes inside it.
         if (rm && f.d.parentNode !== null) f.d.parentNode.removeChild(f.d);
+        if (f.f & FRAGREF) fragmentRefs!.hosts(f, false);
         for (let ix = 0, xs = f.c; ix < xs.length; ix++) {
           const c = xs[ix]!;
           unmount(c, false);
@@ -3546,6 +4072,11 @@ function unmount(f: Fiber, rm: boolean): void {
         if (f.p.ref != null) safely(f, () => detachRef(f, f.p.ref));
         if (classes !== null) safely(f, () => classes!.unmount(f));
       }
+      break;
+    case FRAG:
+      // A Fragment's ref detaches (only one with an instance has the flag), unless hidden
+      // content's did when it hid.
+      if (f.f & FRAGREF && (hiddenCount === 0 || hiddenLevel(f) === 0)) fragmentRefs!.hosts(f, false);
       break;
     case ACTIVITY:
       for (let ix = 0, xs = f.c; ix < xs.length; ix++) {
