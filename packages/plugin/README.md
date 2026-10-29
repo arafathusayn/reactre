@@ -71,15 +71,15 @@ The plugin turns `.jsx` and `.tsx` files into plain JavaScript, TypeScript inclu
 reactre({
   // Run a React app on @reactre/compat. true, or:
   compat: {
-    // Include class components (@reactre/compat). false resolves react to @reactre/compat/core,
-    // which leaves them out, for apps whose code and libraries render no class component.
+    // Include class components. false leaves them out, for apps whose code and libraries render
+    // no class component; the same as excluding "@classes".
     classes: true,
     // Compile your JSX's HTML element trees to templates. Off, your bundler's JSX transform
     // handles JSX and the plugin only resolves react.
     compile: true,
     // The React APIs your app and its libraries use: "all", or a list of keys.
     apis: "all",
-    // APIs to switch off, by key: what only they need leaves the bundle.
+    // APIs and behaviours to switch off, by key: what only they need leaves the bundle.
     exclude: [],
   },
   // Files to compile, and files to leave alone, by path.
@@ -94,15 +94,17 @@ reactre({
 
 - React's export names, such as `useState`, `useEffect`, `createPortal` or `hydrateRoot`.
 - Groups: `"@suspense"`, `"@transitions"`, `"@forms"`, `"@hints"` and `"@classes"`.
+- Behaviours, which are not exports: `"componentStack"`, React's component stack in what `onUncaughtError`, `onCaughtError`, `onRecoverableError` and `componentDidCatch` get (off, it is empty), and `"repeatedKeys"`, React's handling of a list whose keys repeat (off, compat pairs the rows by its own rules). A behaviour is on unless `exclude` names it, whatever `apis` lists.
 
 `@reactre/compat/api` lists them all. A key brings in what it is part of: `PureComponent` brings `Component`, and `useFormState` brings `useActionState`.
 
-With any key off, `react` resolves to a module written for your options, under `node_modules/.cache/reactre`:
+With any key off, class support included, `react` resolves to a module written for your options, under `node_modules/.cache/reactre`:
 
+- It builds on `@reactre/compat/core` and imports the module of each feature that is on: `@reactre/compat/features/classes`, `/stacks` and `/keys`. So every set of options behaves as React does for everything it keeps; `classes: false` keeps component stacks and React's handling of repeated keys.
 - It imports only the APIs that are on, so your bundler can leave out what only the others need.
-- Each switched-off API is still exported, as a function that throws and names the fix.
+- Each switched-off API is still exported, as a function that throws and names the fix. Class support off keeps `Component`, which throws when a class renders.
 
-The plugin also reads every module it bundles, your dependencies included. A named import, a `React.x` or a `require("react").x` of a switched-off API fails the build, naming the file and the key to add back. Only a use the scan cannot see, such as `React[name]`, reaches the throwing function at run time.
+With an API other than class support off, the plugin also reads every module it bundles, your dependencies included. A named import, a `React.x` or a `require("react").x` of a switched-off API fails the build, naming the file and the key to add back. Only a use the scan cannot see, such as `React[name]`, reaches the throwing function at run time.
 
 Leaving out what a small app does not use saves about a sixth of compat's bundle today. For example, a counter that imports `React` and calls `useState` goes from 28.4 KB gzipped to 23.9 KB with every other API off. The savings grow as more of compat moves into modules of its own.
 

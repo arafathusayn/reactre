@@ -47,26 +47,32 @@ The plugin has an entry for each: `@reactre/plugin/rollup`, `/rolldown`, `/esbui
 
 ## Modules
 
-| Module                     | What it is                                                                 |
-| -------------------------- | -------------------------------------------------------------------------- |
-| `@reactre/compat`          | React's client API, class components included                              |
-| `@reactre/compat/core`     | The same without class components (lifecycles, setState, error boundaries) |
-| `@reactre/compat/classes`  | `@reactre/compat` under its earlier name, for apps that resolve to it      |
-| `@reactre/compat/server`   | `react-dom/server`: React's server rendering, on compat's hooks            |
-| `@reactre/compat/compiler` | The compiler @reactre/plugin runs, and a Bun plugin of its own             |
-| `@reactre/compat/api`      | The keys that switch React's APIs on and off, and their rules              |
+| Module                             | What it is                                                                       |
+| ---------------------------------- | -------------------------------------------------------------------------------- |
+| `@reactre/compat`                  | React's client API, whole: core and the three feature modules                    |
+| `@reactre/compat/core`             | The slim base: React's client API without the feature modules                    |
+| `@reactre/compat/features/classes` | Class components (lifecycles, setState, error boundaries), installed when loaded |
+| `@reactre/compat/features/stacks`  | React's component stacks in error reports, installed when loaded                 |
+| `@reactre/compat/features/keys`    | React's handling of a list whose keys repeat, installed when loaded              |
+| `@reactre/compat/classes`          | `@reactre/compat` under its earlier name, for apps that resolve to it            |
+| `@reactre/compat/server`           | `react-dom/server`: React's server rendering, on compat's hooks                  |
+| `@reactre/compat/compiler`         | The compiler @reactre/plugin runs, and a Bun plugin of its own                   |
+| `@reactre/compat/api`              | The keys that switch React's APIs and behaviours on and off, and their rules     |
 
-`@reactre/compat` is all of React's client API. An app that renders no class component, itself or through a library, can use `@reactre/compat/core` (`compat: { classes: false }` in the plugin) and leave class support out; a class that renders there throws an error naming the fix. Core also leaves out what a correct app does without: errors are reported with an empty `componentStack`, and a list whose keys repeat, which React warns about, is reconciled by compat's own rules rather than React's. The compiler is optional; without it, everything still runs.
-
-An app can also switch off the React APIs it does not use, one by one, with the plugin's `compat.apis` and `compat.exclude`; see [the plugin's docs](https://www.npmjs.com/package/@reactre/plugin). Each combination keeps React's behaviour for every API it leaves on.
+`@reactre/compat` is all of React's client API. The plugin builds narrower entries from the same modules: with `compat: { classes: false }`, or any key in `compat.exclude`, `react` resolves to a module built on `@reactre/compat/core` that loads each feature module still on, so every set of options behaves as React does for everything it keeps. Without class support, a class that renders throws an error naming the fix. Without the `componentStack` key, errors are reported with an empty `componentStack`; without `repeatedKeys`, a list whose keys repeat, which React warns about, is reconciled by compat's own rules. See [the plugin's docs](https://www.npmjs.com/package/@reactre/plugin). `@reactre/compat/core` alone, with no feature module, is for builds that choose all three off, as the js-framework-benchmark app does. The compiler is optional; without it, everything still runs.
 
 Every change is checked against React 19 itself, scenario by scenario: the same app runs on both, and what each renders and logs must match line for line.
 
 ## Where the client differs
 
-- Component stacks (`componentStack` in what `onUncaughtError`, `onCaughtError` and `componentDidCatch` get) name the frames React's production build names, in the same order and format, but each frame is the one React writes when it finds no source location: `at Name (<anonymous>)` in V8-style engines, `Name@unknown:0:0` in others. React finds a function or class component's location by calling the component and reading the engine's stack trace, so its frames for components usually end in `(file:line:col)` instead. For the same reason a component without a name has no frame where React may have one, and a component whose `displayName` differs from its function's name is named by `displayName` where React's located frame shows the function's name. An error a host element's props throw on an update starts the stack at the element's parent.
-- `onRecoverableError` is never called: hydration patches what differs from the server's HTML instead of recovering from it.
+- Component stacks (`componentStack` in what `onUncaughtError`, `onCaughtError`, `onRecoverableError` and `componentDidCatch` get) are React's production stacks: host elements and boundaries by name, and each function and class component by the frame of a native stack trace, found as React's `describeNativeComponentFrame` finds it, by calling or constructing the component without props when the error is reported. Two cases differ. A component whose first call that throws without props is `use()` of a promise gets a frame with only its name, as compat's `use()` reads a promise outside a render where React's throws. Under JavaScriptCore (Bun, Safari), a component that returns a hook's result directly, a tail call, has no frame of its own, so the frame shown is the hook's, in compat's code rather than React's. An error a host element's props throw on an update starts the stack at the element's parent.
 - Repeated keys: where compat matches a list's rows against the old ones through a key map, as React does, it does what React's production build does, down to the old row React's map hides staying in the DOM, never rendered again. Before building a map, compat matches what it can cheaply (rows that line up from the end, one run of removed rows, two rows that traded places, rows inserted between unchanged ones, the changes a compiled list reports) by position. There, with a repeated key, React pairs the first new row of the key with the last old one and leaves the other old rows in the DOM, while compat pairs them in order: matching React would mean looking up every key of the rows that did not change, the work those paths exist to skip.
+- Hydration finds what React's production client finds (an element, text or Suspense boundary the server did not render, server nodes the client does not render, text that differs) and recovers as React does: the nearest Suspense boundary the server rendered drops the server's nodes and renders on the client, or the whole root does, and `onRecoverableError` gets React's error and component stack. A boundary the server could not finish (`<!--$!-->`) renders on the client with React's error. Where it differs:
+  - Hydration runs in one pass, before `hydrateRoot` returns, Suspense content included; React hydrates each boundary in a task of its own. So a boundary's errors are reported with the root's, after every layout effect of the pass.
+  - A boundary whose content suspends while hydrating drops the server's nodes and shows its fallback until the content can render; React keeps the server's HTML and hydrates it once the content is ready. A boundary still streaming in (`<!--$?-->`) is rendered on the client with React's error even while the document loads, where React waits for it.
+  - Claimed elements get the client's attributes and styles, written as on a mount. React's production client checks no attribute and keeps the server's until the prop next changes.
+  - An Activity boundary is not one hydration recovers at: a mismatch inside it renders the nearest Suspense boundary or the root on the client. An error other than a mismatch thrown while hydrating goes to the nearest error boundary or the root at once; React first renders the nearest Suspense boundary or root on the client again, reporting the first error as recoverable.
+  - Recovering a whole document, compat replaces `<html>` and everything in it; React keeps the `<html>`, `<head>` and `<body>` elements. Errors carry React's full messages rather than minified codes.
 
 ## Server rendering
 
@@ -87,11 +93,11 @@ Each module bundled whole, minified, for the browser in production mode, with Re
 
 | Bundle                              | Minified |    gzip |  brotli |
 | ----------------------------------- | -------: | ------: | ------: |
-| `@reactre/compat`                   |  80.2 KB | 29.6 KB | 26.2 KB |
-| `@reactre/compat/core`              |  76.9 KB | 28.4 KB | 25.3 KB |
+| `@reactre/compat`                   |  85.0 KB | 31.5 KB | 28.0 KB |
+| `@reactre/compat/core`              |  79.7 KB | 29.5 KB | 26.2 KB |
 | `react` + `react-dom/client` 19.3.1 | 214.1 KB | 66.7 KB | 57.4 KB |
 
-Class support, component stacks and React's handling of repeated keys cost an app about 5.5 KB minified, 2 KB gzipped, which apps on `@reactre/compat/core` leave out. Most of the runtime ships whatever an app imports: a counter with one `useState` and `createRoot` comes to 21.1 KB gzipped (19.1 KB on core), against 64.4 KB on React. Measured with Bun's bundler, gzip at level 9 and brotli at quality 11; Rolldown, the bundler in Vite, gives sizes within 1 KB of these.
+The feature modules cost an app about 7.1 KB minified, 2.7 KB gzipped: class support 1.3 KB gzipped, component stacks 0.9 KB and React's handling of repeated keys 0.5 KB, each left out with its key off. Most of the runtime ships whatever an app imports: a counter with one `useState` and `createRoot` comes to 21.6 KB gzipped (18.9 KB on core alone), against 64.4 KB on React. Measured with Bun's bundler, gzip at level 9 and brotli at quality 11; Rolldown, the bundler in Vite, gives sizes within 1 KB of these.
 
 ## License
 
