@@ -225,6 +225,8 @@
       "version": "0.0.1",
       "dependencies": {
         "@reactre/compiler": "workspace:*",
+        "@reactre/dom": "workspace:*",
+        "oxc-parser": "catalog:",
       },
       "devDependencies": {
         "@reactre/testdom": "workspace:*",

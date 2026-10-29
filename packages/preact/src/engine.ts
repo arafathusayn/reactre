@@ -31,6 +31,15 @@ export type Any = any;
 
 // #region Constants
 
+/**
+ * Class support. @reactre/preact/compiler rewrites this line to false for an app that switches
+ * classes off (the "Component" key), and the bundler drops the class-only code that tests it.
+ */
+const CLASSES: boolean = true;
+/** The error a class component meets with class support off. */
+const CLASSES_OFF =
+  ' is a class component, and class support is switched off: remove "Component" from @reactre/preact/compiler\'s off option.';
+
 /** Hydration attaches to the DOM tree without diffing it. */
 export const MODE_HYDRATE: number = 1 << 5;
 /** The vnode suspended on its previous render. */
@@ -437,7 +446,8 @@ function catchError(error: Any, vnode: Any, _oldVNode?: Any, errorInfo?: Any): v
       component.__g |= COMPONENT_FORCE;
       try {
         ctor = component.constructor;
-        if ((handled = ctor && ctor.getDerivedStateFromError)) component.setState(ctor.getDerivedStateFromError(error));
+        if (CLASSES && (handled = ctor && ctor.getDerivedStateFromError))
+          component.setState(ctor.getDerivedStateFromError(error));
         if (component.componentDidCatch) {
           component.componentDidCatch(error, errorInfo || {});
           handled = 1;
@@ -499,7 +509,7 @@ export function diff(
     try {
       let c: Any, oldProps: Any, oldState: Any, snapshot: Any;
       const newProps = newVNode.props;
-      const isClassComponent = (tmp = newType.prototype) && tmp.render;
+      const isClassComponent = CLASSES && (tmp = newType.prototype) && tmp.render;
       // The context this component reads: its contextType's provider value, or the whole map.
       tmp = newType.contextType;
       const provider = tmp && globalContext[tmp.__c];
@@ -511,6 +521,8 @@ export function diff(
       } else {
         if (isClassComponent) newVNode.__c = c = new newType(newProps, componentContext);
         else {
+          // Kept on one line: tests run with class support on, where it is only the test.
+          if (!CLASSES && (tmp = newType.prototype) && tmp.render) throw Error(newType.name + CLASSES_OFF);
           // A function component runs on a Component whose render calls it.
           newVNode.__c = c = new (Component as Any)(newProps, componentContext);
           c.constructor = newType;

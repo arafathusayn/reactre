@@ -42,6 +42,11 @@
       "bun": "./src/jsx-runtime.ts",
       "default": "./dist/jsx-runtime.js"
     },
+    "./dom": {
+      "types": "./src/dom.ts",
+      "bun": "./src/dom.ts",
+      "default": "./dist/dom.js"
+    },
     "./compiler": {
       "types": "./src/compiler.ts",
       "bun": "./src/compiler.ts",
@@ -54,10 +59,12 @@
     "NOTICE"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/core.ts src/compat.ts src/jsx-runtime.ts --outdir dist --target browser --format esm --splitting --chunk-naming \"chunk-[hash].[ext]\" --packages external && bun build src/compiler.ts --outdir dist --target node --format esm --packages external"
+    "build": "rm -rf dist && bun build src/core.ts src/compat.ts src/jsx-runtime.ts src/dom.ts --outdir dist --target browser --format esm --splitting --chunk-naming \"chunk-[hash].[ext]\" --packages external && bun build src/compiler.ts --outdir dist --target node --format esm --packages external"
   },
   "dependencies": {
-    "@reactre/compiler": "workspace:*"
+    "@reactre/compiler": "workspace:*",
+    "@reactre/dom": "workspace:*",
+    "oxc-parser": "catalog:"
   },
   "devDependencies": {
     "preact": "11.1.0",

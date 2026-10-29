@@ -29,6 +29,7 @@
 import { isIdent, literal, NOT_LITERAL, skipToken, split, until } from "@reactre/compiler/scan";
 import type { BunPlugin } from "bun";
 
+import { ALWAYS, entrySource, offKeys, SOURCES, usedApis } from "./api.ts";
 import { BAIL_PROPS, BAIL_TAGS, reactName, reactValue, UNCLONED } from "./rules.ts";
 
 // #region Plugin
@@ -44,18 +45,72 @@ export interface CompilerOptions {
    * (aliased to @reactre/preact/compat). Default "preact".
    */
   readonly source?: "preact" | "react";
+  /**
+   * APIs to switch off, by the name an app imports (useEffect, createPortal, Component) or a
+   * group (@classes, @suspense, @transitions); see src/api.ts. With any off, the plugin resolves
+   * `preact`, `preact/hooks`, `preact/compat` and `react` itself, each switched-off name throws,
+   * and a module that imports one fails the build. "Component" switches class support off.
+   */
+  readonly off?: readonly string[];
 }
 
-/** The Bun plugin: compiles the app's JSX files; node_modules is left to Bun. */
+const SRC = import.meta.dir;
+
+/**
+ * The Bun plugin: compiles the app's JSX files (node_modules is left to Bun), and switches off
+ * the APIs `off` names.
+ */
 export function reactrePreactCompiler(options: CompilerOptions = {}): BunPlugin {
   const filter = options.filter ?? /\.[jt]sx$/;
+  const compile = (source: string, path: string) => ({
+    contents: compileSource(source, path.endsWith(".tsx") ? "tsx" : "jsx", options),
+    loader: "js" as const,
+  });
+  const skip = (path: string) => path.includes("/node_modules/") || !!options.exclude?.(path);
   return {
     name: "@reactre/preact/compiler",
     setup(build) {
-      build.onLoad({ filter }, async ({ path }) => {
-        if (path.includes("/node_modules/") || options.exclude?.(path)) return undefined;
+      if (!options.off?.length) {
+        build.onLoad({ filter }, async ({ path }) =>
+          skip(path) ? undefined : compile(await Bun.file(path).text(), path),
+        );
+        return;
+      }
+      const exports = {
+        core: Object.keys(require(`${SRC}/core.ts`)),
+        compat: Object.keys(require(`${SRC}/compat.ts`)),
+      };
+      const off = offKeys(options.off, new Set([...exports.core, ...exports.compat].filter((k) => !ALWAYS.has(k))));
+      build.onResolve({ filter: SOURCES }, ({ path }) => ({
+        path: /^preact(\/hooks)?$/.test(path) ? "core" : "compat",
+        namespace: "reactre-preact-off",
+      }));
+      build.onLoad({ filter: /^(core|compat)$/, namespace: "reactre-preact-off" }, ({ path }) => ({
+        contents: entrySource(`${SRC}/${path}.ts`, exports[path as "core" | "compat"], off),
+        loader: "js",
+      }));
+      // Class support off: the class-only code of the engine and compat goes, by their constant.
+      if (off.has("Component"))
+        build.onLoad({ filter: /(engine|compat)\.ts$/ }, async ({ path }) =>
+          path === `${SRC}/engine.ts` || path === `${SRC}/compat.ts`
+            ? {
+                // Bun folds the constant inside functions, but not in a top-level `if`: that one
+                // is rewritten too.
+                contents: (await Bun.file(path).text())
+                  .replace(/const (CLASSES\w*): boolean = true;/, "const $1: boolean = false;")
+                  .replace("if (CLASSES_COMPAT)", "if (false)"),
+                loader: "ts",
+              }
+            : undefined,
+        );
+      build.onLoad({ filter: /\.[cm]?[jt]sx?$/ }, async ({ path }) => {
         const source = await Bun.file(path).text();
-        return { contents: compileSource(source, path.endsWith(".tsx") ? "tsx" : "jsx", options), loader: "js" };
+        // Component stays importable with class support off (instanceof checks, a class never
+        // rendered); a class that renders throws.
+        for (const k of usedApis(source, path))
+          if (off.has(k) && k != "Component")
+            throw new Error(`${path}: uses ${k}, which @reactre/preact/compiler's off option switches off.`);
+        return filter.test(path) && !skip(path) ? compile(source, path) : undefined;
       });
     },
   };

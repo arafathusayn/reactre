@@ -73,19 +73,27 @@ function shallowDiffers(a: Any, b: Any): boolean {
 
 Component.prototype.isReactComponent = true;
 
+/**
+ * Class support. @reactre/preact/compiler rewrites this line to false for an app that switches
+ * classes off (the "Component" key), as in src/engine.ts. Its name is its own: Bun folds only one
+ * module's constant of a given name.
+ */
+const CLASSES_COMPAT: boolean = true;
+
 // React's UNSAFE_ names for the legacy lifecycles: a class defining UNSAFE_componentWillMount
 // gets componentWillMount, and assigning the plain name still works.
-["componentWillMount", "componentWillReceiveProps", "componentWillUpdate"].forEach((key) => {
-  Object.defineProperty(Component.prototype, key, {
-    configurable: true,
-    get(this: Any) {
-      return this["UNSAFE_" + key];
-    },
-    set(this: Any, v: Any) {
-      Object.defineProperty(this, key, { configurable: true, writable: true, value: v });
-    },
+if (CLASSES_COMPAT)
+  ["componentWillMount", "componentWillReceiveProps", "componentWillUpdate"].forEach((key) => {
+    Object.defineProperty(Component.prototype, key, {
+      configurable: true,
+      get(this: Any) {
+        return this["UNSAFE_" + key];
+      },
+      set(this: Any, v: Any) {
+        Object.defineProperty(this, key, { configurable: true, writable: true, value: v });
+      },
+    });
   });
-});
 
 const oldEventHook = options.event;
 options.event = (e: Any) => {

@@ -14,6 +14,7 @@ bun add @reactre/preact
 | `@reactre/preact/compat`      | `preact/compat`, `react` | Preact's React layer: React's prop names, memo, forwardRef, Suspense, lazy |
 | `@reactre/preact/jsx-runtime` | `preact/jsx-runtime`     | The automatic JSX runtime                                                  |
 | `@reactre/preact/compiler`    | (none)                   | A Bun plugin that compiles JSX element trees into templates                |
+| `@reactre/preact/dom`         | (none)                   | The DOM-only build: templates and events, no components                    |
 
 Alias the modules you use at build time. With Bun:
 
@@ -61,6 +62,49 @@ A tree stays a `jsx()` call where its behaviour depends on more than attributes:
 - an element with both `class` and `className`.
 
 A template renders what Preact renders for the same JSX, and has the same vnode shape for code that reads it: `props`, `type` and `key`, `cloneElement`, `Children` and `toChildArray`. When a template meets anything but its own kind (another element of its tag, server DOM to hydrate), both sides become plain vnodes over the same DOM, and Preact's element diff takes over.
+
+## No JSX, no build step
+
+`html` writes the same elements as a tagged template, in plain JavaScript that runs straight in the browser, and never touches `createElement`:
+
+```ts
+import { html, render, useState } from "@reactre/preact/core";
+
+function Counter({ start }) {
+  const [n, setN] = useState(start);
+  return html`<button class="counter" onClick=${() => setN(n + 1)}>Clicked ${n} times</button>`;
+}
+
+render(html`<main><h1>Hello</h1><${Counter} start=${0} /></main>`, document.body);
+```
+
+Each template is parsed once per call site, into the templates the compiler would make of the same JSX, so it renders what that JSX renders on Preact. Components go in a tag as a value, closed with `/>`, `</${Counter}>` or `<//>`; `...${props}` spreads props; text follows JSX's whitespace rules. HTML entities are not decoded. `@reactre/preact/compat` exports `html` too, with React's prop names (`className`, `onDoubleClick`).
+
+## Strip out what you don't use
+
+The hooks and features are separate modules, so an app bundles only those it imports. To be sure of that, switch APIs off with the compiler's `off` option:
+
+```ts
+reactrePreactCompiler({ source: "react", off: ["@classes", "useEffect", "useLayoutEffect"] });
+```
+
+- **Keys** are the names an app imports from `preact`, `preact/hooks`, `preact/compat` and `react`, and the groups `@classes`, `@suspense` and `@transitions`. What every app needs (createElement, Fragment, render, options, the JSX runtime) is always on.
+- **Use one by mistake and the build tells you.** The plugin reads every module it bundles, your dependencies included. A named import, an `x.useEffect` through a default or namespace import, or a `require` of a switched-off API fails the build, naming the file and the key. A use the scan cannot see, such as `React[name]`, meets a function that throws.
+- **`Component` switches class support off.** The class-only code leaves the engine and compat, and a class that renders throws an error naming the fix. `Component` stays importable, as the base function components run on. Class-based APIs (`PureComponent`, compat's `Suspense`) go with it.
+- With any key off, the plugin resolves `preact`, `preact/hooks`, `preact/compat`, `react` and `react-dom` itself, so list it before your own aliases.
+
+## DOM-only
+
+For the absolute minimum, `@reactre/preact/dom` is templates and events with no components, vnodes or diff. It is reactre's DOM layer, [`@reactre/dom`](https://www.npmjs.com/package/@reactre/dom):
+
+```ts
+import { html, on, text } from "@reactre/preact/dom";
+
+let count = 0;
+const Counter = html`<button onclick=${on<"click">()}>Clicked ${text<number>()} times</button>`;
+const view = Counter.mount([() => view.set(1, ++count), count]);
+document.body.append(view.root);
+```
 
 ## Differences from Preact
 
