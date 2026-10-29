@@ -111,11 +111,11 @@ Each module bundled whole, minified, for the browser in production mode, with Re
 
 | Bundle                              | Minified |    gzip |  brotli |
 | ----------------------------------- | -------: | ------: | ------: |
-| `@reactre/compat`                   | 106.4 KB | 39.1 KB | 34.6 KB |
-| `@reactre/compat/core`              |  99.7 KB | 36.6 KB | 32.4 KB |
+| `@reactre/compat`                   | 120.4 KB | 44.0 KB | 39.0 KB |
+| `@reactre/compat/core`              | 103.9 KB | 38.0 KB | 33.6 KB |
 | `react` + `react-dom/client` 19.3.1 | 214.1 KB | 66.7 KB | 57.4 KB |
 
-The feature modules cost an app about 15.9 KB minified, 6.0 KB gzipped: class support 1.6 KB gzipped, React's transition lanes 1.8 KB, component stacks 1.1 KB, React's render retry 0.8 KB and React's handling of repeated keys 0.4 KB, each left out with its key off. `@reactre/compat/core` holds the code of the keys, the retry and the lanes, which a bundle that does not load their modules leaves out. Most of the runtime ships whatever an app imports: a counter with one `useState` and `createRoot` comes to 26.4 KB gzipped (20.4 KB on core alone), against 64.4 KB on React. Measured with Bun's bundler, gzip at level 9 and brotli at quality 11; Rolldown, the bundler in Vite, gives sizes within 1 KB of these.
+The feature modules cost an app about 29.6 KB minified, 10.9 KB gzipped: class support 1.6 KB gzipped, React's transition lanes 3.2 KB, React's view transitions 3.6 KB, component stacks 1.1 KB, React's render retry 0.8 KB and React's handling of repeated keys 0.4 KB, each left out with its key off. `@reactre/compat/core` holds the code of the keys, the retry, the lanes and the view transitions' commit, which a bundle that does not load their modules leaves out. Most of the runtime ships whatever an app imports: a counter with one `useState` and `createRoot` comes to 31.4 KB gzipped (20.5 KB on core alone), against 64.4 KB on React. Measured with Bun's bundler, gzip at level 9 and brotli at quality 11; Rolldown, the bundler in Vite, gives sizes within 1 KB of these.
 
 ## License
 
