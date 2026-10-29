@@ -53,14 +53,9 @@ export class El extends FakeElement {
   }
 
   private removed: [string, unknown][] = [];
-  removeEventListener(type: string, fn: unknown): void {
-    this.removed.push([type, fn]);
-    const map = (this as unknown as { listeners: Map<string, unknown[]> | null }).listeners;
-    if (map)
-      map.set(
-        type,
-        (map.get(type) ?? []).filter((f) => f !== fn),
-      );
+  override removeEventListener(...args: Parameters<FakeElement["removeEventListener"]>): void {
+    this.removed.push([args[0], args[1]]);
+    super.removeEventListener(...args);
   }
   override cloneNode(deep?: boolean): El {
     const c = new El(this.tagName, this.namespaceURI);
