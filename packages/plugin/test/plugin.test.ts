@@ -179,13 +179,26 @@ describe("compat: where react resolves", () => {
     };
     for (const options of [{ compat: { classes: false } }, { compat: { exclude: ["@classes"] } }]) {
       const src = await written(options);
-      expect(src).toContain('import "@reactre/compat/features/stacks";\nimport "@reactre/compat/features/keys";\n');
+      expect(src).toContain(
+        'import "@reactre/compat/features/stacks";\nimport "@reactre/compat/features/keys";\n' +
+          'import "@reactre/compat/features/retry";\n',
+      );
       expect(src).not.toContain("features/classes");
       expect(src).toContain('export * from "@reactre/compat/core";');
     }
     const src = await written({ compat: { exclude: ["componentStack"] } });
-    expect(src).toContain('import "@reactre/compat/features/classes";\nimport "@reactre/compat/features/keys";\n');
+    expect(src).toContain(
+      'import "@reactre/compat/features/classes";\nimport "@reactre/compat/features/keys";\n' +
+        'import "@reactre/compat/features/retry";\n',
+    );
     expect(src).not.toContain("features/stacks");
+    // The render retry off: the others load, it does not.
+    const noRetry = await written({ compat: { exclude: ["renderRetry"] } });
+    expect(noRetry).toContain(
+      'import "@reactre/compat/features/classes";\nimport "@reactre/compat/features/stacks";\n' +
+        'import "@reactre/compat/features/keys";\n',
+    );
+    expect(noRetry).not.toContain("features/retry");
   });
 
   test("esbuild: its own resolve, not registered for a react-server build", async () => {

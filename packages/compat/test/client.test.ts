@@ -2989,6 +2989,23 @@ describe("@reactre/compat/core", () => {
     expect(stacks).toEqual([""]);
   });
 
+  test("without the retry module, an error a render throws counts at once", async () => {
+    const Core = await core();
+    const seen: string[] = [];
+    const root = Core.createRoot(box() as unknown as Element, {
+      onUncaughtError: (e: Any) => void seen.push("uncaught " + e.message),
+      onRecoverableError: (e: Any) => void seen.push("recoverable " + e.message),
+    });
+    let calls = 0;
+    const Once = () => {
+      seen.push("render");
+      if (calls++ === 0) throw new Error("once");
+      return "ok";
+    };
+    Core.flushSync(() => root.render(Core.createElement(Once)));
+    expect(seen).toEqual(["render", "uncaught once"]);
+  });
+
   test("reconciles repeated keys by its own rules: no row is left outside the list", async () => {
     const Core = await core();
     const c = box(),

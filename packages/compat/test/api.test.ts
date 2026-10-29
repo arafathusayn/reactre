@@ -41,7 +41,7 @@ describe("API manifest", () => {
       ]),
     );
     expect(enabledApis(["hydrateRoot", "useFormState"], ["useState", "repeatedKeys"])).toEqual(
-      new Set(["hydrateRoot", "useFormState", "useActionState", "componentStack"]),
+      new Set(["hydrateRoot", "useFormState", "useActionState", "componentStack", "renderRetry"]),
     );
   });
 
@@ -65,7 +65,9 @@ describe("API manifest", () => {
 
   test("an unknown key, or no root, is an error", () => {
     expect(() => enabledApis("all", ["useStat"])).toThrow('"useStat" is not an API key');
-    expect(() => enabledApis("all", ["useStat"])).toThrow("the behaviours componentStack, repeatedKeys and the groups");
+    expect(() => enabledApis("all", ["useStat"])).toThrow(
+      "the behaviours componentStack, repeatedKeys, renderRetry and the groups",
+    );
     expect(() => enabledApis(["@forms"], [])).toThrow("an app needs createRoot or hydrateRoot");
     expect(() => enabledApis("all", ["createRoot", "hydrateRoot"])).toThrow("needs createRoot or hydrateRoot");
   });

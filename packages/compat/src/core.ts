@@ -1489,7 +1489,8 @@ function create(it: Any, p: Fiber, key: Key): Fiber {
     // A child that fails to mount is dropped: nothing of it is committed. While hydrating, the
     // server's nodes it claimed stay, for the content to hydrate again or render on the client.
     renderThrew(f, e);
-    dropFailed(f);
+    if (retries !== null) retries.drop(f);
+    else unmount(f, !hydrating);
     throw e;
   }
   // A new node under a Fragment ref gets its instance's listeners and observers.
@@ -3935,16 +3936,15 @@ function runRoot(f: Fiber): void {
   curNs = f.ns = nsOfContainer(f.d);
   let thrown = f.x;
   f.x = null;
-  // A first render that meets an error renders again whole (see firstAgain).
+  // With ./features/retry.ts, a first render that meets an error renders again whole (see
+  // firstAgain).
   let first = false;
   if (!r.mounted) {
     r.mounted = true;
     if (r.hydrate) (hydrating = r.hydrate).begin(f);
     else {
       f.d.textContent = "";
-      first = true;
-      firstErrors = [];
-      redo++;
+      if (retries !== null) first = retries.begin();
     }
   }
   try {
@@ -3952,19 +3952,15 @@ function runRoot(f: Fiber): void {
       try {
         reconcile(f, f.p);
       } catch (e) {
-        thrown = e;
-        // React renders a render that failed again before its error counts (see failed).
-        if (!first && !isThenable(e)) {
-          const errors = failed(f, e);
-          if (errors !== null) thrown = rootAgain(f, errors);
-        }
+        // With ./features/retry.ts, a render that failed renders again before its error counts.
+        thrown = first || retries === null ? e : retries.root(f, e);
       }
     }
     if (hydrating) {
       thrown = hydrating.root(f, thrown);
       hydrating = ph2;
     }
-    if (first) thrown = firstAgain(f, thrown);
+    if (first) thrown = retries!.first(f, thrown);
     if (thrown !== null) {
       if (isThenable(thrown)) thrown.then(retry(f), retry(f));
       else {
@@ -3996,6 +3992,12 @@ function firstAgain(f: Fiber, thrown: Any): Any {
   if (!errors.length || promise) return thrown;
   discardAll(f);
   return rootAgain(f, errors);
+}
+
+/** A root render (not its first) threw `e`: what the root has to handle (see failed). */
+function rootThrew(f: Fiber, e: Any): Any {
+  const errors = isThenable(e) ? null : failed(f, e);
+  return errors === null ? e : rootAgain(f, errors);
 }
 
 /** React's retry of a root render that threw: it renders again. Returns what that throws, else null. */
@@ -4324,14 +4326,14 @@ export function __installClasses(make: (core: ClassCore) => ClassSupport): void 
     },
     isRendering: (f) => f === cur,
     report: callReport,
-    thrownIn: childThrew,
-    renderThrew,
+    thrownIn: (f, e) => childThrew(f, e),
+    renderThrew: (f, e) => renderThrew(f, e),
     // Class support asks for a stack only for an error a boundary caught: counted for hydration.
     componentStack: (e, f) => (failures++, stackOf(e, f)),
-    failed,
-    again: retryRender,
-    forShow,
-    discard: discardAll,
+    failed: (f, e) => (retries === null ? null : retries.failed(f, e)),
+    again: (f, errors, fn) => retries!.again(f, errors, fn),
+    forShow: (fn) => retries!.forShow(fn),
+    discard: (f) => retries!.discard(f),
   });
 }
 
@@ -5480,19 +5482,16 @@ function reportUncaught(e: Any): void {
 // update again from. Written by the first catch an error passes, only on a throw.
 let lastError: Any = null,
   inRender = false;
-/** A component's render (or a child that failed to mount) threw `e` in f. */
-function renderThrew(f: Fiber, e: Any): void {
+// A component's render (or a child that failed to mount) threw `e` in f; rendering f's children
+// (or f's lifecycles) did. Until ./features/retry.ts installs `noted`, each only records the
+// throw for the component stack.
+let renderThrew: (f: Fiber, e: Any) => void = (f, e) => thrownIn(f, e),
+  childThrew = renderThrew;
+/** Record a throw (see renderThrew), and whether a render threw it, if nothing caught it before. */
+function noted(f: Fiber, e: Any, render: boolean): void {
   if (e !== lastError) {
     lastError = e;
-    inRender = true;
-  }
-  thrownIn(f, e);
-}
-/** Rendering f's children (or f's lifecycles) threw `e`. */
-function childThrew(f: Fiber, e: Any): void {
-  if (e !== lastError) {
-    lastError = e;
-    inRender = false;
+    inRender = render;
   }
   thrownIn(f, e);
 }
@@ -5501,7 +5500,7 @@ function childThrew(f: Fiber, e: Any): void {
 // a throw records nothing and errors are reported with an empty stack.
 let thrownIn: (f: Fiber, e: Any) => void = () => {},
   stackOf: (e: Any, f: Fiber | null, keep?: boolean) => string = () => "",
-  captureStacks: (e: Any, f: Fiber) => string = () => "";
+  captureStacks: (e: Any, f: Fiber) => string = stackOf;
 
 // Parents render before children: queued fibers sort by depth, counted when
 // more than one is queued (rare) instead of stored in every fiber.
@@ -5629,10 +5628,10 @@ function rerender(f: Fiber): void {
   try {
     run(f, f.p, false);
   } catch (e) {
-    // React renders a render that failed again before its error counts (see failed).
-    const errors = isThenable(e) ? null : failed(f, e);
-    const x = errors === null ? e : renderAgain(f, e, errors);
-    if (errors === null || x !== null) {
+    // With ./features/retry.ts, a render that failed renders again before its error counts: what
+    // that throws goes on, if anything.
+    const x = retries === null ? e : retries.queued(f, e);
+    if (x !== null) {
       unwinding = true;
       throwTo(f, x);
     }
@@ -5692,6 +5691,46 @@ function safely(f: Fiber, fn: () => void): void {
     throwTo(f, e);
   }
 }
+
+/**
+ * Internal: the render retries (see failed); @reactre/compat/features/retry calls it when it
+ * loads. Until then, an error a render throws counts at once. The code stays here, beside the
+ * render loop whose internals it uses; a core build that never loads the module leaves it out.
+ */
+export function __installRetry(): void {
+  renderThrew = (f, e) => noted(f, e, true);
+  childThrew = (f, e) => noted(f, e, false);
+  retries ??= {
+    begin() {
+      firstErrors = [];
+      redo++;
+      return true;
+    },
+    root: rootThrew,
+    first: firstAgain,
+    queued: renderAgain,
+    drop,
+    failed,
+    again: retryRender,
+    forShow,
+    discard: discardAll,
+  };
+}
+
+/** What the render loop calls of the retries, when they are installed. */
+interface Retries {
+  /** A root's first render starts: true. */
+  begin(): boolean;
+  root(f: Fiber, e: Any): Any;
+  first(f: Fiber, thrown: Any): Any;
+  queued(f: Fiber, e: Any): Any;
+  drop(f: Fiber): void;
+  failed(f: Fiber, e: Any): Any[] | null;
+  again(f: Fiber, errors: Any[], fn: () => void): Any;
+  forShow(fn: () => void): void;
+  discard(f: Fiber): void;
+}
+let retries: Retries | null = null;
 
 // React renders a render that threw an error again, at once, before the error counts (see
 // failed). `redo`: a retry above renders this work again (a root's first render, or a fallback
@@ -5797,11 +5836,14 @@ function once(q: Hook[], start: number): Hook[] {
 }
 
 /**
- * React's retry of a queued fiber whose render threw `e`: the boundary above renders its fallback
- * only for show (React's first pass unwinds to it), then the fiber renders again. Returns what that
- * throws, for its boundary or the root, else null.
+ * A queued fiber's render threw `e`. An error that renders again (see failed) is React's retry: the
+ * boundary above renders its fallback only for show (React's first pass unwinds to it), then the
+ * fiber renders again. Returns what goes on to its boundary or the root (`e`, or what the retry
+ * throws), else null.
  */
-function renderAgain(f: Fiber, e: Any, errors: Any[]): Any {
+function renderAgain(f: Fiber, e: Any): Any {
+  const errors = isThenable(e) ? null : failed(f, e);
+  if (errors === null) return e;
   draftAt(f, e);
   const x = retryRender(f, errors, () => run(f, f.p, false));
   if (x !== null && !isThenable(x)) captureStacks(x, f);
@@ -5877,7 +5919,7 @@ function discardAll(p: Fiber): void {
 let discarding = false;
 
 /** A fiber that failed to mount: unmounted as never committed (see discardAll). */
-function dropFailed(f: Fiber): void {
+function drop(f: Fiber): void {
   const prev = discarding;
   discarding = true;
   try {

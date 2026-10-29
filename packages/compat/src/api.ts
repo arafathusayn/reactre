@@ -91,9 +91,10 @@ export const KEYS: readonly string[] = [
  * Keys for React's behaviours that are not exports: on unless the options exclude them, whatever
  * `apis` lists. `componentStack`: errors are reported with React's component stack (else an empty
  * one). `repeatedKeys`: a list whose keys repeat is reconciled as React does (else by compat's own
- * rules).
+ * rules). `renderRetry`: a render that throws renders again before its error counts, as React does
+ * (else the error counts at once).
  */
-export const BEHAVIOURS: readonly string[] = ["componentStack", "repeatedKeys"];
+export const BEHAVIOURS: readonly string[] = ["componentStack", "repeatedKeys", "renderRetry"];
 
 /**
  * The keys whose code is a module of its own, and that module. With the key on, the module
@@ -103,6 +104,7 @@ export const MODULES: Readonly<Record<string, string>> = {
   Component: "@reactre/compat/features/classes",
   componentStack: "@reactre/compat/features/stacks",
   repeatedKeys: "@reactre/compat/features/keys",
+  renderRetry: "@reactre/compat/features/retry",
 };
 
 /** Groups of keys, by the feature they make up. A group is written where a key may be. */

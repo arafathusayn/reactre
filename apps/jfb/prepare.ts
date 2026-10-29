@@ -96,8 +96,9 @@ function resolveFrom(dir: string, react: Entry["react"]): BunPlugin {
         path: Bun.resolveSync(args.path, dir),
       }));
       // The benchmark app's explicit choice: @reactre/compat/core alone, without the modules that
-      // install class components, React's component stacks and React's handling of repeated keys
-      // (@reactre/compat/features/*). It renders no class, reports no error and repeats no key.
+      // install class components, React's component stacks, React's handling of repeated keys and
+      // its render retry (@reactre/compat/features/*). It renders no class, throws no error and
+      // repeats no key.
       if (react === "reactre-compat")
         build.onResolve({ filter: /^react(-dom)?(\/.*)?$/ }, () => ({
           path: Bun.resolveSync("@reactre/compat/core", dir),

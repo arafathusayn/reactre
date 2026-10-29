@@ -62,8 +62,8 @@ export interface CompatOptions {
   /**
    * APIs to switch off, as keys or groups. The build fails where code uses one; at run time each
    * is a function that throws, naming the fix. The behaviours `"componentStack"` (React's
-   * component stack in error reports) and `"repeatedKeys"` (React's handling of a list whose keys
-   * repeat) are on unless listed here.
+   * component stack in error reports), `"repeatedKeys"` (React's handling of a list whose keys
+   * repeat) and `"renderRetry"` (React's retry of a render that throws) are on unless listed here.
    */
   readonly exclude?: readonly string[];
 }

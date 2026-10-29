@@ -7,10 +7,11 @@
 // Profiles:
 //   full  the default entry, React's whole client API with class components
 //   core  @reactre/compat/core, the same without the feature modules: class components,
-//         component stacks and React's handling of repeated keys
+//         component stacks, React's handling of repeated keys and its render retry
 //   jfb   the js-framework-benchmark React app (apps/jfb/app/main.jsx) on core, compiled to
 //         templates: the benchmark's explicit choice to leave out class components, component
-//         stacks and React's handling of repeated keys (apps/jfb/prepare.ts resolves the same)
+//         stacks, React's handling of repeated keys and its render retry (apps/jfb/prepare.ts
+//         resolves the same)
 
 import { expect, test } from "bun:test";
 import { gzipSync } from "node:zlib";
