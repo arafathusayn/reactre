@@ -94,7 +94,7 @@ reactre({
 
 - React's export names, such as `useState`, `useEffect`, `createPortal` or `hydrateRoot`.
 - Groups: `"@suspense"`, `"@transitions"`, `"@forms"`, `"@hints"` and `"@classes"`.
-- Behaviours, which are not exports: `"componentStack"`, React's component stack in what `onUncaughtError`, `onCaughtError`, `onRecoverableError` and `componentDidCatch` get (off, it is empty), `"repeatedKeys"`, React's handling of a list whose keys repeat (off, compat pairs the rows by its own rules), and `"renderRetry"`, React's retry of a render that throws before its error counts (off, the error goes to the nearest error boundary or the root at once). A behaviour is on unless `exclude` names it, whatever `apis` lists.
+- Behaviours, which are not exports: `"componentStack"`, React's component stack in what `onUncaughtError`, `onCaughtError`, `onRecoverableError` and `componentDidCatch` get (off, it is empty), `"repeatedKeys"`, React's handling of a list whose keys repeat (off, compat pairs the rows by its own rules), `"renderRetry"`, React's retry of a render that throws before its error counts (off, the error goes to the nearest error boundary or the root at once), and `"concurrentRendering"`, React's transition lanes: a transition renders after urgent updates, `isPending` shows first, and one that suspends where content shows keeps the screen until its data comes (off, a transition renders at once). A behaviour is on unless `exclude` names it, whatever `apis` lists.
 
 `@reactre/compat/api` lists them all. A key brings in what it is part of: `PureComponent` brings `Component`, and `useFormState` brings `useActionState`.
 

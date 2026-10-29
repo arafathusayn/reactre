@@ -318,13 +318,8 @@ function support(core: ClassCore): ClassSupport {
       const f = inst[INSTANCE];
       // Before mount (a setState in the constructor) or after unmount, an update does nothing.
       if (f === undefined || f.f & DEAD) return;
-      if (partial !== null) (f.q ??= []).push(partial);
-      if (force) f.f |= FORCE;
-      if (typeof cb === "function") (f.rx ??= []).push(cb);
-      // A setState during the component's own render is marked, not scheduled: the update waits
-      // in the queue for the next render.
-      if (core.isRendering(f)) f.f |= RERENDER;
-      else core.schedule(f);
+      // In a transition (with ./concurrent.ts), it waits for the transition to render.
+      if (!core.waits(f, () => enqueue(f, partial, cb, force))) enqueue(f, partial, cb, force);
     },
     /** componentWillUnmount (the core detached the ref before). */
     unmount(f) {
@@ -333,6 +328,17 @@ function support(core: ClassCore): ClassSupport {
     },
     draft,
   };
+
+  /** Queue an update of class fiber `f` and schedule its render. */
+  function enqueue(f: Any, partial: Any, cb: (() => void) | undefined, force: boolean): void {
+      if (partial !== null) (f.q ??= []).push(partial);
+      if (force) f.f |= FORCE;
+      if (typeof cb === "function") (f.rx ??= []).push(cb);
+      // A setState during the component's own render is marked, not scheduled: the update waits
+      // in the queue for the next render.
+      if (core.isRendering(f)) f.f |= RERENDER;
+      else core.schedule(f);
+  }
 
   // #endregion
 }

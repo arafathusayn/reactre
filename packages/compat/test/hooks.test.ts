@@ -6,8 +6,9 @@
 // server-only stubs.
 //
 // Each test asserts what React 19 does. Updates made outside an event render in a task of their
-// own, so tests that make them wait for `nextTask`; updates in a discrete event's listener (a
-// form's submit) render in a microtask.
+// own, so tests that make them wait for `nextTask`, and so do transitions' updates, which
+// flushSync leaves to their task; updates in a discrete event's listener (a form's submit) render
+// in a microtask. The default entry, with every feature module, runs them.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
@@ -53,7 +54,7 @@ import {
   useSyncExternalStore,
   useSyncExternalStoreWithSelector,
   useTransition,
-} from "../src/core.ts";
+} from "../src/index.ts";
 
 // #region Fixtures
 
@@ -814,8 +815,10 @@ describe("startTransition and useTransition", () => {
     d.resolve();
     await nextTask();
     expect(html()).toBe("<p>idle</p>");
-    // A synchronous transition is over when it returns.
+    // A synchronous transition renders isPending at once and is over in its task.
     flushSync(() => start(() => {}));
+    expect(html()).toBe("<p>pending</p>");
+    await nextTask();
     expect(html()).toBe("<p>idle</p>");
     expect(seen.at(-1)).toBe(false);
   });
@@ -932,7 +935,7 @@ describe("useOptimistic", () => {
     expect(html()).toBe("<p>a</p>");
   });
 
-  test("without a reducer, the update is the optimistic state", () => {
+  test("without a reducer, the update is the optimistic state", async () => {
     let set!: (v: string) => void;
     function App() {
       const [v, s] = useOptimistic("real");
@@ -940,15 +943,19 @@ describe("useOptimistic", () => {
       return h("p", null, v);
     }
     render(h(App));
-    flushSync(() => startTransition(() => (set("guess"), new Promise(() => {}))));
+    const d = deferred();
+    flushSync(() => startTransition(() => (set("guess"), d.promise)));
     expect(html()).toBe("<p>guess</p>");
+    // Settled, so later transitions do not wait for it.
+    d.resolve();
+    await nextTask();
   });
 });
 
 // Dispatches are made in transitions, as React expects: outside one, React's isPending stays false.
 describe("useActionState", () => {
   // React runs the first queued action synchronously, inside dispatch.
-  test("an action with nothing queued before it runs inside dispatch", () => {
+  test("an action with nothing queued before it runs inside dispatch", async () => {
     const log: string[] = [];
     let dispatch!: (p: number) => void;
     function App() {
@@ -964,6 +971,7 @@ describe("useActionState", () => {
       }),
     );
     expect(log).toEqual(["run 1", "after dispatch"]);
+    await nextTask();
     expect(html()).toBe("<p>1</p>");
   });
 

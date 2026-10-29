@@ -69,7 +69,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/index.ts src/core.ts src/server.ts src/features/classes.ts src/features/stacks.ts src/features/keys.ts src/features/retry.ts --outdir dist --target browser --format esm --splitting --chunk-naming \"chunk-[hash].[ext]\" --packages external && bun build src/compiler.ts src/api.ts --outdir dist --target node --format esm --packages external"
+    "build": "rm -rf dist && bun build src/index.ts src/core.ts src/server.ts src/features/classes.ts src/features/stacks.ts src/features/keys.ts src/features/retry.ts src/features/concurrent.ts --outdir dist --target browser --format esm --splitting --chunk-naming \"chunk-[hash].[ext]\" --packages external && bun build src/compiler.ts src/api.ts --outdir dist --target node --format esm --packages external"
   },
   "dependencies": {
     "@reactre/compiler": "workspace:*",

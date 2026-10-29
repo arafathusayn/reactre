@@ -7,7 +7,7 @@
 // ids useId gives while hydrating server HTML, the rows and their state when keys repeat, the
 // component stacks errors are reported with, and the errors themselves: React's production codes.
 
-import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 
 import { FakeElement, FakeEvent, FakeNode, FakeText, HTML_NS, installFakeDocument } from "@reactre/testdom";
 
@@ -29,9 +29,13 @@ const ReactServer: Any = await load("react-dom/server.browser");
 // server builds a later file loads hand what they cannot place to: the ones before it go back
 // after this file.
 const internals = ReactDOM.__DOM_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE;
-const dispatcher = internals.d;
-afterAll(() => void (internals.d = dispatcher));
+const before = internals.d;
 const ReactClient: Any = await load("react-dom/client");
+// The client installs them once, as the first file that loads it does: each file that renders
+// with it keeps both, from the first, in a global.
+const dispatchers = ((globalThis as Any).__reactDispatchers ??= { before, client: internals.d });
+beforeAll(() => void (internals.d = dispatchers.client));
+afterAll(() => void (internals.d = dispatchers.before));
 if (prevEnv === undefined) delete process.env["NODE_ENV"];
 else process.env["NODE_ENV"] = prevEnv;
 

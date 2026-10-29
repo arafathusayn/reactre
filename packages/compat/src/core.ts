@@ -3862,6 +3862,8 @@ class RootImpl implements Root {
   waits = false;
   /** The event listener on each element this root listens on: its container and portals'. */
   readonly listeners = new Map<Node, Listener>();
+  /** The last render() made in a transition, until it renders, or an urgent one replaces it (see laneRoot). */
+  pt: Any = null;
   constructor(container: Any, opts: RootOptions) {
     this.opts = opts;
     this.prefix = opts.identifierPrefix ?? "";
@@ -3873,6 +3875,8 @@ class RootImpl implements Root {
   /** Schedule a render of `children`; throws after unmount, as React does. */
   render(children: Any): void {
     if (this.f.f & DEAD) throw new Error(prodMessage(409));
+    // With ./features/concurrent.ts, a render() made in a transition waits for it.
+    if (lanes !== null && lanes.root(this, children)) return;
     this.f.p = children;
     this.tr = transition !== null;
     schedule(this.f);
@@ -3976,11 +3980,15 @@ function runRoot(f: Fiber): void {
     if (first) thrown = retries!.first(f, thrown);
     if (thrown !== null) {
       if (isThenable(thrown)) {
-        if (pre && !r.tr) {
-          prerender(f, thrown);
-          r.waits = !syncOnly;
+        // A transition that can be undone keeps the screen (see attempt).
+        if (holding !== null) holding.bad.push(thrown);
+        else {
+          if (pre && !r.tr) {
+            prerender(f, thrown);
+            r.waits = !syncOnly;
+          }
+          thrown.then(retry(f), retry(f));
         }
-        thrown.then(retry(f), retry(f));
       } else {
         removeAll(f);
         const report = r.opts.onUncaughtError;
@@ -4289,6 +4297,8 @@ export interface ClassCore {
   checkRef(ref: Any): void;
   detachRef(f: Any, ref: Any): void;
   schedule(f: Any): void;
+  /** A class update `fn` made in a transition waits for it (with ./concurrent.ts): true, else false. */
+  waits(f: Any, fn: () => void): boolean;
   /** Run fn with f as the component rendering now. */
   rendering<T>(f: Any, fn: () => T): T;
   /** Whether f is the component rendering now. */
@@ -4351,6 +4361,7 @@ export function __installClasses(make: (core: ClassCore) => ClassSupport): void 
     checkRef,
     detachRef,
     schedule,
+    waits: (f, fn) => lanes !== null && lanes.later(f, fn),
     rendering(f, fn) {
       const prev = cur;
       cur = f;
@@ -4490,7 +4501,10 @@ function detachRef(f: Fiber, ref: Any): void {
  * them when it shows.
  */
 function swapRef(f: Fiber, ref: Any, oref: Any): void {
-  if (oref != null && (hiddenCount === 0 || hiddenLevel(f) === 0)) detachRef(f, oref);
+  if (oref != null && (hiddenCount === 0 || hiddenLevel(f) === 0))
+    // A transition that can be undone detaches it as it commits (see attempt).
+    if (holding !== null) holding.q.push(f, () => detachRef(f, oref));
+    else detachRef(f, oref);
   if (ref != null) {
     checkRef(ref);
     laterShown(f, () => attachRef(f, ref, f.n === HOST ? f.d : fragmentRefs!.of(f)));
@@ -5036,6 +5050,8 @@ function suspense(f: Fiber): void {
   let thrown = f.x;
   f.x = null;
   let primary: Fiber | null = f.s;
+  // Content that shows, which a transition that suspends keeps (see attempt).
+  const shown = primary !== null && f.q === null;
   if (thrown === null) {
     try {
       if (primary === null) {
@@ -5099,6 +5115,12 @@ function suspense(f: Fiber): void {
   f.c = primary !== null ? [primary, fb] : [fb];
   for (let i = 0, cs = f.c; i < cs.length; i++) cs[i]!.i = i;
   curHost.f |= STRUCT;
+  // A transition that can be undone keeps content that showed; its retries wait for its commit.
+  if (holding !== null) {
+    if (shown) holding.bad.push(thrown);
+    holding.t.push(f, thrown);
+    return;
+  }
   const again = retry(f);
   thrown.then(again, again);
 }
@@ -5719,8 +5741,12 @@ function throwTo(f: Fiber, e: Any): void {
   schedule(p);
 }
 
-/** Run `fn` (an effect, a cleanup, a ref), routing anything it throws to f's boundary. */
+/**
+ * Run `fn` (an effect, a cleanup, a ref), routing anything it throws to f's boundary. While a
+ * transition renders where it can be undone, it waits for the commit (see attempt).
+ */
 function safely(f: Fiber, fn: () => void): void {
+  if (holding !== null) return void holding.q.push(f, fn);
   try {
     fn();
   } catch (e) {
@@ -6021,10 +6047,12 @@ export function act(callback: () => Any): Promise<void> {
   } finally {
     batch--;
   }
-  // Until nothing is pending; capped, so an effect that always schedules cannot hang a test.
+  // Until nothing is pending, transitions included; capped, so an effect that always schedules
+  // cannot hang a test.
   const settle = (): void => {
-    for (let i = 0; i < 100 && (queue.length || passiveQ.length || passiveUnmountQ.length || layoutQ.length); i++)
-      flushWork(true);
+    for (let i = 0; i < 100; i++)
+      if (queue.length || passiveQ.length || passiveUnmountQ.length || layoutQ.length) flushWork(true);
+      else if (lanes === null || !lanes.flush()) break;
   };
   if (isThenable(r)) return Promise.resolve(r).then(settle);
   settle();
@@ -6295,6 +6323,8 @@ export function useReducer<S, A>(
     h.s = (a: A) => {
       // A setter called after unmount does nothing, as in React.
       if (f.f & DEAD) return;
+      // With ./features/concurrent.ts, an update made in a transition waits for it.
+      if (lanes !== null && f !== cur && lanes.set(h, a)) return;
       const next = h.r(h.v, a);
       if (Object.is(next, h.v)) return;
       h.v = next;
@@ -6498,6 +6528,9 @@ export function useSyncExternalStore<T>(
   box.g = getSnapshot;
   box.u = subscribe;
   effect(PASSIVE, () => subscribe(box.c), [subscribe]);
+  // A transition checks a new store, or one whose snapshot or getter changed, once more before
+  // it commits (see attempt), as React's pushStoreConsistencyCheck.
+  if (holding !== null && check) holding.s.push(box);
   // The check is the store hook's own slot, queued as a passive callback after the subscription's
   // effect, as React orders them: no allocation, and nothing queued when nothing changed.
   if (check) (f.x ??= []).push(h, box.c, null);
@@ -6649,8 +6682,10 @@ export function browser(reason?: unknown): { $$typeof: symbol; _reason: unknown 
 
 // #region Transitions and actions
 
-// Rendering is synchronous, so a transition changes no render priority: what it tracks is the
-// async work it started, to know when it is over (pending flags, optimistic state, form status).
+// Without ./features/concurrent.ts, rendering is synchronous, so a transition changes no render
+// priority: what it tracks is the async work it started, to know when it is over (pending flags,
+// optimistic state, form status). With it, a transition's updates wait in a lane of their own
+// (see Transition lanes).
 
 /** A running transition or action. */
 interface Transition {
@@ -6674,6 +6709,21 @@ function inTransition(t: Transition, fn: () => Any): Any {
 }
 
 /**
+ * Make an optimistic update (`fn`): React's, on its sync lane, outside any transition, rendered in
+ * a microtask whatever the event (with ./features/concurrent.ts; else as any update).
+ */
+function optimistic(fn: () => void): void {
+  if (lanes !== null) flushSoon(true);
+  const prevT = transition;
+  transition = null;
+  try {
+    fn();
+  } finally {
+    transition = prevT;
+  }
+}
+
+/**
  * Finish transition `t` once `r` (its callback's result) and the work it queued settle; a
  * rejection goes to `onError`, or is reported.
  */
@@ -6682,18 +6732,21 @@ function settle(t: Transition, r: Any, onError?: (e: Any) => void): void {
     for (const d of t.done) d();
   };
   if (t.wait !== undefined && t.wait.length) r = Promise.all([r, ...t.wait]);
-  if (isThenable(r))
+  if (isThenable(r)) {
+    // An async action: the transitions wait for it (React's entangled action lane).
+    if (lanes !== null) lanes.act(r);
     r.then(fin, (e: Any) => {
       fin();
       if (onError) onError(e);
       else reportUncaught(e);
     });
-  else fin();
+  } else fin();
 }
 
 /**
- * Run `fn` as a transition. Rendering is synchronous, so its updates render at once. An error it
- * throws, or rejects with, is reported, as React's reportGlobalError does.
+ * Run `fn` as a transition: its updates render in a task after urgent ones (at once without
+ * ./features/concurrent.ts). An error it throws, or rejects with, is reported, as React's
+ * reportGlobalError does.
  */
 export function startTransition(fn: () => Any): void {
   const t: Transition = { done: [], wait: [] };
@@ -6710,19 +6763,27 @@ export function startTransition(fn: () => Any): void {
 
 /**
  * `[isPending, startTransition]`; pending lasts while an async transition runs. An error from
- * the transition goes to the component's nearest error boundary, as in React.
+ * the transition goes to the component's nearest error boundary, as in React. With
+ * ./features/concurrent.ts, isPending is true until the transition renders: it is set in a
+ * microtask (React's optimistic update, on its sync lane), and false in the transition.
  */
 export function useTransition(): [boolean, (fn: () => Any) => void] {
   const [pending, setPending] = useState(false);
   const f = cur!;
   const h = hook();
   if (h.s === null) {
+    const off = (): void => setPending(false);
     h.s = (fn: () => Any) => {
-      setPending(true);
-      const t: Transition = { done: [() => setPending(false)], wait: [] };
+      optimistic(() => setPending(true));
+      // With the lanes, isPending goes false in the transition; without, once it is over.
+      const t: Transition = { done: lanes !== null ? [] : [off], wait: [] };
       let r: Any;
       try {
-        r = inTransition(t, fn);
+        r = inTransition(t, () => {
+          const r = fn();
+          if (lanes !== null) off();
+          return r;
+        });
       } catch (e) {
         // As React's: the error goes to the component's boundary, not to the caller.
         setPending(false);
@@ -6736,28 +6797,26 @@ export function useTransition(): [boolean, (fn: () => Any) => void] {
 }
 
 /**
- * The value; `initial` on the first render, then the value right after. With synchronous
- * rendering there is no background render to defer to, so later renders return `value` itself.
+ * The value; `initial` on the first render, then the value right after. With
+ * ./features/concurrent.ts, an urgent render returns the value it returned last and a transition
+ * renders the new one, as React's background render; without it, there is no background render
+ * to defer to, so later renders return `value` itself.
  */
 export function useDeferredValue<T>(value: T, initial?: T): T {
   const h = hook();
+  // h.v: the value returned last.
   if (h.s === null) {
     h.s = 1;
-    if (initial !== undefined) {
-      // h.v is true while `initial` shows; a layout callback switches to the value at once.
-      h.v = true;
-      // A server render shows `initial` and nothing renders after it.
-      if (server === null) {
-        const f = h.f;
-        later(f, () => {
-          h.v = false;
-          schedule(f);
-        });
-      }
-      return initial;
-    }
+    if (initial === undefined || laneRender) return (h.v = value);
+    h.v = initial;
+    // A server render shows `initial` and nothing renders after it. Else, after this commit, a
+    // transition renders the value (with ./features/concurrent.ts), or a render right after.
+    if (server === null) later(h.f, () => (lanes !== null ? lanes.defer(h.f) : schedule(h.f)));
+    return initial;
   }
-  return h.v === true ? (initial as T) : value;
+  if (lanes === null || laneRender || Object.is(value, h.v)) return (h.v = value);
+  lanes.defer(h.f);
+  return h.v;
 }
 
 /**
@@ -6876,7 +6935,7 @@ export function useActionState<S, P>(
       node.p.catch(noop);
       if (node.t !== null) {
         box.n++;
-        setPending(true);
+        optimistic(() => setPending(true));
         // A form action or transition that queued this waits for it.
         if (outer!.wait !== undefined) outer!.wait.push(node.p.then(noop, noop));
       } else setState(() => node.p);
@@ -6888,6 +6947,417 @@ export function useActionState<S, P>(
   return [isThenable(stored) ? readThenable(stored) : stored, h.s, pending];
 }
 export { useActionState as useFormState };
+
+// #endregion
+
+// #region Transition lanes (./features/concurrent.ts)
+
+// React renders a transition concurrently: its updates wait in a lane of their own while urgent
+// ones render first, and a render that suspends where content already shows commits nothing,
+// the screen staying as it was until the data comes. Compat renders synchronously and writes the
+// DOM as it renders, so ./features/concurrent.ts installs what stands in for that (see
+// plans/compat-concurrent.md):
+//   - A transition's updates are not applied when made. They wait in a batch, the transitions of
+//     one event (React's per-event lane), with each state hook's updates in order (React's update
+//     queue), and render in a task of their own after urgent work, replayed from the state before
+//     them (React's rebase).
+//   - A batch renders on the live tree, as anything does, but where it can be undone: its roots'
+//     fibers are saved first, a MutationObserver records what it does to the DOM, and the user
+//     code safely() runs (effects, cleanups, ref detaches) waits. If something suspends where
+//     content showed, the DOM, the fibers and the queues are put back, and the batch waits for
+//     the data; else the waiting code runs and the batch commits.
+// Nothing here runs outside a transition: a state setter tests `lanes`, safely() tests `holding`.
+
+/** What the core calls of the lanes, once ./features/concurrent.ts installs them. */
+interface Lanes {
+  /**
+   * A state update: true when it waits for a transition (made in one), else false, after keeping
+   * an urgent update to state a transition waits to change, which that transition replays.
+   */
+  set(h: Hook, a: Any): boolean;
+  /** root.render(): true when made in a transition, which renders it. */
+  root(r: RootImpl, children: Any): boolean;
+  /** A class's setState or forceUpdate (`fn`, on fiber f): true when made in a transition, which runs it. */
+  later(f: Fiber, fn: () => void): boolean;
+  /** An urgent render left a deferred value behind: `f` renders again in a transition. */
+  defer(f: Fiber): void;
+  /** An async action started in a transition: no transition renders until it settles. */
+  act(p: PromiseLike<unknown>): void;
+  /** Render the batches that are ready now (act()); whether any was. */
+  flush(): boolean;
+}
+let lanes: Lanes | null = null;
+
+/** The transitions of one event, or the deferred values of one render: one render and commit. */
+interface Batch {
+  /** Fibers to render whatever their state (deferred values'). */
+  readonly f: Set<Fiber>;
+  /** State hooks it has updates for (in `pend`). */
+  readonly h: Set<Hook>;
+  /** Updates applied as each attempt starts, in pairs: the fiber, the function (root renders, class updates). */
+  readonly k: Any[];
+  /** It suspended where content showed: it waits until the data settles. */
+  w: boolean;
+}
+// The batches waiting to render, in order; the one this event's transitions join; the one this
+// render's deferred values join; how many async actions run.
+let batches: Batch[] = [];
+let openBatch: Batch | null = null,
+  deferBatch: Batch | null = null,
+  actions = 0,
+  laneTask = false;
+// A state hook's updates while a transition waits to change it: the state before the first, then
+// (action, batch) pairs in order, an urgent update's batch null (React's update queue).
+let pend: Map<Hook, { b: Any; u: Any[] }> = null as Any;
+// Whether a batch renders now: a deferred value takes its new value.
+let laneRender = false;
+
+/** A batch rendering where it can be undone (see attempt). */
+interface Held {
+  /** The user code safely() was asked to run, in pairs (fiber, function), run if it commits. */
+  readonly q: Any[];
+  /** What suspended where content showed. */
+  readonly bad: Any[];
+  /** Boundaries' retries (boundary, thenable), attached if it commits. */
+  readonly t: Any[];
+  /** The stores it read (see useSyncExternalStore), checked once more before it commits. */
+  readonly s: Any[];
+}
+let holding: Held | null = null;
+
+/** The open batch of this event's transitions, made (and its task queued) on its first update. */
+function batchNow(): Batch {
+  if (openBatch === null) {
+    batches.push((openBatch = newBatch()));
+    // React's lane is per event: transitions started after this event's microtasks join another.
+    void RESOLVED.then(() => (openBatch = null));
+  }
+  return openBatch;
+}
+function newBatch(): Batch {
+  laneSoon();
+  return { f: new Set(), h: new Set(), k: [], w: false };
+}
+/**
+ * An update makes the batches waiting for data render again, as React's markRootUpdated clears
+ * its suspended lanes: replayed over the update, one may not suspend now.
+ */
+function unhold(): void {
+  for (const b of batches)
+    if (b.w) {
+      b.w = false;
+      laneSoon();
+    }
+}
+function laneSoon(): void {
+  if (!laneTask) {
+    laneTask = true;
+    afterPaint(runLanes);
+  }
+}
+
+function laneSet(h: Hook, a: Any): boolean {
+  unhold();
+  let p = pend.get(h);
+  if (transition === null) {
+    if (p !== undefined) p.u.push(a, null);
+    return false;
+  }
+  let b = batchNow();
+  if (p === undefined) pend.set(h, (p = { b: h.v, u: [] }));
+  // State another batch waits to change renders with it (React entangles their lanes).
+  else
+    for (let i = 1; i < p.u.length; i += 2)
+      if (p.u[i] !== null && p.u[i] !== b) {
+        b = entangle(b, p.u[i]);
+        break;
+      }
+  p.u.push(a, b);
+  b.h.add(h);
+  return true;
+}
+
+/** Move batch `b`'s updates into `into`, which renders them; `into` is open for this event now. */
+function entangle(b: Batch, into: Batch): Batch {
+  for (const f of b.f) into.f.add(f);
+  for (const h of b.h) {
+    into.h.add(h);
+    const u = pend.get(h)!.u;
+    for (let i = 1; i < u.length; i += 2) if (u[i] === b) u[i] = into;
+  }
+  into.k.push(...b.k);
+  batches.splice(batches.indexOf(b), 1);
+  return (openBatch = into);
+}
+
+function laneRoot(r: RootImpl, children: Any): boolean {
+  unhold();
+  const tok = (r.pt = transition === null ? null : { c: children });
+  if (tok === null) return false;
+  batchNow().k.push(r.f, () => {
+    // An urgent render() made since takes its place.
+    if (r.pt === tok) {
+      r.f.p = children;
+      r.tr = true;
+      schedule(r.f);
+    }
+  });
+  return true;
+}
+
+function laneLater(f: Fiber, fn: () => void): boolean {
+  unhold();
+  if (transition === null) return false;
+  batchNow().k.push(f, fn);
+  return true;
+}
+
+function laneDefer(f: Fiber): void {
+  if (deferBatch === null) {
+    batches.push((deferBatch = newBatch()));
+    void RESOLVED.then(() => (deferBatch = null));
+  }
+  deferBatch.f.add(f);
+}
+
+function laneAct(p: PromiseLike<unknown>): void {
+  actions++;
+  const done = (): void => {
+    if (--actions === 0) laneSoon();
+  };
+  p.then(done, done);
+}
+
+/** Render every batch that is ready, in order: each its own render and commit, as React's lanes. */
+function runLanes(): boolean {
+  laneTask = false;
+  let any = false;
+  for (let ix = 0; ix < batches.length && !actions; ix++) {
+    const b = batches[ix]!;
+    if (b.w) continue;
+    // Urgent work, and the last commit's passive effects, first.
+    flushWork(true);
+    if (queue.length) {
+      laneSoon();
+      break;
+    }
+    any = true;
+    if (attempt(b, true)) batches.splice(ix--, 1);
+  }
+  return any;
+}
+
+/**
+ * Render batch `b`. Where the DOM can be watched (MutationObserver), it renders where it can be
+ * undone: if something suspends where content showed, nothing commits and it waits for the
+ * data (false). A store it read that moved meanwhile (`check`) renders it again at once.
+ */
+function attempt(b: Batch, check: boolean): boolean {
+  // Its roots, saved whole before anything changes: what it renders, and the boundaries above.
+  const rs = new Set<RootImpl>();
+  for (const f of b.f) rs.add(f.o);
+  for (const h of b.h) rs.add(h.f.o);
+  for (let i = 0; i < b.k.length; i += 2) rs.add(b.k[i].o);
+  let watch = typeof MutationObserver === "function";
+  for (const r of rs) if (r.hydrate) watch = false;
+  const sv: Any[] = [],
+    hv: Any[] = [],
+    targets: Any[] = [];
+  let mo: MutationObserver | null = null;
+  const at: Held = { q: [], bad: [], t: [], s: [] };
+  if (watch) {
+    for (const r of rs) {
+      sv.push(r, r.mounted, r.tr, r.waits);
+      targets.push(r.f.d);
+      save(r.f, sv, hv, targets);
+    }
+    // The roots' containers and portals': what other code does elsewhere meanwhile is not undone.
+    mo = new MutationObserver(noop);
+    for (const t of targets) mo.observe(t, WATCH);
+    holding = at;
+  }
+  const undo: Any[] = [],
+    hidden = hiddenCount,
+    shownAt = fallbackShownAt;
+  let records: MutationRecord[] = [];
+  laneRender = flushing = true;
+  try {
+    // A component whose state the updates leave as it was renders nothing new, as in React.
+    for (const h of b.h) if (rebase(h, b, undo)) schedule(h.f);
+    for (let i = 0; i < b.k.length; i += 2) if (!(b.k[i].f & DEAD)) b.k[i + 1]();
+    for (const f of b.f) schedule(f);
+    while (queue.length) {
+      const q = queue;
+      queue = spareQueue;
+      if (q.length > 1) q.sort(byDepth);
+      for (let ix = 0; ix < q.length; ix++) {
+        const f = q[ix]!;
+        f.f &= ~(QUEUED | LATER);
+        if ((f.f & (DIRTY | DEAD)) === DIRTY) rerender(f);
+      }
+      q.length = 0;
+      spareQueue = q;
+    }
+  } finally {
+    laneRender = flushing = unwinding = false;
+    holding = null;
+    if (mo !== null) {
+      records = mo.takeRecords();
+      mo.disconnect();
+    }
+  }
+  // React's check before a concurrent render commits: a store that moved renders it again.
+  let moved = false;
+  if (check) for (const box of at.s) if (!Object.is(box.g(), box.v)) moved = true;
+  if (mo !== null) {
+    if (at.bad.length || moved) {
+      undoDom(records);
+      for (let i = 0; i < sv.length; ) {
+        const f = sv[i++];
+        if (f instanceof RootImpl) {
+          f.mounted = sv[i++];
+          f.tr = sv[i++];
+          f.waits = sv[i++];
+          continue;
+        }
+        f.p = sv[i++];
+        f.e = sv[i++];
+        f.c = sv[i++];
+        f.i = sv[i++];
+        f.d = sv[i++];
+        f.f = sv[i++];
+        f.h = sv[i++];
+        f.s = sv[i++];
+        f.q = sv[i++];
+        f.rx = sv[i++];
+        f.tx = sv[i++];
+        f.b = sv[i++];
+        f.bs = sv[i++];
+        f.pk = sv[i++];
+        f.x = null;
+        const inst = sv[i++];
+        if (inst !== null) [inst.props, inst.state, inst.context] = sv[i++];
+      }
+      for (let i = 0; i < hv.length; i += 8) {
+        const h: Hook = hv[i];
+        h.k = hv[i + 1];
+        h.v = hv[i + 2];
+        h.d = hv[i + 3];
+        h.c = hv[i + 4];
+        h.x = hv[i + 5];
+        h.s = hv[i + 6];
+        h.r = hv[i + 7];
+      }
+      for (let i = 0; i < undo.length; i += 3) pend.set(undo[i], { b: undo[i + 1], u: undo[i + 2] });
+      layoutQ = [];
+      passiveQ = [];
+      passiveUnmountQ = [];
+      hiddenCount = hidden;
+      fallbackShownAt = shownAt;
+      if (moved) return attempt(b, false);
+      // It renders again once any of what it waits for settles (React's ping).
+      b.w = true;
+          for (const t of at.bad) t.then(unhold, unhold);
+      return false;
+    }
+  }
+  // It commits: the deferred user code, the boundaries' retries, then a commit as any flush's.
+  for (let i = 0; i < at.t.length; i += 2) {
+    const again = retry(at.t[i]);
+    at.t[i + 1].then(again, again);
+  }
+  for (let i = 0; i < at.q.length; i += 2) safely(at.q[i], at.q[i + 1]);
+  for (const h of b.h) if (h.f.f & DEAD) pend.delete(h);
+  flushWork(false);
+  return true;
+}
+
+/**
+ * Save the fields of fiber `f` and its subtree into `sv`, their hooks' into `hv`, and the
+ * containers of the portals in it into `targets`: all a render can change.
+ */
+function save(f: Fiber, sv: Any[], hv: Any[], targets: Any[]): void {
+  const copy = (x: Any): Any => (Array.isArray(x) && x !== NO_FIBERS ? x.slice() : x);
+  sv.push(f, f.p, f.e, copy(f.c), f.i, f.d, f.f, copy(f.h), f.n === PROVIDER && f.s !== null ? new Set(f.s) : f.s);
+  sv.push(copy(f.q), copy(f.rx), f.tx, f.b, copy(f.bs), f.pk);
+  if (f.n === CLASS && f.s !== null) sv.push(f.s, [f.s.props, f.s.state, f.s.context]);
+  else sv.push(null);
+  if (f.h !== null) for (const h of f.h) hv.push(h, h.k, h.v, h.d, h.c, h.x, h.s, h.r);
+  if (f.n === PORTAL) targets.push(f.d);
+  for (let ix = 0, xs = f.c; ix < xs.length; ix++) save(xs[ix]!, sv, hv, targets);
+}
+
+/**
+ * Apply batch `b`'s updates to state hook `h`: every update in order from the state before them,
+ * those of other batches skipped, which wait with every update after them (React's
+ * processUpdateQueue). What it replaced goes in `undo`. Returns whether the state changed.
+ */
+function rebase(h: Hook, b: Batch, undo: Any[]): boolean {
+  const p = pend.get(h)!;
+  undo.push(h, p.b, p.u);
+  let s = p.b,
+    base = s,
+    rest: Any[] | null = null;
+  for (let i = 0; i < p.u.length; i += 2) {
+    const a = p.u[i],
+      l = p.u[i + 1];
+    if (l === null || l === b) {
+      s = h.r(s, a);
+      if (rest !== null) rest.push(a, null);
+    } else {
+      if (rest === null) {
+        rest = [];
+        base = s;
+      }
+      rest.push(a, l);
+    }
+  }
+  if (rest === null) pend.delete(h);
+  else pend.set(h, { b: base, u: rest });
+  const changed = !Object.is(s, h.v);
+  h.v = s;
+  return changed;
+}
+
+// What a MutationObserver records to undo a render: every change, with what it replaced.
+const WATCH: MutationObserverInit = {
+  childList: true,
+  subtree: true,
+  attributes: true,
+  attributeOldValue: true,
+  characterData: true,
+  characterDataOldValue: true,
+};
+
+/** Undo the DOM changes `records` saw, last first. */
+function undoDom(records: MutationRecord[]): void {
+  for (let i = records.length - 1; i >= 0; i--) {
+    const r = records[i]!,
+      t: Any = r.target;
+    if (r.type === "childList") {
+      for (let j = r.addedNodes.length - 1; j >= 0; j--) t.removeChild(r.addedNodes[j]);
+      for (let j = 0; j < r.removedNodes.length; j++) t.insertBefore(r.removedNodes[j], r.nextSibling);
+    } else if (r.type === "attributes")
+      r.oldValue === null ? t.removeAttribute(r.attributeName) : t.setAttribute(r.attributeName, r.oldValue);
+    else t.data = r.oldValue;
+  }
+}
+
+/**
+ * Internal: React's transition lanes (see Lanes); @reactre/compat/features/concurrent calls it
+ * when it loads. Until then, a transition renders at once.
+ */
+export function __installConcurrent(): void {
+  pend ??= new Map();
+  lanes ??= {
+    set: laneSet,
+    root: laneRoot,
+    later: laneLater,
+    defer: laneDefer,
+    act: laneAct,
+    flush: runLanes,
+  };
+}
 
 // #endregion
 

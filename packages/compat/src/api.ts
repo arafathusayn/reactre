@@ -92,9 +92,10 @@ export const KEYS: readonly string[] = [
  * `apis` lists. `componentStack`: errors are reported with React's component stack (else an empty
  * one). `repeatedKeys`: a list whose keys repeat is reconciled as React does (else by compat's own
  * rules). `renderRetry`: a render that throws renders again before its error counts, as React does
- * (else the error counts at once).
+ * (else the error counts at once). `concurrentRendering`: transitions render as React's lanes
+ * render them, after urgent updates, keeping the screen while one suspends (else at once).
  */
-export const BEHAVIOURS: readonly string[] = ["componentStack", "repeatedKeys", "renderRetry"];
+export const BEHAVIOURS: readonly string[] = ["componentStack", "repeatedKeys", "renderRetry", "concurrentRendering"];
 
 /**
  * The keys whose code is a module of its own, and that module. With the key on, the module
@@ -105,6 +106,7 @@ export const MODULES: Readonly<Record<string, string>> = {
   componentStack: "@reactre/compat/features/stacks",
   repeatedKeys: "@reactre/compat/features/keys",
   renderRetry: "@reactre/compat/features/retry",
+  concurrentRendering: "@reactre/compat/features/concurrent",
 };
 
 /** Groups of keys, by the feature they make up. A group is written where a key may be. */

@@ -199,6 +199,10 @@ describe("compat: where react resolves", () => {
         'import "@reactre/compat/features/keys";\n',
     );
     expect(noRetry).not.toContain("features/retry");
+    // The transition lanes off: transitions render at once.
+    const noLanes = await written({ compat: { exclude: ["concurrentRendering"] } });
+    expect(noLanes).toContain('import "@reactre/compat/features/retry";\nexport * from');
+    expect(noLanes).not.toContain("features/concurrent");
   });
 
   test("esbuild: its own resolve, not registered for a react-server build", async () => {
