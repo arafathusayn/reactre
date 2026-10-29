@@ -72,6 +72,7 @@ const SCOPE_TYPE = Symbol.for("react.scope");
 const ACTIVITY_TYPE = Symbol.for("react.activity");
 const LEGACY_HIDDEN_TYPE = Symbol.for("react.legacy_hidden");
 const VIEW_TRANSITION_TYPE = Symbol.for("react.view_transition");
+const CLIENT_REFERENCE = Symbol.for("react.client.reference");
 const RECOVERABLE_TYPE = Symbol.for("react.recoverable");
 
 const hasOwn = Object.prototype.hasOwnProperty;
@@ -1557,7 +1558,12 @@ export interface StreamOptions {
   maxHeadersLength?: number;
   onError?: (error: unknown, errorInfo: ErrorInfo) => string | void;
   onBrowserBailout?: (error: unknown, errorInfo: ErrorInfo) => void;
+  /** A server action's postback (decodeFormState's result): useActionState starts from its state. */
+  formState?: ReactFormState | null;
 }
+
+/** A postback: the action's state, its key, and the action's reference and bound arguments. */
+export type ReactFormState = [unknown, string, string, unknown];
 
 /** renderToReadableStream's options. */
 export interface RenderToReadableStreamOptions extends StreamOptions {
@@ -2289,7 +2295,12 @@ interface Task {
   componentStack: StackNode | null;
   /** The promises the suspended component used, in order: it reads them again when it retries. */
   thenableState: Any[] | null;
+  /** The element path to the node rendering, as React keeps it: useActionState's form keys hash it. */
+  keyPath: KeyPath | null;
 }
+
+/** A step of an element path: the parent's path, the element's type name, its key or index. */
+type KeyPath = [KeyPath | null, string | null, string | number];
 
 interface Request {
   /** renderToString and renderToStaticMarkup: legacy's flush rules and no doctype. */
@@ -2324,6 +2335,10 @@ interface Request {
   lifetime: AbortController | null;
   /** Runs a callback in a task of its own (the legacy entries run it at once). */
   scheduleWork: (fn: () => void) => void;
+  /** The postback's state, key and action, from the server action's response (streams only). */
+  formState: ReactFormState | null;
+  /** The hash of useActionState keys: MD5 for renderToPipeableStream, else MurmurHash3. */
+  hash: (key: string) => string | number;
 }
 
 /** React's default onError: logs the error, gives no digest. */
@@ -2343,6 +2358,8 @@ interface RequestOptions {
   onFatalError?: ((error: unknown) => void) | undefined;
   onHeaders?: ((headers: Record<string, string>) => void) | undefined;
   scheduleWork: (fn: () => void) => void;
+  /** renderToPipeableStream: React's Node build, whose form keys are MD5 hashes. */
+  md5?: boolean;
 }
 
 function createRequest(children: Any, o: RequestOptions): Request {
@@ -2380,6 +2397,8 @@ function createRequest(children: Any, o: RequestOptions): Request {
     onFatalError: o.onFatalError ?? noop,
     lifetime: null,
     scheduleWork: o.scheduleWork,
+    formState: o.legacy ? null : (o.options?.formState ?? null),
+    hash: o.md5 ? md5 : murmurhash3,
   };
   const root = createPendingSegment(request, 0, null, rootContext, false, false);
   root.parentFlushed = true;
@@ -2392,6 +2411,7 @@ function createRequest(children: Any, o: RequestOptions): Request {
     null,
     null,
     request.abortableTasks,
+    null,
     rootContext,
     null,
     emptyTreeContext,
@@ -2455,6 +2475,7 @@ function createRenderTask(
   blockedPreamble: PreambleState | null,
   hoistableState: HoistableState | null,
   abortSet: Set<Task>,
+  keyPath: KeyPath | null,
   formatContext: FormatContext,
   context: ContextNode | null,
   treeContext: TreeContext,
@@ -2480,6 +2501,7 @@ function createRenderTask(
     row,
     componentStack,
     thenableState: null,
+    keyPath,
   };
   abortSet.add(task);
   return task;
@@ -2785,6 +2807,41 @@ const serverHooks: ServerHooks = {
     return select === undefined ? v : select(v);
   },
   browser: createRecoverableError,
+  actionState(action, initialState, permalink) {
+    // React's server useActionState: a server action's form carries a key for the hook, and a
+    // postback (formState) whose key and action match gives the hook its state.
+    const index = actionStateCounter++;
+    if (typeof action.$$FORM_ACTION === "function") {
+      const request = currentRequest!,
+        keyPath = currentKeyPath,
+        formState = request.formState,
+        isSignatureEqual = action.$$IS_SIGNATURE_EQUAL;
+      let nextKey: string | null = null;
+      const key = (): string => (nextKey ??= postbackActionStateKey(request, permalink, keyPath, index));
+      if (
+        formState !== null &&
+        typeof isSignatureEqual === "function" &&
+        isSignatureEqual.call(action, formState[2], formState[3]) &&
+        formState[1] === key()
+      ) {
+        actionStateMatchingIndex = index;
+        initialState = formState[0];
+      }
+      const bound = action.bind(null, initialState);
+      const dispatch: Any = (payload: Any) => void bound(payload);
+      if (typeof bound.$$FORM_ACTION === "function")
+        dispatch.$$FORM_ACTION = (prefix: string) => {
+          const fields = bound.$$FORM_ACTION(prefix);
+          if (permalink !== undefined) fields.action = permalink + "";
+          const data = fields.data;
+          if (data) data.append("$ACTION_KEY", key());
+          return fields;
+        };
+      return [initialState, dispatch, false];
+    }
+    const bound = action.bind(null, initialState);
+    return [initialState, (payload: Any) => void bound(payload), false];
+  },
   thenable(t) {
     // React's trackUsedThenable: the promise used at this place before is read in place of a new one.
     const state = (thenableState ??= []);
@@ -2797,6 +2854,67 @@ const serverHooks: ServerHooks = {
     return (lastThenable = t);
   },
 };
+
+// The rendering component's element path, and its useActionState hooks so far and the one a
+// postback matched (React's currentlyRenderingKeyPath, actionStateCounter, actionStateMatchingIndex).
+let currentKeyPath: KeyPath | null = null;
+let actionStateCounter = 0;
+let actionStateMatchingIndex = -1;
+
+/** A useActionState hook's postback key: its permalink, or a hash of where it is in the tree. */
+function postbackActionStateKey(
+  request: Request,
+  permalink: string | undefined,
+  keyPath: KeyPath | null,
+  index: number,
+): string {
+  if (permalink !== undefined) return "p" + permalink;
+  return "k" + request.hash(JSON.stringify([keyPath, null, index]));
+}
+
+/** React's Node build's key hash: MD5, in hex. */
+function md5(s: string): string {
+  return (globalThis as Any).process.getBuiltinModule("crypto").createHash("md5").update(s).digest("hex");
+}
+
+/** The other builds' key hash: MurmurHash3 (32 bits, seed 0) of the string's low bytes, as React's. */
+function murmurhash3(key: string): number {
+  const remainder = key.length & 3,
+    bytes = key.length - remainder;
+  let h1 = 0,
+    k1 = 0,
+    i = 0;
+  while (i < bytes) {
+    k1 =
+      (key.charCodeAt(i) & 255) |
+      ((key.charCodeAt(++i) & 255) << 8) |
+      ((key.charCodeAt(++i) & 255) << 16) |
+      ((key.charCodeAt(++i) & 255) << 24);
+    ++i;
+    k1 = (3432918353 * (k1 & 65535) + (((3432918353 * (k1 >>> 16)) & 65535) << 16)) & 4294967295;
+    k1 = (k1 << 15) | (k1 >>> 17);
+    k1 = (461845907 * (k1 & 65535) + (((461845907 * (k1 >>> 16)) & 65535) << 16)) & 4294967295;
+    h1 ^= k1;
+    h1 = (h1 << 13) | (h1 >>> 19);
+    h1 = (5 * (h1 & 65535) + (((5 * (h1 >>> 16)) & 65535) << 16)) & 4294967295;
+    h1 = (h1 & 65535) + 27492 + ((((h1 >>> 16) + 58964) & 65535) << 16);
+  }
+  if (remainder !== 0) {
+    k1 = 0;
+    if (remainder === 3) k1 ^= (key.charCodeAt(i + 2) & 255) << 16;
+    if (remainder >= 2) k1 ^= (key.charCodeAt(i + 1) & 255) << 8;
+    k1 ^= key.charCodeAt(i) & 255;
+    k1 = (3432918353 * (k1 & 65535) + (((3432918353 * (k1 >>> 16)) & 65535) << 16)) & 4294967295;
+    k1 = (k1 << 15) | (k1 >>> 17);
+    h1 ^= (461845907 * (k1 & 65535) + (((461845907 * (k1 >>> 16)) & 65535) << 16)) & 4294967295;
+  }
+  h1 ^= key.length;
+  h1 ^= h1 >>> 16;
+  h1 = (2246822507 * (h1 & 65535) + (((2246822507 * (h1 >>> 16)) & 65535) << 16)) & 4294967295;
+  h1 ^= h1 >>> 13;
+  h1 = (3266489909 * (h1 & 65535) + (((3266489909 * (h1 >>> 16)) & 65535) << 16)) & 4294967295;
+  return (h1 ^ (h1 >>> 16)) >>> 0;
+}
 
 // The promises the rendering component has used, and the next one's place. A component that
 // suspends hands them to the task that retries it (React's thenableState).
@@ -2821,22 +2939,36 @@ function renderPass(props: Any, secondArg: Any): Any {
   return renderingComponent(props, secondArg);
 }
 
-/** Call a function component with compat's hooks; `hadId` says whether it called useId. */
+/**
+ * Call a function component with compat's hooks; `hadId` says whether it called useId,
+ * `actionStates` how many useActionState hooks it has and `matchedActionState` which of them
+ * takes the postback's state (-1 for none).
+ */
 let hadId = false;
-function renderWithHooks(task: Task, Component: Any, props: Any, secondArg: Any): Any {
+let actionStates = 0;
+let matchedActionState = -1;
+function renderWithHooks(task: Task, keyPath: KeyPath, Component: Any, props: Any, secondArg: Any): Any {
   const prevTask = currentTask,
     prevCount = localIdCounter,
+    prevKeyPath = currentKeyPath,
+    prevActionStates = actionStateCounter,
+    prevMatching = actionStateMatchingIndex,
     prevComponent = renderingComponent,
     prevState = thenableState,
     prevIndex = thenableIndex;
   currentTask = task;
   localIdCounter = 0;
+  currentKeyPath = keyPath;
+  actionStateCounter = 0;
+  actionStateMatchingIndex = -1;
   renderingComponent = Component;
   thenableState = task.thenableState;
   task.thenableState = null;
   try {
     const out = __serverRender(serverHooks, renderPass, props, secondArg);
     hadId = localIdCounter !== 0;
+    actionStates = actionStateCounter;
+    matchedActionState = actionStateMatchingIndex;
     return out;
   } catch (x) {
     if (x === lastThenable) {
@@ -2847,6 +2979,9 @@ function renderWithHooks(task: Task, Component: Any, props: Any, secondArg: Any)
   } finally {
     currentTask = prevTask;
     localIdCounter = prevCount;
+    currentKeyPath = prevKeyPath;
+    actionStateCounter = prevActionStates;
+    actionStateMatchingIndex = prevMatching;
     renderingComponent = prevComponent;
     thenableState = prevState;
     thenableIndex = prevIndex;
@@ -2854,18 +2989,39 @@ function renderWithHooks(task: Task, Component: Any, props: Any, secondArg: Any)
   }
 }
 
-/** A function component's children; one that called useId gives them a tree level of their own. */
-function finishFunctionComponent(request: Request, task: Task, children: Any, hasId: boolean): void {
+/**
+ * A function component's children; one that called useId gives them a tree level of their own.
+ * With a postback's formState, a marker per useActionState hook says which one took its state.
+ */
+function finishFunctionComponent(
+  request: Request,
+  task: Task,
+  keyPath: KeyPath,
+  children: Any,
+  hasId: boolean,
+  actionStateCount: number,
+  matchingIndex: number,
+): void {
+  let markers = false;
+  if (actionStateCount !== 0 && request.formState !== null) {
+    markers = true;
+    const chunks = task.blockedSegment.chunks;
+    for (let i = 0; i < actionStateCount; i++) chunks.push(i === matchingIndex ? "<!--F!-->" : "<!--F-->");
+  }
+  const prevKeyPath = task.keyPath;
+  task.keyPath = keyPath;
   if (hasId) {
     const prev = task.treeContext;
     task.treeContext = pushTreeContext(prev, 1, 0);
     renderNode(request, task, children, -1);
     task.treeContext = prev;
-  } else renderNodeDestructive(request, task, children, -1);
+  } else if (markers) renderNode(request, task, children, -1);
+  else renderNodeDestructive(request, task, children, -1);
+  task.keyPath = prevKeyPath;
 }
 
 /** A class component, mounted as React's server mounts one, then its render's output. */
-function renderClassComponent(request: Request, task: Task, type: Any, props: Props): void {
+function renderClassComponent(request: Request, task: Task, keyPath: KeyPath, type: Any, props: Props): void {
   let newProps = props;
   if ("ref" in props) {
     newProps = {};
@@ -2934,31 +3090,37 @@ function renderClassComponent(request: Request, task: Task, type: Any, props: Pr
   }
   const out = inst.render();
   if (request.aborted) throw null;
+  const prevKeyPath = task.keyPath;
+  task.keyPath = keyPath;
   renderNodeDestructive(request, task, out, -1);
+  task.keyPath = prevKeyPath;
 }
 
 /** Render one element of type `type`. React's renderElement. */
-function renderElement(request: Request, task: Task, type: Any, props: Props, ref: Any): void {
+function renderElement(request: Request, task: Task, keyPath: KeyPath, type: Any, props: Props, ref: Any): void {
   if (typeof type === "function") {
     if (type.prototype && type.prototype.isReactComponent) {
-      renderClassComponent(request, task, type, props);
+      renderClassComponent(request, task, keyPath, type, props);
       return;
     }
-    const out = renderWithHooks(task, type, props, undefined);
+    const out = renderWithHooks(task, keyPath, type, props, undefined);
     if (request.aborted) throw null;
-    finishFunctionComponent(request, task, out, hadId);
+    finishFunctionComponent(request, task, keyPath, out, hadId, actionStates, matchedActionState);
     return;
   }
   if (typeof type === "string") {
-    renderHostElement(request, task, type, props);
+    renderHostElement(request, task, keyPath, type, props);
     return;
   }
+  const prevKeyPath = task.keyPath;
   switch (type) {
     case LEGACY_HIDDEN_TYPE:
     case STRICT_MODE_TYPE:
     case PROFILER_TYPE:
     case FRAGMENT_TYPE:
+      task.keyPath = keyPath;
       renderNodeDestructive(request, task, props["children"], -1);
+      task.keyPath = prevKeyPath;
       return;
     case ACTIVITY_TYPE: {
       if (props["mode"] === "hidden") return;
@@ -2966,21 +3128,25 @@ function renderElement(request: Request, task: Task, type: Any, props: Props, re
       const marks = !request.renderState.generateStaticMarkup;
       if (marks) segment.chunks.push("<!--&-->");
       segment.lastPushedText = false;
+      task.keyPath = keyPath;
       renderNode(request, task, props["children"], -1);
+      task.keyPath = prevKeyPath;
       if (marks) segment.chunks.push("<!--/&-->");
       segment.lastPushedText = false;
       return;
     }
     case SUSPENSE_LIST_TYPE:
-      renderSuspenseList(request, task, props);
+      renderSuspenseList(request, task, keyPath, props);
       return;
     case VIEW_TRANSITION_TYPE:
+      task.keyPath = keyPath;
       renderViewTransition(request, task, props);
+      task.keyPath = prevKeyPath;
       return;
     case SCOPE_TYPE:
       throw new Error("ReactDOMServer does not yet support scope components.");
     case SUSPENSE_TYPE:
-      renderSuspenseBoundary(request, task, props);
+      renderSuspenseBoundary(request, task, keyPath, props);
       return;
   }
   if (typeof type === "object" && type !== null) {
@@ -2991,12 +3157,12 @@ function renderElement(request: Request, task: Task, type: Any, props: Props, re
           propsWithoutRef = {};
           for (const k in props) if (k !== "ref") propsWithoutRef[k] = props[k];
         }
-        const out = renderWithHooks(task, type.render, propsWithoutRef, ref);
-        finishFunctionComponent(request, task, out, hadId);
+        const out = renderWithHooks(task, keyPath, type.render, propsWithoutRef, ref);
+        finishFunctionComponent(request, task, keyPath, out, hadId, actionStates, matchedActionState);
         return;
       }
       case MEMO_TYPE:
-        renderElement(request, task, type.type, props, ref);
+        renderElement(request, task, keyPath, type.type, props, ref);
         return;
       case CONTEXT_TYPE: {
         // A provider: set the value for the subtree, then restore the one it shadowed.
@@ -3013,21 +3179,26 @@ function renderElement(request: Request, task: Task, type: Any, props: Props, re
         };
         currentSnapshot = node;
         task.context = node;
+        task.keyPath = keyPath;
         renderNodeDestructive(request, task, props["children"], -1);
         const snapshot = currentSnapshot!;
         snapshot.context._currentValue = snapshot.parentValue;
         task.context = currentSnapshot = snapshot.parent;
+        task.keyPath = prevKeyPath;
         return;
       }
       case CONSUMER_TYPE: {
         const render = props["children"];
-        renderNodeDestructive(request, task, render(type._context._currentValue), -1);
+        const children = render(type._context._currentValue);
+        task.keyPath = keyPath;
+        renderNodeDestructive(request, task, children, -1);
+        task.keyPath = prevKeyPath;
         return;
       }
       case LAZY_TYPE: {
         const Component = type._init(type._payload);
         if (request.aborted) throw null;
-        renderElement(request, task, Component, props, ref);
+        renderElement(request, task, keyPath, Component, props, ref);
         return;
       }
     }
@@ -3040,7 +3211,7 @@ function renderElement(request: Request, task: Task, type: Any, props: Props, re
 }
 
 /** A host element: its start tag, children and end tag; <head>'s children go to the preamble. */
-function renderHostElement(request: Request, task: Task, type: string, props: Props): void {
+function renderHostElement(request: Request, task: Task, keyPath: KeyPath, type: string, props: Props): void {
   const segment = task.blockedSegment;
   const children = pushStartInstance(
     segment.chunks,
@@ -3054,7 +3225,9 @@ function renderHostElement(request: Request, task: Task, type: string, props: Pr
     segment.lastPushedText,
   );
   segment.lastPushedText = false;
-  const prevContext = task.formatContext;
+  const prevContext = task.formatContext,
+    prevKeyPath = task.keyPath;
+  task.keyPath = keyPath;
   task.formatContext = getChildFormatContext(prevContext, type, props);
   if (task.formatContext.insertionMode === HTML_HEAD_MODE) {
     const preambleSegment = createPendingSegment(request, 0, null, task.formatContext, false, false);
@@ -3070,6 +3243,7 @@ function renderHostElement(request: Request, task: Task, type: string, props: Pr
     }
   } else renderNode(request, task, children, -1);
   task.formatContext = prevContext;
+  task.keyPath = prevKeyPath;
   switch (type) {
     case "title":
     case "style":
@@ -3184,8 +3358,9 @@ function renderViewTransition(request: Request, task: Task, props: Props): void 
  * the fallback never renders. Otherwise the fallback renders in a task of its own and the content
  * finishes when what it waits for settles (or, for renderToString, renders on the client).
  */
-function renderSuspenseBoundary(request: Request, task: Task, props: Props): void {
-  const prevContext = task.formatContext,
+function renderSuspenseBoundary(request: Request, task: Task, keyPath: KeyPath, props: Props): void {
+  const prevKeyPath = task.keyPath,
+    prevContext = task.formatContext,
     prevRow = task.row,
     parentBoundary = task.blockedBoundary,
     parentPreamble = task.blockedPreamble,
@@ -3218,6 +3393,7 @@ function renderSuspenseBoundary(request: Request, task: Task, props: Props): voi
   task.blockedPreamble = boundary.preamble === null ? null : boundary.preamble.content;
   task.hoistableState = boundary.contentState;
   task.blockedSegment = contentRootSegment;
+  task.keyPath = keyPath;
   task.formatContext = getSuspenseContentFormatContext(request.resumableState, prevContext);
   task.row = null;
   try {
@@ -3250,6 +3426,7 @@ function renderSuspenseBoundary(request: Request, task: Task, props: Props): voi
     task.blockedPreamble = parentPreamble;
     task.hoistableState = parentHoistableState;
     task.blockedSegment = parentSegment;
+    task.keyPath = prevKeyPath;
     task.formatContext = prevContext;
     task.row = prevRow;
   }
@@ -3262,6 +3439,7 @@ function renderSuspenseBoundary(request: Request, task: Task, props: Props): voi
     boundary.preamble === null ? null : boundary.preamble.fallback,
     boundary.fallbackState,
     fallbackAbortSet,
+    [keyPath[0], "Suspense Fallback", keyPath[2]],
     getSuspenseFallbackFormatContext(request.resumableState, task.formatContext),
     task.context,
     task.treeContext,
@@ -3272,12 +3450,12 @@ function renderSuspenseBoundary(request: Request, task: Task, props: Props): voi
   request.pingedTasks.push(fallbackTask);
 }
 
-function renderSuspenseList(request: Request, task: Task, props: Props): void {
+function renderSuspenseList(request: Request, task: Task, keyPath: KeyPath, props: Props): void {
   const children = props["children"],
     revealOrder = props["revealOrder"];
   if (revealOrder !== "independent" && revealOrder !== "together") {
     if (isArray(children)) {
-      renderSuspenseListRows(request, task, children, revealOrder);
+      renderSuspenseListRows(request, task, keyPath, children, revealOrder);
       return;
     }
     const iteratorFn = getIteratorFn(children);
@@ -3289,12 +3467,14 @@ function renderSuspenseList(request: Request, task: Task, props: Props): void {
           do step = iterator.next();
           while (!step.done);
           // React renders the rows from the iterable again, as it does in this version.
-          renderSuspenseListRows(request, task, children, revealOrder);
+          renderSuspenseListRows(request, task, keyPath, children, revealOrder);
         }
         return;
       }
     }
   }
+  const prevKeyPath = task.keyPath;
+  task.keyPath = keyPath;
   if (revealOrder === "together") {
     const prevRow = task.row;
     const row = (task.row = createSuspenseListRow(null));
@@ -3308,11 +3488,14 @@ function renderSuspenseList(request: Request, task: Task, props: Props): void {
       row.next = prevRow;
     }
   } else renderNodeDestructive(request, task, children, -1);
+  task.keyPath = prevKeyPath;
 }
 
-function renderSuspenseListRows(request: Request, task: Task, rows: Any, revealOrder: Any): void {
-  const prevTreeContext = task.treeContext,
+function renderSuspenseListRows(request: Request, task: Task, keyPath: KeyPath, rows: Any, revealOrder: Any): void {
+  const prevKeyPath = task.keyPath,
+    prevTreeContext = task.treeContext,
     prevRow = task.row;
+  task.keyPath = keyPath;
   const total = rows.length;
   let previous: Row | null = null;
   if (revealOrder !== "backwards" && revealOrder !== "unstable_legacy-backwards") {
@@ -3361,6 +3544,7 @@ function renderSuspenseListRows(request: Request, task: Task, rows: Any, revealO
   }
   task.treeContext = prevTreeContext;
   task.row = prevRow;
+  task.keyPath = prevKeyPath;
 }
 
 function createSuspenseListRow(previous: Row | null): Row {
@@ -3414,6 +3598,52 @@ function tryToResolveTogetherRow(request: Request, row: Row): void {
   unblockSuspenseListRow(request, row, row.hoistables);
 }
 
+/** An element type's name, as React's getComponentNameFromType gives it (key paths use it). */
+function getComponentNameFromType(type: Any): string | null {
+  if (type == null) return null;
+  if (typeof type === "function")
+    return type.$$typeof === CLIENT_REFERENCE ? null : type.displayName || type.name || null;
+  if (typeof type === "string") return type;
+  switch (type) {
+    case FRAGMENT_TYPE:
+      return "Fragment";
+    case PROFILER_TYPE:
+      return "Profiler";
+    case STRICT_MODE_TYPE:
+      return "StrictMode";
+    case SUSPENSE_TYPE:
+      return "Suspense";
+    case SUSPENSE_LIST_TYPE:
+      return "SuspenseList";
+    case ACTIVITY_TYPE:
+      return "Activity";
+    case VIEW_TRANSITION_TYPE:
+      return "ViewTransition";
+  }
+  if (typeof type === "object")
+    switch (type.$$typeof) {
+      // (A portal as a type is never rendered: React throws for it.)
+      case CONTEXT_TYPE:
+        return type.displayName || "Context";
+      case CONSUMER_TYPE:
+        return (type._context.displayName || "Context") + ".Consumer";
+      case FORWARD_REF_TYPE: {
+        if (type.displayName) return type.displayName;
+        const inner = type.render.displayName || type.render.name || "";
+        return inner !== "" ? "ForwardRef(" + inner + ")" : "ForwardRef";
+      }
+      case MEMO_TYPE:
+        return type.displayName || getComponentNameFromType(type.type) || "Memo";
+      case LAZY_TYPE:
+        try {
+          return getComponentNameFromType(type._init(type._payload));
+        } catch {
+          return null;
+        }
+    }
+  return null;
+}
+
 /** An iterable's iterator function, as React looks for one. */
 function getIteratorFn(o: Any): Any {
   if (o === null || typeof o !== "object") return null;
@@ -3439,9 +3669,16 @@ function retryNode(request: Request, task: Task): void {
   if (typeof node === "object") {
     switch (node.$$typeof) {
       case ELEMENT: {
-        const props = node.props;
+        const type = node.type,
+          key = node.key,
+          props = node.props;
         const ref = props.ref;
-        renderElement(request, task, node.type, props, ref !== undefined ? ref : null);
+        const keyPath: KeyPath = [
+          task.keyPath,
+          getComponentNameFromType(type),
+          key == null ? (childIndex === -1 ? 0 : childIndex) : key,
+        ];
+        renderElement(request, task, keyPath, type, props, ref !== undefined ? ref : null);
         return;
       }
       case PORTAL_TYPE:
@@ -3455,7 +3692,7 @@ function retryNode(request: Request, task: Task): void {
         return;
     }
     if (isArray(node)) {
-      renderChildrenArray(request, task, node);
+      renderChildrenArray(request, task, node, childIndex);
       return;
     }
     const iteratorFn = getIteratorFn(node);
@@ -3469,7 +3706,7 @@ function retryNode(request: Request, task: Task): void {
             items.push(step.value);
             step = iterator.next();
           } while (!step.done);
-          renderChildrenArray(request, task, items);
+          renderChildrenArray(request, task, items, childIndex);
         }
         return;
       }
@@ -3545,15 +3782,18 @@ function readThenable(t: Any): Any {
   throw t;
 }
 
-/** Children of an array, each at its own tree position. */
-function renderChildrenArray(request: Request, task: Task, children: Any[]): void {
-  const prevTreeContext = task.treeContext;
+/** Children of an array, each at its own tree position; a nested array is a step of the key path. */
+function renderChildrenArray(request: Request, task: Task, children: Any[], childIndex: number): void {
+  const prevKeyPath = task.keyPath,
+    prevTreeContext = task.treeContext;
+  if (childIndex !== -1) task.keyPath = [prevKeyPath, "Fragment", childIndex];
   const total = children.length;
   for (let i = 0; i < total; i++) {
     task.treeContext = pushTreeContext(prevTreeContext, total, i);
     renderNode(request, task, children[i], i);
   }
   task.treeContext = prevTreeContext;
+  task.keyPath = prevKeyPath;
 }
 
 /** A task for a node that suspended: a segment of its own where the node was, rendered later. */
@@ -3578,6 +3818,7 @@ function spawnNewSuspendedRenderTask(request: Request, task: Task, thenableState
     task.blockedPreamble,
     task.hoistableState,
     task.abortSet,
+    task.keyPath,
     task.formatContext,
     task.context,
     task.treeContext,
@@ -3597,6 +3838,7 @@ const STACK_OVERFLOW = "Maximum call stack size exceeded";
 function renderNode(request: Request, task: Task, node: Any, childIndex: number): void {
   const prevFormat = task.formatContext,
     prevContext = task.context,
+    prevKeyPath = task.keyPath,
     prevTree = task.treeContext,
     prevStack = task.componentStack,
     segment = task.blockedSegment;
@@ -3616,6 +3858,7 @@ function renderNode(request: Request, task: Task, node: Any, childIndex: number)
         x.then(newTask.ping, newTask.ping);
         task.formatContext = prevFormat;
         task.context = prevContext;
+        task.keyPath = prevKeyPath;
         task.treeContext = prevTree;
         task.componentStack = prevStack;
         switchContext(prevContext);
@@ -3626,6 +3869,7 @@ function renderNode(request: Request, task: Task, node: Any, childIndex: number)
         request.pingedTasks.push(spawnNewSuspendedRenderTask(request, task, null));
         task.formatContext = prevFormat;
         task.context = prevContext;
+        task.keyPath = prevKeyPath;
         task.treeContext = prevTree;
         task.componentStack = prevStack;
         switchContext(prevContext);
@@ -3635,6 +3879,7 @@ function renderNode(request: Request, task: Task, node: Any, childIndex: number)
   }
   task.formatContext = prevFormat;
   task.context = prevContext;
+  task.keyPath = prevKeyPath;
   task.treeContext = prevTree;
   switchContext(prevContext);
   throw x;
@@ -4885,6 +5130,7 @@ export function renderToPipeableStream(
     onShellError: options?.onShellError,
     onHeaders: options?.onHeaders,
     scheduleWork: scheduleTask,
+    md5: true,
   });
   let started = false;
   startWork(request);

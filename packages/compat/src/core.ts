@@ -5093,13 +5093,22 @@ export function useOptimistic<S, A>(passthrough: S, reducer?: (s: S, a: A) => S)
 export function useActionState<S, P>(
   action: (state: S, payload: P) => S | Promise<S>,
   initialState: S,
-  _permalink?: string,
+  permalink?: string,
 ): [S, (payload: P) => void, boolean] {
   const [stored, setState] = useState<Any>(initialState);
   const [pending, setPending] = useState(false);
   const f = cur!;
   const h = hook();
   if (h.s === null) {
+    if (server !== null) {
+      // A server render: React's server hook. Its state goes in the state hook above (hi - 3), so
+      // the passes that follow return it.
+      const r = server.actionState(action, initialState, permalink);
+      f.h![hi - 3]!.v = r[0];
+      h.v = { r: action };
+      h.s = r[1];
+      return r;
+    }
     // a: the action dispatch runs (null once one failed, until a new action is rendered); r: the
     // action rendered last; s: the state the next action starts from; q: the actions queued, the
     // first one running; n: actions dispatched in transitions and not finished.
@@ -5262,6 +5271,8 @@ export interface ServerHooks {
   browser(token: Any): unknown;
   /** use(promise): the promise to read, the one used at the same place before the component suspended. */
   thenable(t: Any): Any;
+  /** useActionState: its state (a postback's, when it matches), dispatch and pending flag. */
+  actionState(action: Any, initialState: Any, permalink: string | undefined): [Any, Any, boolean];
 }
 
 // The server side of the hooks while a server render calls a component, else null.

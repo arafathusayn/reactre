@@ -3114,3 +3114,148 @@ describe("replaying promises", () => {
     });
   });
 });
+
+describe("formState and server actions", () => {
+  // A server action as React's server sees one: $$FORM_ACTION gives the form's fields, bind
+  // returns another action, and $$IS_SIGNATURE_EQUAL says whether a postback came from it.
+  function serverAction(ref: string): Any {
+    const fields = (prefix: string, bound: Any[]): Any => {
+      const data = new FormData();
+      data.append("bound", JSON.stringify(bound));
+      return { name: prefix, action: "", encType: "multipart/form-data", method: "POST", target: undefined, data };
+    };
+    const act: Any = (prev: Any) => prev;
+    act.$$FORM_ACTION = (prefix: string) => fields(prefix, []);
+    act.$$IS_SIGNATURE_EQUAL = (r: Any, bound: Any) => r === ref && bound === null;
+    act.bind = (_this: Any, ...bound: Any[]) => {
+      const b: Any = (...rest: Any[]) => act(...bound, ...rest);
+      b.$$FORM_ACTION = (prefix: string) => fields(prefix, bound);
+      return b;
+    };
+    return act;
+  }
+  // A tree whose forms sit under every kind of element, so their key paths take every step.
+  const tree =
+    (suspend = false) =>
+    (L: Lib): Any => {
+      // Each library waits on a promise of its own, so both renders suspend.
+      const wait = suspend ? later("go", 1) : undefined;
+      const act = serverAction("ref");
+      function Form({ label }: Any): Any {
+        const [state, formAction, pending] = L.useActionState(act, 0);
+        const [plain, plainAction] = L.useActionState((s: Any) => s, "plain");
+        // Calling them on the server runs the actions, as React's server hook does.
+        if (label === "a") (formAction("payload"), plainAction("payload"));
+        return L.createElement("form", { action: formAction }, [label, state, plain, pending].join(":"));
+      }
+      function Late({ label }: Any): Any {
+        if (wait !== undefined) L.use(wait);
+        return L.createElement(Form, { label });
+      }
+      function Plain(): Any {
+        const [s] = L.useActionState((x: Any) => x, "only plain");
+        return s;
+      }
+      const Ref = L.forwardRef(function Named({ label }: Any, _ref: Any): Any {
+        const [state, formAction] = L.useActionState(act, "perm", "/permalink");
+        return L.createElement("form", { action: formAction }, label + ":" + state);
+      });
+      const Anonymous = L.forwardRef((_p: Any, _r: Any) => L.createElement(Form, { label: "anon" }));
+      const Memo = L.memo(Form);
+      const NamedMemo = L.memo(Form);
+      NamedMemo.displayName = "Shown";
+      const Ctx = L.createContext(0);
+      Ctx.displayName = "Ctx";
+      const Bare = L.createContext(0);
+      const Lazy = L.lazy(() => later({ default: Form }, 30));
+      class Cls extends L.Component {
+        render(): Any {
+          return L.createElement(Form, { label: "class" });
+        }
+      }
+      return L.createElement(
+        "div",
+        null,
+        [L.createElement(Form, { key: "a", label: "a" }), L.createElement(Memo, { key: 2, label: "b" })],
+        L.createElement(NamedMemo, { label: "c" }),
+        L.createElement(
+          L.Suspense,
+          { fallback: L.createElement(Form, { label: "fallback" }) },
+          L.createElement(Late, { label: "late" }),
+        ),
+        L.createElement(Ctx, { value: 1 }, L.createElement(L.Fragment, null, L.createElement(Form, { label: "ctx" }))),
+        L.createElement(Bare.Consumer, null, () => L.createElement(Form, { label: "consumer" })),
+        L.createElement(Ctx.Consumer, null, () => L.createElement(Plain)),
+        L.createElement(Ref, { label: "ref" }),
+        L.createElement(Anonymous),
+        L.createElement(
+          L.StrictMode,
+          null,
+          L.createElement(L.Profiler, { id: "p", onRender() {} }, L.createElement(Cls)),
+        ),
+        L.createElement(L.Activity, { mode: "visible" }, L.createElement(Form, { label: "activity" })),
+        L.createElement(L.Suspense, { fallback: "loading" }, L.createElement(Lazy, { label: "lazy" })),
+        L.createElement(Symbol.for("react.view_transition"), { name: "vt" }, L.createElement(Form, { label: "vt" })),
+        L.createElement(
+          Symbol.for("react.suspense_list"),
+          { revealOrder: "forwards", tail: "visible" },
+          L.createElement(L.Suspense, { fallback: "x" }, L.createElement(Form, { label: "row" })),
+        ),
+        new Set([L.createElement(Form, { label: "iterable" })]),
+      );
+    };
+  /** The $ACTION_KEY of the first form in `html`. */
+  const actionKey = (html: string): string => /name="\$ACTION_KEY" value="([^"]*)"/.exec(html)![1]!;
+
+  test("forms of server actions carry React's key paths and hashes in every entry", async () => {
+    const html = await same(tree(), undefined, true);
+    expect(html).toContain("$ACTION_KEY");
+    expect(html).toContain('action="/permalink"');
+    expect(html).toContain('value="p/permalink"');
+    // React's builds hash the key path differently: its Node build with MD5, the others with
+    // MurmurHash3, so the streams of the two builds carry different keys.
+    expect(actionKey(await pipeAll(Server, tree()(Compat)))).toMatch(/^k[0-9a-f]{32}$/);
+    expect(actionKey(await streamAll(Server, tree()(Compat)))).toMatch(/^k\d+$/);
+  });
+
+  test("a postback's formState is the matching action's state, with React's markers", async () => {
+    const readableKey = actionKey(await streamAll(ReactServer, tree()(React)));
+    const pipeKey = actionKey(await pipeAll(ReactNodeServer, tree()(React)));
+    for (const [formState, key] of [
+      [[42, readableKey, "ref", null], readableKey],
+      [[42, "no match", "ref", null], readableKey],
+      [[42, readableKey, "another ref", null], readableKey],
+      [[42, "p/permalink", "ref", null], readableKey],
+    ] as const) {
+      const options = { formState };
+      const html = await sameStream(tree(true), options);
+      expect(html).toContain("<!--F");
+      if (formState[1] === key && formState[2] === "ref") expect(html).toContain("<!--F!-->");
+      // renderToString has no formState, as React's legacy build.
+      expect(Server.renderToString(tree()(Compat), options as Any)).toBe(
+        ReactServer.renderToString(tree()(React), options),
+      );
+    }
+    const options = { formState: [42, pipeKey, "ref", null] };
+    const piped = await pipeAll(Server, tree(true)(Compat), options, true);
+    expect(piped).toBe(await pipeAll(ReactNodeServer, tree(true)(React), options, true));
+    expect(piped).toContain("<!--F!-->");
+  });
+
+  test("a component that renders again keeps the postback's state and its markers", async () => {
+    const again = (L: Lib): Any => {
+      const act = serverAction("ref");
+      function Again(): Any {
+        const [n, setN] = L.useState(0);
+        const [state, formAction] = L.useActionState(act, 0);
+        if (n < 2) setN(n + 1);
+        return L.createElement("form", { action: formAction }, "again:" + n + ":" + state);
+      }
+      return L.createElement("div", null, L.createElement(Again));
+    };
+    const key = actionKey(await streamAll(ReactServer, again(React)));
+    const html = await sameStream(again, { formState: [42, key, "ref", null] });
+    expect(html).toContain("again:2:42");
+    expect(html).toContain("<!--F!-->");
+  });
+});
