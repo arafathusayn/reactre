@@ -1,7 +1,8 @@
 // Builds the fixture apps with every bundler the plugin has an entry for, then
 // runs each bundle on the fake DOM: the reactre app (core mode) and the React
 // app (compat mode, class build) must render and update, and their JSX must
-// have been compiled to templates.
+// have been compiled to templates. A React app's server render must resolve to
+// @reactre/compat/server and write React's HTML.
 //
 // The bundlers resolve the workspace packages as an app resolves them from
 // npm, to their dist builds, so those are built first.
@@ -172,5 +173,19 @@ describe.each(Object.keys(bundlers))("%s", (name) => {
     find(root, "BUTTON").dispatchEvent(new FakeEvent("click"));
     await microtasks();
     expect(find(root, "P").textContent).toBe("Count: 1");
+  }, 60_000);
+
+  test("compat: resolves react-dom/server to @reactre/compat/server, which renders React's HTML", async () => {
+    const file = join(out, `${name}-server.js`);
+    await bundle(FIXTURES + "compat/server.jsx", file, { compat: { classes: true } });
+    const code = await Bun.file(file).text();
+    expect(code).not.toContain("react-dom-server");
+    // React's own renderToString writes exactly this for the same app.
+    const expected =
+      '<main id="_R_0_"><h1 class="title">reactre</h1><!--$--><p class="count">Count: <!-- -->2</p><!--/$-->' +
+      '<label for="_R_0_">2<!-- --> items, <!-- -->&lt;escaped&gt;</label></main>';
+    const app = (await import(file)) as { html(): string; stream(): Promise<string> };
+    expect(app.html()).toBe(expected);
+    expect(await app.stream()).toBe(expected);
   }, 60_000);
 });

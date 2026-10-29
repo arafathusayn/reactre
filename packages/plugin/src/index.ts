@@ -5,8 +5,11 @@
 //   - core (the default): .jsx and .tsx files are compiled by @reactre/compiler into templates and
 //     the code that updates them, as the Bun plugin compiles them.
 //   - compat: `react`, `react-dom` and their subpaths resolve to @reactre/compat (or its class
-//     build), in the app and in its dependencies, and the app's .jsx and .tsx files are compiled
-//     by @reactre/compat/compiler, whose host element trees become templates.
+//     build), and `react-dom/server` and `react-dom/static` (with their .browser, .edge, .node
+//     and .bun forms) to @reactre/compat/server, in the app and in its dependencies, and the
+//     app's .jsx and .tsx files are compiled by @reactre/compat/compiler, whose host element
+//     trees become templates. Server Components stay on React: a Vite environment named `rsc`,
+//     or a build that resolves with the `react-server` condition, is left alone.
 //
 // Each bundler's entry (`@reactre/plugin/vite`, `/rollup`, `/rolldown`, `/esbuild`, `/webpack`,
 // `/rspack`, `/bun`) is this plugin, built by unplugin for that bundler.
@@ -16,11 +19,12 @@
 //     runs under Node too. The compilers then read oxc's output as they read Bun's.
 //   - The plugin runs before the bundler's own JSX transform (`enforce: "pre"`), so every bundler
 //     gets plain JavaScript.
-//   - Each bundler redirects `react` the way it resolves best: an alias for Vite, which its
-//     dependency optimizer applies too, a module replacement for webpack and Rspack, esbuild's own
-//     resolve for esbuild, Bun's resolver for Bun, and the plugin context's resolve for Rollup and
-//     Rolldown. The bundler resolves the target, so @reactre/compat is the copy the app's own
-//     imports get.
+//   - Each bundler redirects `react` the way it resolves best: the plugin context's resolve for
+//     Vite (per environment, and in each environment's dependency optimizer), Rollup and
+//     Rolldown, a module replacement for webpack and Rspack, esbuild's own resolve for esbuild,
+//     and Bun's resolver for Bun. The bundler resolves the target, so @reactre/compat is the copy
+//     the app's own imports get. Vite's `resolve.alias` would be simpler, but it applies to every
+//     environment, the RSC one too.
 //   - No source maps yet: the compilers rewrite text without tracking positions. A transformed
 //     file maps to nothing rather than to the wrong line.
 
@@ -62,6 +66,17 @@ export interface ReactreOptions {
 /** `react`, `react-dom` and every subpath of them. */
 const REACT = /^react(?:-dom)?(?:\/.*)?$/;
 
+/** React's server renderer and its prerender entry, in each of their builds. */
+const SERVER = /^react-dom\/(?:server|static)(?:\.(?:browser|edge|node|bun))?(?:\.js)?$/;
+
+/** The export condition React Server Components resolve with. */
+const REACT_SERVER = "react-server";
+
+/** Whether an environment or build renders Server Components, which stay on React. */
+function isReactServer(environment: string | undefined, conditions: readonly string[] | undefined): boolean {
+  return environment === "rsc" || conditions?.includes(REACT_SERVER) === true;
+}
+
 /** The plugin, for every bundler unplugin supports. */
 export const reactre: UnpluginInstance<ReactreOptions | undefined, boolean> = createUnplugin<
   ReactreOptions | undefined,
@@ -69,7 +84,18 @@ export const reactre: UnpluginInstance<ReactreOptions | undefined, boolean> = cr
 >((options = {}, meta) => {
   const compat = options.compat === true ? {} : options.compat === false ? undefined : options.compat;
   const compile = compat === undefined || compat.compile !== false;
-  const target = compat?.classes === true ? "@reactre/compat/classes" : "@reactre/compat";
+  const client = compat?.classes === true ? "@reactre/compat/classes" : "@reactre/compat";
+  /** What a request for `react` or one of its subpaths resolves to. */
+  const target = (id: string): string => (SERVER.test(id) ? "@reactre/compat/server" : client);
+  // Rollup, Rolldown and Vite: the bundler resolves the target from the importer.
+  const resolveId = {
+    filter: { id: REACT },
+    async handler(this: unknown, id: string, importer: string | undefined) {
+      const context = this as Partial<RollupResolver>;
+      const r = await context.resolve?.(target(id), importer, { skipSelf: true });
+      return r?.id ?? null;
+    },
+  };
   const include = toArray(options.include ?? /\.[jt]sx$/);
   const exclude = toArray(options.exclude ?? /[\\/]node_modules[\\/]/);
 
@@ -105,8 +131,17 @@ export const reactre: UnpluginInstance<ReactreOptions | undefined, boolean> = cr
 
   switch (meta.framework) {
     case "vite":
-      // An alias, which Vite applies in its dependency optimizer as well as in the app.
-      plugin.vite = { config: () => ({ resolve: { alias: [{ find: REACT, replacement: target }] } }) };
+      plugin.resolveId = resolveId;
+      plugin.vite = {
+        // Neither the redirect nor the compile reach the RSC environment.
+        applyToEnvironment: (environment) => !isReactServer(environment.name, environment.config.resolve.conditions),
+        // The dependency optimizer bundles with its own plugins, not the app's: the redirect goes
+        // there too, so a dependency's `react` is the app's copy of compat.
+        configEnvironment: (name, config) =>
+          isReactServer(name, config.resolve?.conditions)
+            ? undefined
+            : { optimizeDeps: { rolldownOptions: { plugins: [{ name: "@reactre/plugin:react", resolveId }] } } },
+      };
       return plugin;
     case "webpack":
       plugin.webpack = (compiler) => replaceReact(compiler.webpack, compiler, target);
@@ -123,34 +158,50 @@ export const reactre: UnpluginInstance<ReactreOptions | undefined, boolean> = cr
           name: "@reactre/plugin:react",
           esbuild: {
             setup(build) {
+              if (isReactServer(undefined, build.initialOptions.conditions)) return;
               build.onResolve({ filter: REACT }, async (args) => {
-                const r = await build.resolve(target, { kind: args.kind, resolveDir: args.resolveDir });
+                const r = await build.resolve(target(args.path), { kind: args.kind, resolveDir: args.resolveDir });
                 return r.errors.length > 0 ? { errors: r.errors } : { path: r.path, sideEffects: r.sideEffects };
               });
             },
           },
         },
       ];
-    case "bun":
+    case "bun": {
+      // Bun.build names the conditions it resolves with.
+      let server = false;
+      plugin.bun = {
+        setup(build) {
+          const conditions = (build.config as { conditions?: string | string[] }).conditions;
+          server = isReactServer(undefined, typeof conditions === "string" ? [conditions] : conditions);
+        },
+      };
       plugin.resolveId = {
         filter: { id: REACT },
-        handler(_id, importer) {
+        handler(id, importer) {
+          if (server) return null;
           const { Bun } = globalThis as unknown as { Bun: { resolveSync(id: string, from: string): string } };
-          return Bun.resolveSync(target, importer === undefined ? process.cwd() : dirname(importer));
+          return Bun.resolveSync(target(id), importer === undefined ? process.cwd() : dirname(importer));
         },
       };
       return plugin;
-    default:
-      // Rollup, Rolldown and the rest: the bundler resolves the target from the importer.
+    }
+    default: {
+      // Rollup, Rolldown and the rest. Rolldown names the conditions it resolves with.
+      let server = false;
+      plugin.rolldown = {
+        options(options) {
+          server = isReactServer(undefined, options.resolve?.conditionNames);
+        },
+      };
       plugin.resolveId = {
-        filter: { id: REACT },
-        async handler(_id, importer) {
-          const context = this as unknown as Partial<RollupResolver>;
-          const r = await context.resolve?.(target, importer, { skipSelf: true });
-          return r?.id ?? null;
+        filter: resolveId.filter,
+        handler(id, importer) {
+          return server ? null : resolveId.handler.call(this, id, importer);
         },
       };
       return plugin;
+    }
   }
 });
 
@@ -177,10 +228,15 @@ interface ReplacementPlugins {
   ) => { apply(compiler: never): void };
 }
 
-/** Rewrite every request for `react` to `target` before webpack or Rspack resolves it. */
-function replaceReact(bundler: ReplacementPlugins, compiler: unknown, target: string): void {
+/**
+ * Rewrite every request for `react` to its target before webpack or Rspack resolves it, unless
+ * the build resolves with the `react-server` condition.
+ */
+function replaceReact(bundler: ReplacementPlugins, compiler: unknown, target: (id: string) => string): void {
+  const options = (compiler as { options?: { resolve?: { conditionNames?: string[] } } }).options;
+  if (isReactServer(undefined, options?.resolve?.conditionNames)) return;
   new bundler.NormalModuleReplacementPlugin(REACT, (resource) => {
-    resource.request = target;
+    resource.request = target(resource.request);
   }).apply(compiler as never);
 }
 

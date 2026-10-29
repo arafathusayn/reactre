@@ -6,6 +6,43 @@ import { describe, expect, test } from "bun:test";
 
 import { reactre, type ReactreOptions } from "../src/index.ts";
 
+// biome-ignore lint: the bundlers' hook contexts are stubbed loosely.
+type Any = any;
+
+/** The raw plugin (or plugins) for `framework`, with compat options. */
+const raw = (framework: string, options: ReactreOptions = { compat: true }): Any =>
+  reactre.raw(options, { framework } as never);
+
+/** What a Rollup-style resolveId hook asks the bundler to resolve `id` to, and what it returns. */
+async function resolveWith(plugin: Any, id: string): Promise<{ asked: string | null; result: unknown }> {
+  let asked: string | null = null;
+  const context = {
+    resolve: async (source: string) => {
+      asked = source;
+      return { id: "/resolved/" + source };
+    },
+  };
+  const hook = plugin.resolveId;
+  const result = hook.filter.id.test(id) ? await hook.handler.call(context, id, "/app/main.jsx") : "(filtered)";
+  return { asked, result };
+}
+
+/** The ids the redirect is checked with, and their targets (the client build is `client`). */
+const targets = (client: string): [string, string][] => [
+  ["react", client],
+  ["react/jsx-runtime", client],
+  ["react-dom", client],
+  ["react-dom/client", client],
+  ["react-dom/server", "@reactre/compat/server"],
+  ["react-dom/server.browser", "@reactre/compat/server"],
+  ["react-dom/server.edge", "@reactre/compat/server"],
+  ["react-dom/server.node", "@reactre/compat/server"],
+  ["react-dom/server.bun", "@reactre/compat/server"],
+  ["react-dom/server.js", "@reactre/compat/server"],
+  ["react-dom/static", "@reactre/compat/server"],
+  ["react-dom/static.edge", "@reactre/compat/server"],
+];
+
 /** The plugin's transform handler for `options`, as Vite would get it. */
 function transform(options: ReactreOptions) {
   const raw = reactre.raw(options, { framework: "vite" } as never);
@@ -38,5 +75,126 @@ describe("transform", () => {
     expect(transform({ compat: true })!.handler(`export const A = () => <b>x</b>;`, "/app/d.jsx").code).toContain(
       "__hrTemplate",
     );
+  });
+});
+
+describe("compat: where react resolves", () => {
+  test("Vite: react to compat, its server renderer to @reactre/compat/server, with or without classes", async () => {
+    for (const [options, client] of [
+      [{ compat: true }, "@reactre/compat"],
+      [{ compat: { classes: true } }, "@reactre/compat/classes"],
+    ] as const) {
+      const plugin = raw("vite", options);
+      for (const [id, target] of targets(client)) {
+        const { asked, result } = await resolveWith(plugin, id);
+        expect(asked).toBe(target);
+        expect(result).toBe("/resolved/" + target);
+      }
+      expect((await resolveWith(plugin, "react-dom-x")).result).toBe("(filtered)");
+    }
+    // A target the bundler cannot resolve leaves the request alone.
+    const plugin = raw("vite");
+    expect(await plugin.resolveId.handler.call({ resolve: async () => null }, "react", undefined)).toBeNull();
+    expect(await plugin.resolveId.handler.call({}, "react", undefined)).toBeNull();
+  });
+
+  test("Vite: the RSC environment, or one with the react-server condition, stays on React", async () => {
+    const vite = raw("vite").vite;
+    const env = (name: string, conditions: string[]): Any => ({ name, config: { resolve: { conditions } } });
+    expect(vite.applyToEnvironment(env("client", ["module", "browser"]))).toBe(true);
+    expect(vite.applyToEnvironment(env("ssr", ["module", "node"]))).toBe(true);
+    expect(vite.applyToEnvironment(env("rsc", []))).toBe(false);
+    expect(vite.applyToEnvironment(env("server", ["react-server", "node"]))).toBe(false);
+    // The dependency optimizer of the other environments redirects react too.
+    expect(vite.configEnvironment("rsc", {})).toBeUndefined();
+    expect(vite.configEnvironment("server", { resolve: { conditions: ["react-server"] } })).toBeUndefined();
+    const optimizer = vite.configEnvironment("client", {}).optimizeDeps.rolldownOptions.plugins[0];
+    expect(optimizer.name).toBe("@reactre/plugin:react");
+    expect((await resolveWith(optimizer, "react-dom/server")).asked).toBe("@reactre/compat/server");
+  });
+
+  test("Rollup and Rolldown: resolved by the bundler, unless Rolldown resolves with react-server", async () => {
+    for (const framework of ["rollup", "rolldown"]) {
+      const plugin = raw(framework);
+      for (const [id, target] of targets("@reactre/compat")) expect((await resolveWith(plugin, id)).asked).toBe(target);
+      plugin.rolldown.options({ resolve: { conditionNames: ["react-server", "import"] } });
+      expect(await resolveWith(plugin, "react")).toEqual({ asked: null, result: null });
+      plugin.rolldown.options({});
+      expect((await resolveWith(plugin, "react")).asked).toBe("@reactre/compat");
+    }
+  });
+
+  test("esbuild: its own resolve, not registered for a react-server build", async () => {
+    const [, redirect] = raw("esbuild");
+    const setup = (conditions?: string[]): Any => {
+      let onResolve: Any = null;
+      const asked: string[] = [];
+      redirect.esbuild.setup({
+        initialOptions: conditions === undefined ? {} : { conditions },
+        onResolve: (_: unknown, fn: Any) => (onResolve = fn),
+        resolve: async (path: string) => (
+          asked.push(path),
+          path === "missing" ? { errors: ["e"] } : { errors: [], path: "/r/" + path, sideEffects: true }
+        ),
+      });
+      return { onResolve, asked };
+    };
+    expect(setup(["react-server"]).onResolve).toBeNull();
+    const { onResolve, asked } = setup();
+    expect(await onResolve({ path: "react-dom/server.edge", kind: "import-statement", resolveDir: "/app" })).toEqual({
+      path: "/r/@reactre/compat/server",
+      sideEffects: true,
+    });
+    await onResolve({ path: "react", kind: "import-statement", resolveDir: "/app" });
+    expect(asked).toEqual(["@reactre/compat/server", "@reactre/compat"]);
+  });
+
+  test("webpack and Rspack: a module replacement, not added for a react-server build", () => {
+    for (const framework of ["webpack", "rspack"]) {
+      const applied: Any[] = [];
+      const bundler = {
+        NormalModuleReplacementPlugin: class {
+          constructor(
+            readonly test: RegExp,
+            readonly replace: (r: { request: string }) => void,
+          ) {}
+          apply() {
+            applied.push(this);
+          }
+        },
+      };
+      const hook = raw(framework)[framework];
+      hook({ [framework]: bundler, options: { resolve: { conditionNames: ["react-server"] } } });
+      expect(applied).toEqual([]);
+      hook({ [framework]: bundler, options: {} });
+      const replacement = applied[0];
+      for (const [id, target] of targets("@reactre/compat")) {
+        const resource = { request: id };
+        expect(replacement.test.test(id)).toBe(true);
+        replacement.replace(resource);
+        expect(resource.request).toBe(target);
+      }
+    }
+  });
+
+  test("Bun: Bun's resolver, unless the build resolves with react-server", () => {
+    const plugin = raw("bun");
+    const importer = new URL("../src/index.ts", import.meta.url).pathname;
+    plugin.bun.setup({ config: {} });
+    expect(plugin.resolveId.handler("react-dom/server", importer)).toBe(
+      Bun.resolveSync("@reactre/compat/server", importer),
+    );
+    // Without an importer, from the working directory.
+    const cwd = process.cwd();
+    process.chdir(new URL("..", import.meta.url).pathname);
+    try {
+      expect(plugin.resolveId.handler("react", undefined)).toBe(Bun.resolveSync("@reactre/compat", process.cwd()));
+    } finally {
+      process.chdir(cwd);
+    }
+    plugin.bun.setup({ config: { conditions: "react-server" } });
+    expect(plugin.resolveId.handler("react", importer)).toBeNull();
+    plugin.bun.setup({ config: { conditions: ["browser", "react-server"] } });
+    expect(plugin.resolveId.handler("react", importer)).toBeNull();
   });
 });
