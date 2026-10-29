@@ -93,8 +93,17 @@ export const KEYS: readonly string[] = [
  * rules). `renderRetry`: a render that throws renders again before its error counts, as React does
  * (else the error counts at once). `concurrentRendering`: transitions render as React's lanes
  * render them, after urgent updates, keeping the screen while one suspends (else at once).
+ * `viewTransitions`: a transition that changes a <ViewTransition> commits through
+ * `document.startViewTransition`, as React's does (else it commits plainly); it needs
+ * `concurrentRendering`.
  */
-export const BEHAVIOURS: readonly string[] = ["componentStack", "repeatedKeys", "renderRetry", "concurrentRendering"];
+export const BEHAVIOURS: readonly string[] = [
+  "componentStack",
+  "repeatedKeys",
+  "renderRetry",
+  "concurrentRendering",
+  "viewTransitions",
+];
 
 /**
  * The keys whose code is a module of its own, and that module. With the key on, the module
@@ -106,6 +115,7 @@ export const MODULES: Readonly<Record<string, string>> = {
   repeatedKeys: "@reactre/compat/features/keys",
   renderRetry: "@reactre/compat/features/retry",
   concurrentRendering: "@reactre/compat/features/concurrent",
+  viewTransitions: "@reactre/compat/features/viewTransitions",
 };
 
 /** Groups of keys, by the feature they make up. A group is written where a key may be. */
@@ -121,6 +131,7 @@ export const GROUPS: Readonly<Record<string, readonly string[]>> = {
 export const REQUIRES: Readonly<Record<string, string>> = {
   PureComponent: "Component",
   useFormState: "useActionState",
+  viewTransitions: "concurrentRendering",
 };
 
 const known = new Set([...KEYS, ...BEHAVIOURS]);

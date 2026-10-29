@@ -121,8 +121,16 @@ export const Activity: symbol = Symbol.for("react.activity");
 /** Renders its children; view transitions are not started. */
 export const ViewTransition: symbol = Symbol.for("react.view_transition");
 
-/** Names the transition for view transition types; with no view transitions started, it has no effect. */
-export function addTransitionType(_type: string): void {}
+/**
+ * Adds `type` to the types of the transition running now, which a view transition it starts gets
+ * (@reactre/compat/features/viewTransitions); outside one, starts a transition for it, as React does.
+ */
+export function addTransitionType(type: string): void {
+  const t = transition;
+  if (t === null) return startTransition(() => addTransitionType(type));
+  const ty = (t.types ??= []);
+  if (!ty.includes(type)) ty.push(type);
+}
 export { Activity as unstable_Activity, ViewTransition as unstable_ViewTransition };
 
 // #endregion
@@ -6782,6 +6790,8 @@ interface Transition {
   readonly done: (() => void)[];
   /** Async work started inside the transition (queued actions), which it waits for. */
   readonly wait?: PromiseLike<unknown>[];
+  /** Its view transition types (addTransitionType). */
+  types?: string[];
 }
 // The transition whose callback is running now, so updates and actions made in it join it.
 let transition: Transition | null = null;
@@ -6794,6 +6804,9 @@ function inTransition(t: Transition, fn: () => Any): Any {
     return fn();
   } finally {
     transition = prevT;
+    // As React queues them on every root a transition waits to render: the batches waiting now.
+    if (t.types !== undefined && lanes !== null)
+      for (const b of batches) for (const ty of t.types) if (!(b.y ??= []).includes(ty)) b.y.push(ty);
   }
 }
 
@@ -7092,6 +7105,8 @@ interface Batch {
   w: boolean;
   /** Boundaries that show their content again (see laneReveal), not transitions. */
   readonly r?: boolean;
+  /** Its transitions' view transition types (addTransitionType). */
+  y?: string[];
 }
 // The batches waiting to render, in order; the one this event's transitions join; the one this
 // render's deferred values join; how many async actions run.
@@ -7374,30 +7389,37 @@ function attempt(b: Batch, check: boolean): boolean {
     // Content a boundary shows again, within React's throttle after the last fallback appeared:
     // React renders it now and commits it when the throttle ends (its retry lanes' timeout).
     const ms = b.r && !at.bad.length && !moved ? w.shownAt + FALLBACK_THROTTLE - performance.now() : 0;
-    if (at.bad.length || moved || ms > 10) {
+    // A render that changes a <ViewTransition> commits through a view transition (see startVt);
+    // while one runs, a commit waits for it to finish, as React's waits for __reactViewTransition.
+    const vt = viewTransitions !== null && !at.bad.length && !moved ? viewTransitions.plan(rs, w.sv, w.records) : null;
+    const hold = ms > 10 || vt !== null || vtRunning !== null;
+    if (at.bad.length || moved || hold) {
       // What the render did, to redo it if it is held: the fibers' fields and the fields' values.
-      const p: Pending | null =
-        ms > 10
-          ? {
-              b,
-              at,
-              redo: [],
-              sv: resave(w.sv),
-              hv: [],
-              fv: fieldsNow(w.fv),
-              hidden: hiddenCount,
-              shownAt: fallbackShownAt,
-              q: [layoutQ, passiveQ, passiveUnmountQ],
-              timer: 0,
-            }
-          : null;
+      const p: Pending | null = hold
+        ? {
+            b,
+            at,
+            redo: [],
+            sv: resave(w.sv),
+            hv: [],
+            fv: fieldsNow(w.fv),
+            hidden: hiddenCount,
+            shownAt: fallbackShownAt,
+            q: [layoutQ, passiveQ, passiveUnmountQ],
+            timer: 0,
+            vt,
+            started: false,
+            undo,
+          }
+        : null;
       if (p !== null) for (let i = 0; i < w.hv.length; i += 8) p.hv.push(w.hv[i], ...hookNow(w.hv[i]));
       undoWatched(w, p && p.redo);
       if (p !== null) {
         // The DOM and the fibers are as they were, until the throttle ends or an update comes.
         pending = p;
         waiting = true;
-        p.timer = setTimeout(commitPending, ms) as Any;
+        if (ms > 10) p.timer = setTimeout(commitPending, ms) as Any;
+        else commitPending();
         return true;
       }
       for (let i = 0; i < undo.length; i += 3) pend.set(undo[i], { b: undo[i + 1], u: undo[i + 2] });
@@ -7557,13 +7579,29 @@ interface Pending {
   readonly shownAt: number;
   readonly q: [Hook[], Hook[], Any[]];
   timer: number;
+  /** What it does to view transitions (see ViewTransitions.plan), and whether one started. */
+  readonly vt: Any;
+  started: boolean;
+  /** The lane updates its render applied (see rebase), put back if it is dropped. */
+  readonly undo: Any[];
 }
 let pending: Pending | null = null;
 
-/** Make the held render again and commit it (its timeout). */
+/**
+ * The held render's throttle ended: it commits, once a running view transition finishes, through
+ * one of its own if it changes a <ViewTransition>.
+ */
 function commitPending(): void {
-  const p = pending!;
+  const p = pending!,
+    running = vtRunning;
+  if (running !== null) return void running.finished.finally(() => pending === p && commitPending());
+  if (p.vt !== null) return startVt(p);
   pending = null;
+  applyPending(p);
+}
+
+/** Make held render `p` again and commit it. */
+function applyPending(p: Pending): void {
   redoDom(p.redo);
   restoreFields(p.fv);
   restoreFibers(p.sv, p.hv);
@@ -7573,13 +7611,146 @@ function commitPending(): void {
   commit(p.b, p.at);
 }
 
-/** Drop the held render, if any (an update came): its boundaries reveal again, in a render of their own. */
+/**
+ * An update came: a held reveal is dropped, its boundaries revealing again in a render of their
+ * own; a commit a view transition waits for commits now, as React flushes pending effects first.
+ */
 function dropPending(): void {
   const p = pending;
-  if (p === null) return;
+  if (p === null) return finishVt();
   pending = null;
   clearTimeout(p.timer);
-  for (const f of p.b.f) laneReveal(f);
+  if (!p.started) {
+    if (p.b.r) {
+      for (const f of p.b.f) if (!(f.f & DEAD)) laneReveal(f);
+    } else {
+      // A transition: its updates wait again, and it renders again after the update.
+      for (let i = 0; i < p.undo.length; i += 3) pend.set(p.undo[i], { b: p.undo[i + 1], u: p.undo[i + 2] });
+      batches.unshift(p.b);
+      laneSoon();
+    }
+  } else {
+    // As React's flushPendingEffects: the view transition is skipped, and the commit made now.
+    p.vt.t.skipTransition();
+    vtCommit(p);
+    vtSpawned(p);
+    finishVt();
+  }
+}
+
+/** What the core calls of React's view transitions, once ./features/viewTransitions.ts installs them. */
+interface ViewTransitions {
+  /**
+   * A render about to commit, its DOM and fibers as it left them, `sv` the fibers saved before it
+   * and `records` its DOM changes: what it does to view transitions, or null when its roots hold no
+   * <ViewTransition>.
+   */
+  plan(roots: Set<Any>, sv: Any[], records: MutationRecord[]): Any;
+  /** Before the commit, the DOM and fibers as they were: the old names; whether any was set. */
+  before(plan: Any, types: string[] | null): boolean;
+  /** After the commit's mutations and layout effects: the new names. */
+  after(plan: Any): void;
+  /** The view transition is ready: the boundaries' events, whose cleanups run once it finishes. */
+  ready(plan: Any, finished: Promise<unknown>): void;
+  /** Its passive phase: the names go. */
+  done(plan: Any): void;
+}
+let viewTransitions: ViewTransitions | null = null;
+
+/** The view transition whose commit's passive phase waits for it to finish (see startVt), and its effects. */
+let vtWaits: { p: Pending; q: [Hook[], Any[]] } | null = null;
+/** The view transition running, until it finishes (React's document.__reactViewTransition). */
+let vtRunning: Any = null;
+
+/**
+ * Commit held render `p` through a view transition, as React's commitRoot does when the render
+ * changes a <ViewTransition>: the names of what leaves or changes go on the old DOM, then
+ * `document.startViewTransition`'s update makes the render again, commits it (mutations and
+ * layout effects) and names what enters or changed. Its events run once it is ready, and its
+ * passive phase (passive effects, the names going) once it finishes. Without the API, or with
+ * nothing named, it commits at once.
+ */
+function startVt(p: Pending): void {
+  p.started = true;
+  const vt = viewTransitions!;
+  const types = p.b.y ?? null;
+  if (!vt.before(p.vt, types)) {
+    pending = null;
+    applyPending(p);
+    return vt.done(p.vt);
+  }
+  const update = (): void => {
+    if (pending !== p) return;
+    pending = null;
+    vtCommit(p);
+    vt.after(p.vt);
+  };
+  const doc = p.vt.doc;
+  let t: Any;
+  try {
+    t = doc.startViewTransition({ update, types });
+  } catch {
+    // As React's startViewTransition, when the browser has none: the commit, then its spawned work.
+    if (pending === p) {
+      pending = null;
+      applyPending(p);
+    }
+    vt.done(p.vt);
+    return;
+  }
+  p.vt.t = vtRunning = doc.__reactViewTransition = t;
+  const over = (): void => {
+    if (vtRunning === t) vtRunning = doc.__reactViewTransition = null;
+  };
+  t.ready.then(
+    () => vtSpawned(p),
+    () => {
+      over();
+      if (pending === p) {
+        pending = null;
+        vtCommit(p);
+      }
+      vtSpawned(p);
+    },
+  );
+  t.finished.finally(() => {
+    over();
+    if (vtWaits !== null && vtWaits.p === p) finishVt();
+  });
+}
+
+/** Commit held render `p` for its view transition: its passive phase waits for the transition to finish. */
+function vtCommit(p: Pending): void {
+  finishVt();
+  applyPending(p);
+  vtWaits = { p, q: [passiveQ, passiveUnmountQ] };
+  passiveQ = [];
+  passiveUnmountQ = [];
+}
+
+/** `p`'s spawned work, once its view transition is ready: its events. */
+function vtSpawned(p: Pending): void {
+  if (p.vt.s) return;
+  p.vt.s = true;
+  viewTransitions!.ready(p.vt, p.vt.t.finished);
+}
+
+/** Run the passive phase a view transition kept: the names go and the passive effects run. */
+function finishVt(): void {
+  const w = vtWaits;
+  if (w === null) return;
+  vtWaits = null;
+  viewTransitions!.done(w.p.vt);
+  passiveQ.unshift(...w.q[0]);
+  passiveUnmountQ.unshift(...w.q[1]);
+  if (!flushing) {
+    flushing = true;
+    try {
+      flushPassive();
+    } finally {
+      flushing = false;
+    }
+  }
 }
 
 // The boundaries whose content a settled promise reveals, waiting for their render (see laneReveal).
@@ -7607,7 +7778,8 @@ function runReveal(): void {
   reveal = null;
   // Urgent work, and the last commit's passive effects, first.
   flushWork(true);
-  attempt(b, true);
+  for (const f of b.f) if (f.f & DEAD) b.f.delete(f);
+  if (b.f.size) attempt(b, true);
 }
 
 /** Put back the fibers and hooks save() saved in `sv` and `hv`. */
@@ -7839,6 +8011,37 @@ function ownNode(n: Any, head: Node): boolean {
  * Internal: React's transition lanes (see Lanes); @reactre/compat/features/concurrent calls it
  * when it loads. Until then, a transition renders at once.
  */
+/**
+ * Internal: React's view transitions (see ViewTransitions), on its transition lanes, which it
+ * installs too; @reactre/compat/features/viewTransitions calls it when it loads. Until then, a
+ * transition commits without a view transition.
+ */
+export function __installViewTransitions(make: (core: VtCore) => ViewTransitions): void {
+  __installConcurrent();
+  viewTransitions ??= make({
+    FRAG,
+    TEXT,
+    ACTIVITY,
+    SLOT,
+    BOX,
+    HIDDEN,
+    DEAD,
+    VIEW_TRANSITION: ViewTransition,
+  });
+}
+
+/** What ./features/viewTransitions.ts reads of the core. */
+export interface VtCore {
+  readonly FRAG: number;
+  readonly TEXT: number;
+  readonly ACTIVITY: number;
+  readonly SLOT: number;
+  readonly BOX: number;
+  readonly HIDDEN: number;
+  readonly DEAD: number;
+  readonly VIEW_TRANSITION: symbol;
+}
+
 export function __installConcurrent(): void {
   pend ??= new Map();
   lanes ??= {

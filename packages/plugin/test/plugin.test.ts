@@ -209,6 +209,10 @@ describe("compat: where react resolves", () => {
     const noLanes = await written({ compat: { exclude: ["concurrentRendering"] } });
     expect(noLanes).toContain('import "@reactre/compat/features/retry";\nexport * from');
     expect(noLanes).not.toContain("features/concurrent");
+    // View transitions need the lanes: off with them, and off alone.
+    expect(noLanes).not.toContain("features/viewTransitions");
+    const noViews = await written({ compat: { exclude: ["viewTransitions"] } });
+    expect(noViews).toContain('import "@reactre/compat/features/concurrent";\nexport * from');
   });
 
   test("esbuild: its own resolve, not registered for a react-server build", async () => {

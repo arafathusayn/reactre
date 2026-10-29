@@ -94,10 +94,10 @@ export interface ReactreOptions {
 // #region The plugin
 
 /** @reactre/compat's client entries and feature modules, which the module written for an app's options imports. */
-const COMPAT = /^@reactre\/compat(?:\/core|\/features\/[a-z]+)?$/;
+const COMPAT = /^@reactre\/compat(?:\/core|\/features\/[a-zA-Z]+)?$/;
 
 /** The requests the plugin resolves: `react`, `react-dom` and their subpaths, and compat's client entries. */
-const REQUEST = /^(?:react(?:-dom)?(?:\/.*)?|@reactre\/compat(?:\/core|\/features\/[a-z]+)?)$/;
+const REQUEST = /^(?:react(?:-dom)?(?:\/.*)?|@reactre\/compat(?:\/core|\/features\/[a-zA-Z]+)?)$/;
 
 /** The modules the API scan reads. */
 const SCRIPT = /\.[cm]?[jt]sx?(?:$|\?)/;

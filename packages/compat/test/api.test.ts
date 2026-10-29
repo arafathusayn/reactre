@@ -16,7 +16,8 @@ describe("API manifest", () => {
 
   test("groups and requirements name keys", () => {
     for (const keys of Object.values(GROUPS)) for (const k of keys) expect(KEYS).toContain(k);
-    for (const [k, whole] of Object.entries(REQUIRES)) expect([k, whole].every((x) => KEYS.includes(x))).toBe(true);
+    const keys = [...KEYS, ...BEHAVIOURS];
+    for (const [k, whole] of Object.entries(REQUIRES)) expect([k, whole].every((x) => keys.includes(x))).toBe(true);
   });
 
   test('"all" is every key, less what is excluded and what is part of it', () => {
@@ -39,6 +40,7 @@ describe("API manifest", () => {
         "componentStack",
         "renderRetry",
         "concurrentRendering",
+        "viewTransitions",
       ]),
     );
   });
@@ -64,7 +66,7 @@ describe("API manifest", () => {
   test("an unknown key, or no root, is an error", () => {
     expect(() => enabledApis("all", ["useStat"])).toThrow('"useStat" is not an API key');
     expect(() => enabledApis("all", ["useStat"])).toThrow(
-      "the behaviours componentStack, repeatedKeys, renderRetry, concurrentRendering and the groups",
+      "the behaviours componentStack, repeatedKeys, renderRetry, concurrentRendering, viewTransitions and the groups",
     );
     expect(() => enabledApis(["@forms"], [])).toThrow("an app needs createRoot or hydrateRoot");
     expect(() => enabledApis("all", ["createRoot", "hydrateRoot"])).toThrow("needs createRoot or hydrateRoot");
@@ -82,5 +84,11 @@ describe("API manifest", () => {
     // ViewTransition and addTransitionType are stable exports of 19.3.1.
     for (const k of ["ViewTransition", "addTransitionType"])
       expect([k in R, k in Core, k in React]).toEqual([true, true, true]);
+  });
+
+  test("view transitions need the transition lanes: excluding these leaves both out", () => {
+    expect(enabledApis("all", ["concurrentRendering"]).has("viewTransitions")).toBe(false);
+    const on = enabledApis("all", ["viewTransitions"]);
+    expect([on.has("viewTransitions"), on.has("concurrentRendering")]).toEqual([false, true]);
   });
 });

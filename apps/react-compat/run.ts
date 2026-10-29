@@ -79,7 +79,10 @@ const ours = (rt: string) => rt.startsWith("reactre-compat");
 const NO_CLASSES = "this build leaves class support out";
 // Scenarios that need a feature module @reactre/compat/core leaves out on purpose, React's
 // transition lanes (@reactre/compat/features/concurrent): without it a transition renders at once.
-const NEEDS_FEATURES = new Set(["a transition undone keeps a select's selection"]);
+const NEEDS_FEATURES = new Set([
+  "a transition undone keeps a select's selection",
+  "view transitions: names, types and events",
+]);
 const verbose = args.includes("--verbose");
 /** Only the scenarios whose names contain one of these comma-separated texts. */
 const only = opt("--only");

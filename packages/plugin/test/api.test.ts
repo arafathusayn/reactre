@@ -63,7 +63,8 @@ describe("the module written for the options", () => {
     expect(src).toContain(
       'import "@reactre/compat/features/classes";\nimport "@reactre/compat/features/stacks";\n' +
         'import "@reactre/compat/features/keys";\nimport "@reactre/compat/features/retry";\n' +
-        'import "@reactre/compat/features/concurrent";\nexport * from "@reactre/compat/core";',
+        'import "@reactre/compat/features/concurrent";\nimport "@reactre/compat/features/viewTransitions";\n' +
+        'export * from "@reactre/compat/core";',
     );
     expect(src).toContain('export const useEffect = /* @__PURE__ */ off("useEffect");');
     expect(src).toContain('export const lazy = /* @__PURE__ */ off("lazy");');

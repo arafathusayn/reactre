@@ -13,6 +13,7 @@
 
 import {
   Activity,
+  addTransitionType,
   Children,
   cloneElement,
   Component,
@@ -46,6 +47,7 @@ import {
   useState,
   useSyncExternalStore,
   useTransition,
+  ViewTransition,
 } from "react";
 import { createPortal, flushSync, useFormStatus } from "react-dom";
 import { createRoot, hydrateRoot, type Root } from "react-dom/client";
@@ -1053,6 +1055,104 @@ export const cases: Record<string, Case> = {
     resolve("C");
     await t.step("done");
     chosen();
+  },
+
+  // A transition that changes a <ViewTransition> starts a view transition: the names of what
+  // leaves or changes are on the old page when it starts, those of what enters or changed on the
+  // new one, with the transition's types; its events run once it is ready. An urgent update
+  // starts none.
+  async "view transitions: names, types and events"(t) {
+    const doc = document as Document & { startViewTransition: (o: Any) => Any };
+    const original = doc.startViewTransition;
+    let last: Any = null;
+    const names = () =>
+      [...t.root.querySelectorAll<HTMLElement>("*")]
+        .filter((e) => e.style.viewTransitionName)
+        .map((e) => `${e.localName}:${e.style.viewTransitionName}:${(e.style as Any).viewTransitionClass ?? ""}`)
+        .join(" ") + ` root:${document.documentElement.style.viewTransitionName}`;
+    doc.startViewTransition = function (o: Any) {
+      t.log("start", o.types ?? null, names());
+      last = original.call(doc, {
+        update: () => {
+          const r = o.update();
+          t.log("updated", names());
+          return r;
+        },
+        types: o.types,
+      });
+      return last;
+    };
+    const settleVt = async (label: string) => {
+      await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
+      if (last !== null) await last.finished.catch(() => {});
+      last = null;
+      await t.step(label);
+      t.log("names after", names());
+    };
+    const events = (label: string) => ({
+      onEnter: (i: Any, types: string[]) => void t.log(label, "enter", i.name, types),
+      onExit: (i: Any, types: string[]) => void t.log(label, "exit", i.name, types),
+      onUpdate: (i: Any, types: string[]) => void t.log(label, "update", i.name, types),
+      onShare: (i: Any, types: string[]) => void t.log(label, "share", i.name, types),
+    });
+    let set!: (f: (s: Any) => Any) => void;
+    function App() {
+      const [s, setS] = useState({ text: "A", panel: false, hero: "a", n: 0 });
+      set = setS;
+      useEffect(() => void t.log("effect", s.text, s.panel, s.hero));
+      return (
+        <div>
+          <ViewTransition name="title" {...events("title")}>
+            <h1>{s.text}</h1>
+          </ViewTransition>
+          {s.panel && (
+            <ViewTransition name="panel" default="slide" {...events("panel")}>
+              <section>panel</section>
+              <span>two</span>
+            </ViewTransition>
+          )}
+          {s.hero === "a" ? (
+            <ViewTransition name="hero" {...events("hero a")}>
+              <b>a</b>
+            </ViewTransition>
+          ) : (
+            <i>
+              <ViewTransition name="hero" share={{ next: "morph", default: "auto" }} {...events("hero b")}>
+                <b>b</b>
+              </ViewTransition>
+            </i>
+          )}
+          <ViewTransition {...events("auto")}>
+            <p>{s.n}</p>
+          </ViewTransition>
+          <em>{s.n}</em>
+        </div>
+      );
+    }
+    try {
+      mount(t, <App />);
+      await settleVt("mount");
+      startTransition(() => {
+        addTransitionType("next");
+        set((s) => ({ ...s, text: "B" }));
+      });
+      await settleVt("update");
+      startTransition(() => set((s) => ({ ...s, panel: true })));
+      await settleVt("enter");
+      startTransition(() => set((s) => ({ ...s, panel: false })));
+      await settleVt("exit");
+      startTransition(() => {
+        addTransitionType("next");
+        set((s) => ({ ...s, hero: "b" }));
+      });
+      await settleVt("share");
+      startTransition(() => set((s) => ({ ...s, n: s.n + 1 })));
+      await settleVt("auto");
+      flushSync(() => set((s) => ({ ...s, text: "C" })));
+      await settleVt("urgent");
+    } finally {
+      doc.startViewTransition = original;
+    }
   },
 
   // A form action's pending state and data, its result in state, and the form's reset after it.
