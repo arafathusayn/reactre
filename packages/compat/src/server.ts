@@ -30,10 +30,9 @@
 //      writable is full (React's Node build), and 2048-byte views for renderToReadableStream (its
 //      browser and edge builds), so the chunks are React's too.
 //
-// What differs from React (see the README for the full list): a promise created during render
-// (uncached) is not replayed on retry, so `use()` of one suspends again; `formState` and the
-// prerender and resume APIs are not supported (the latter throw); error messages are React's
-// full (development) messages rather than minified codes.
+// What differs from React (see the README for the full list): the prerender and resume APIs are
+// not supported (they throw); error messages are React's full (development) messages rather than
+// minified codes.
 //
 // The file reads top down, in folding regions: HTML writing (escaping, attributes, elements,
 // resources), format and tree contexts, the request and its tasks, rendering, the work loop,
