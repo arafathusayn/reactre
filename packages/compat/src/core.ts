@@ -7262,6 +7262,11 @@ let lanes: Lanes | null = null;
 
 /** The transitions of one event, or the deferred values of one render: one render and commit. */
 interface Batch {
+  /**
+   * Its lanes, as bits: React's transition lanes (DEFER_LANE for deferred values', REVEAL_LANE for
+   * reveals'). The ready batch with the lowest renders first (see runLanes).
+   */
+  l: number;
   /** Fibers to render whatever their state (deferred values'). */
   readonly f: Set<Fiber>;
   /** State hooks it has updates for (in `pend`). */
@@ -7375,15 +7380,42 @@ function under(f: Fiber | null, p: Fiber): boolean {
 /** The open batch of this event's transitions, made (and its task queued) on its first update. */
 function batchNow(): Batch {
   if (openBatch === null) {
-    batches.push((openBatch = newBatch()));
+    // A batch waiting on the lane this event got takes its updates: one lane renders once.
+    const l = eventLane();
+    let b: Batch | null = null;
+    for (const x of batches) if (x.l & l) b = x;
+    if (b === null) batches.push((b = newBatch(l)));
+    openBatch = b;
     // React's lane is per event: transitions started after this event's microtasks join another.
     void RESOLVED.then(() => (openBatch = null));
   }
   return openBatch;
 }
-function newBatch(): Batch {
+function newBatch(l: number): Batch {
   laneSoon();
-  return { f: new Set(), h: new Set(), k: [], w: false };
+  return { l, f: new Set(), h: new Set(), k: [], w: false };
+}
+
+// React's transition lanes: an event's transitions get the next of 10 in a cycle the page shares,
+// those while an async action runs the action's. Deferred values' render together after them, and
+// reveals' (retry lanes) after those.
+const DEFER_LANE = 1 << 10,
+  REVEAL_LANE = 1 << 11;
+let nextLane = 0,
+  thisEvent = 0,
+  actionLane = 0;
+
+/** The lane of this event's transitions, claimed on its first (React's requestTransitionLane). */
+function eventLane(): number {
+  if (thisEvent === 0) {
+    if (actionLane !== 0) thisEvent = actionLane;
+    else {
+      thisEvent = 1 << nextLane;
+      nextLane = (nextLane + 1) % 10;
+    }
+    void RESOLVED.then(() => (thisEvent = 0));
+  }
+  return thisEvent;
 }
 /**
  * An update makes the batches waiting for data render again, as React's markRootUpdated clears
@@ -7488,6 +7520,7 @@ function entangle(b: Batch, into: Batch): Batch {
     for (let i = 1; i < u.length; i += 2) if (u[i] === b) u[i] = into;
   }
   into.k.push(...b.k);
+  into.l |= b.l;
   batches.splice(batches.indexOf(b), 1);
   return (openBatch = into);
 }
@@ -7516,27 +7549,36 @@ function laneLater(f: Fiber, fn: () => void): boolean {
 
 function laneDefer(f: Fiber): void {
   if (deferBatch === null) {
-    batches.push((deferBatch = newBatch()));
+    batches.push((deferBatch = newBatch(DEFER_LANE)));
     void RESOLVED.then(() => (deferBatch = null));
   }
   deferBatch.f.add(f);
 }
 
 function laneAct(p: PromiseLike<unknown>): void {
-  actions++;
+  // The transitions until the actions settle take the first one's lane (React's entangled lane).
+  if (actions++ === 0) actionLane = eventLane();
   const done = (): void => {
-    if (--actions === 0) laneSoon();
+    if (--actions === 0) {
+      actionLane = 0;
+      laneSoon();
+    }
   };
   p.then(done, done);
 }
 
-/** Render every batch that is ready, in order: each its own render and commit, as React's lanes. */
+/**
+ * Render every batch that is ready, the lowest lane first (React's getNextLanes): each its own
+ * render and commit, once.
+ */
 function runLanes(): boolean {
   laneTask = false;
   let any = false;
-  for (let ix = 0; ix < batches.length && !actions; ix++) {
-    const b = batches[ix]!;
-    if (b.w) continue;
+  const tried = new Set<Batch>();
+  while (!actions) {
+    let b: Batch | null = null;
+    for (const x of batches) if (!x.w && !tried.has(x) && (b === null || (x.l & -x.l) < (b.l & -b.l))) b = x;
+    if (b === null) break;
     // Urgent work, and the last commit's passive effects, first.
     flushWork(true);
     if (queue.length) {
@@ -7544,7 +7586,11 @@ function runLanes(): boolean {
       break;
     }
     any = true;
-    if (attempt(b, true)) batches.splice(ix--, 1);
+    tried.add(b);
+    if (attempt(b, true)) {
+      const ix = batches.indexOf(b);
+      if (ix >= 0) batches.splice(ix, 1);
+    }
   }
   return any;
 }
@@ -7600,6 +7646,9 @@ function attempt(b: Batch, check: boolean): boolean {
         bailRender(f);
       }
     }
+    // Content that suspended where it showed, its boundary not rendered (a component under it
+    // rendered alone): the attempt waits for it, as React's keeps the screen.
+    if (skipped !== null) for (const t of skipped.values()) at.bad.push(t);
   } finally {
     laneRender = flushing = unwinding = false;
     skipped = null;
@@ -8120,7 +8169,7 @@ function laneReveal(f: Fiber): boolean {
   // A render held for others renders again with this one, as React renders retry lanes together.
   dropPending();
   if (reveal === null) {
-    reveal = { f: new Set(), h: new Set(), k: [], w: false, r: true };
+    reveal = { l: REVEAL_LANE, f: new Set(), h: new Set(), k: [], w: false, r: true };
     afterPaint(runReveal);
   }
   reveal.f.add(f);

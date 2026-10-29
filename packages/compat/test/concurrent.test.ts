@@ -6,10 +6,9 @@
 // it was until the data arrives. Each test runs one scene with each library, on a root apiece,
 // and expects the same log: what the components and effects write, and the markup at each point
 // the scene looks at (synchronously, after the microtasks, after a task, once all settled).
-// Renders are in the log too, those of a transition that suspends and is undone included, except
-// where React's order depends on the transition lane each transition got: React hands them out
-// in a cycle of 14 shared by every root of the page, so which of two transitions waiting at once
-// renders first depends on how many came before. Compat renders them in the order they started.
+// Renders are in the log too, those of a transition that suspends and is undone included. Which of
+// two transitions waiting at once renders first follows the lane each got, from a cycle of 10 the
+// page shares, so it depends on every transition before: compat claims its lanes as React does.
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 
@@ -1291,6 +1290,45 @@ describe("timing", () => {
       // The store moves on while the transition waits for its task: the transition renders it.
       L.startTransition(() => set(2));
       value = 5;
+      await settle();
+    }));
+});
+
+// #endregion
+
+// #region Lanes
+
+describe("lanes", () => {
+  test("transitions waiting at once render in the order of their lanes, a cycle of 10 the page shares", () =>
+    // Eleven events, each a transition that waits for its data where content shows: the lanes wrap
+    // somewhere among them, so a later one renders before earlier ones, and the 11th shares the
+    // 1st's lane and renders with it. The cycle carries on from every transition before, in both: last in the file, so all of them.
+    same(async ({ L, log, root, flushSync, micro, settle }) => {
+      const data = Array.from({ length: 11 }, () => deferred<string>());
+      const sets: Any[] = [];
+      const Item = (props: { i: number }) => {
+        const [p, set] = L.useState(null);
+        sets[props.i] = set;
+        const v = p === null ? "-" : L.use(p);
+        log.push(`render ${props.i} ${v}`);
+        return v;
+      };
+      flushSync(() =>
+        root.render(
+          L.createElement(
+            L.Suspense,
+            { fallback: "…" },
+            data.map((_, i) => L.createElement(Item, { key: i, i })),
+          ),
+        ),
+      );
+      for (let i = 0; i < data.length; i++) {
+        L.startTransition(() => sets[i](data[i]!.p));
+        await micro();
+      }
+      await settle();
+      log.push("all waiting");
+      for (let i = 0; i < data.length; i++) data[i]!.resolve("v" + i);
       await settle();
     }));
 });
