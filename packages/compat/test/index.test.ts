@@ -6,7 +6,8 @@
 // Covered here: keyed reconciliation and its DOM operation counts, batching and flushSync,
 // context through memo, effect order, event bubbling, compiled blocks hosted by components, list
 // updates from a compiled loop's report (__delta), memo bailouts in lists, lazy initial state,
-// Suspense's reveal throttle, keyboard event fields, and where <title> goes in <head>.
+// Suspense's reveal throttle, keyboard event fields, where <title> goes in <head>, and when an
+// <img> gets its src.
 
 import { beforeEach, describe, expect, test } from "bun:test";
 
@@ -831,5 +832,29 @@ describe("document metadata", () => {
     render(h("div", null, h("title", null, "Outer"), h("meta", { name: "d" }), h("title", null, "Inner")));
     expect(html(head)).toBe("<title>Inner</title><title>Outer</title><meta></meta>");
     expect(html()).toBe("<div></div>");
+  });
+});
+
+describe("images", () => {
+  test("an <img> takes srcSet and src after its other props when it mounts, as React sets them", () => {
+    render(h("img", { src: "a.png", srcSet: "b.png 2x", alt: "", title: "t" }));
+    const img = container.firstChild as FakeElement;
+    // HTML attribute names are case-insensitive; the fake DOM keeps the case it was given.
+    const attrs = () => img.attributes.map((a) => `${a.name.toLowerCase()}=${a.value}`);
+    expect(attrs()).toEqual(["alt=", "title=t", "srcset=b.png 2x", "src=a.png"]);
+    render(h("img", { src: "c.png", srcSet: "b.png 2x", alt: "x", title: "t" }));
+    expect(attrs()).toEqual(["alt=x", "title=t", "srcset=b.png 2x", "src=c.png"]);
+  });
+
+  test("a compiled <img> takes srcSet and src last too, static or not", () => {
+    const tpl = __template(["p", 0, ["img", { src: "a.png", alt: "", srcSet: { h: 0 }, title: { h: 1 } }]]);
+    render(__block(tpl, null, ["b.png 2x", "t"]));
+    const img = (container.firstChild as FakeElement).firstChild as FakeElement;
+    expect(img.attributes.map((a) => `${a.name.toLowerCase()}=${a.value}`)).toEqual([
+      "alt=",
+      "title=t",
+      "srcset=b.png 2x",
+      "src=a.png",
+    ]);
   });
 });

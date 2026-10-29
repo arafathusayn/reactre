@@ -1708,8 +1708,16 @@ const UNITLESS = /acit|ex(?:s|g|n|p|$)|rph|grid|ows|mnc|ntw|ine[ch]|zoo|^ord|ite
 function setProps(f: Fiber, dom: Any, o: Props, p: Any, mount: boolean): void {
   const tag: string = f.t;
   // Inputs take type, value, checked and name after their other attributes, in
-  // that order, as React sets them; textareas and selects take their value.
-  const skip = tag === "input" ? INPUT_LAST : tag === "textarea" || tag === "select" ? VALUE_LAST : null;
+  // that order, as React sets them; textareas and selects take their value; a new image takes
+  // srcSet and src, so the attributes that shape its request (sizes, loading) come first.
+  const skip =
+    tag === "input"
+      ? INPUT_LAST
+      : tag === "textarea" || tag === "select"
+        ? VALUE_LAST
+        : tag === "img" && mount
+          ? SRC_LAST
+          : null;
   for (const k in o) {
     if (!(k in p) && !RESERVED.has(k) && (skip === null || !skip.has(k))) setAttr(f, dom, k, null, o[k]);
   }
@@ -1717,6 +1725,10 @@ function setProps(f: Fiber, dom: Any, o: Props, p: Any, mount: boolean): void {
     const v = p[k];
     if (v === o[k] || RESERVED.has(k) || (skip !== null && skip.has(k))) continue;
     setAttr(f, dom, k, v, o[k]);
+  }
+  if (skip === SRC_LAST) {
+    if (p.srcSet != null) setAttr(f, dom, "srcSet", p.srcSet, undefined);
+    if (p.src != null) setAttr(f, dom, "src", p.src, undefined);
   }
   if (tag === "input") setInput(dom, p, o, mount);
   // Tracked after the initial value is written, so the tracker starts from it.
@@ -1747,6 +1759,7 @@ function setProps(f: Fiber, dom: Any, o: Props, p: Any, mount: boolean): void {
 // Props of form fields that setProps leaves to setInput and the textarea and select code.
 const INPUT_LAST = new Set(["type", "value", "checked", "name"]);
 const VALUE_LAST = new Set(["value"]);
+const SRC_LAST = new Set(["srcSet", "src"]);
 // Strings for type and name: functions, symbols and booleans are left out.
 const plain = (v: Any): boolean =>
   v != null && typeof v !== "function" && typeof v !== "symbol" && typeof v !== "boolean";
@@ -2060,9 +2073,13 @@ class Template {
       const info = { ns: own, t: tag };
       const props = d[1];
       if (props) {
-        // In prop order, as React sets them: a hole's attribute is reserved
-        // here, so its value later lands in the same place.
-        for (const k in props) {
+        // In prop order, as React sets them (an image's srcSet and src last, as setProps
+        // writes them): a hole's attribute is reserved here, so its value later lands in the
+        // same place.
+        const keys = Object.keys(props);
+        if (tag === "img")
+          for (const k of ["srcSet", "src"]) if (k in props) keys.push(keys.splice(keys.indexOf(k), 1)[0]!);
+        for (const k of keys) {
           const x = props[k];
           if (!isHole(x)) setAttr(info as Any, el, k, x, undefined);
           else {
