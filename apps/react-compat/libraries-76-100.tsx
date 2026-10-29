@@ -887,12 +887,18 @@ export const libraries76To100: Record<string, (t: T) => Promise<void>> = {
       );
     await until(() => titles().length > 0, 2000);
     await frames(2);
-    t.log("events", titles().map((e) => e.textContent));
+    t.log(
+      "events",
+      titles().map((e) => e.textContent),
+    );
     titles()[0]?.click();
     ref.current?.getApi().next();
     await until(() => titles()[0]?.textContent === "Review", 2000);
     await frames(2);
-    t.log("events", titles().map((e) => e.textContent));
+    t.log(
+      "events",
+      titles().map((e) => e.textContent),
+    );
     t.log("cells", t.root.querySelectorAll("[data-date]").length);
   },
 
