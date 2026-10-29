@@ -853,13 +853,15 @@ export const libraries76To100: Record<string, (t: T) => Promise<void>> = {
     enqueueSnackbar("one");
     const two = enqueueSnackbar("two", { variant: "success" });
     enqueueSnackbar("three", { variant: "error" });
-    await wait(100);
+    // Each step once the collapses its timers start have run (175 ms and 300 ms): a step inside
+    // one reads a frame of the animation, which a loaded machine reaches at another time.
+    await wait(600);
     await t.step("two shown");
     closeSnackbar(two);
-    await wait(300);
+    await wait(600);
     await t.step("closed two");
     closeSnackbar();
-    await wait(300);
+    await wait(600);
     await t.step("closed all");
   },
 
