@@ -2,7 +2,9 @@ import { expect, test } from "bun:test";
 
 import { __block, __template } from "../src/block.ts";
 import { Component, createElement as h, render } from "../src/engine.ts";
-import { container, html, installDom, tick } from "./dom.ts";
+import { container, html, installDom, tick, useDom } from "./dom.ts";
+
+useDom();
 
 test("boundary reset keeps order", async () => {
   installDom();

@@ -21,7 +21,9 @@ import webpack from "webpack";
 
 import type { CompilerOptions } from "../src/compiler.ts";
 import { reactrePreact } from "../src/plugin.ts";
-import { container, html, installDom } from "./dom.ts";
+import { container, html, installDom, useDom } from "./dom.ts";
+
+useDom();
 
 // The coverage settings skip folders named reactre-plugin-*: these bundles are not sources.
 const out = mkdtempSync(join(tmpdir(), "reactre-plugin-preact-bundlers-"));

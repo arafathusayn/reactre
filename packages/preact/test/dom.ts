@@ -6,6 +6,8 @@
 // a few real properties (className, id, title, value, checked, the on* handlers testdom gives),
 // so both paths are exercised.
 
+import { afterAll, beforeAll } from "bun:test";
+
 import { FakeComment, FakeElement, FakeEvent, FakeNode, FakeText, HTML_NS } from "@reactre/testdom";
 
 /** Every write to an element's style, as "name=value". */
@@ -78,20 +80,64 @@ export function installDom(): void {
 }
 
 // As in the DOM: attribute values are strings, every element (parsed ones too) has a localName,
-// and nodes remove themselves.
-const proto = FakeElement.prototype as unknown as Record<string, unknown>;
-const setAttr = proto.setAttribute as (this: FakeElement, k: string, v: string) => void;
-proto.setAttribute = function (this: FakeElement, k: string, v: unknown) {
-  setAttr.call(this, k, String(v));
-};
-Object.defineProperty(proto, "localName", {
-  get(this: FakeElement) {
-    return this.namespaceURI === HTML_NS ? this.tagName.toLowerCase() : this.tagName;
-  },
-});
-(FakeNode.prototype as unknown as { remove(): void }).remove = function (this: FakeNode) {
-  this.parentNode?.removeChild(this);
-};
+// and nodes remove themselves. These change @reactre/testdom's prototypes, which every test file
+// of the run shares, so a file applies them for its own tests only (useDom), and testdom's own
+// come back after it.
+const setAttr = FakeElement.prototype.setAttribute;
+const PATCHES: [object, string, PropertyDescriptor][] = [
+  [
+    FakeElement.prototype,
+    "setAttribute",
+    {
+      value(this: FakeElement, k: string, v: unknown) {
+        setAttr.call(this, k, String(v));
+      },
+    },
+  ],
+  [
+    FakeElement.prototype,
+    "localName",
+    {
+      get(this: FakeElement) {
+        return this.namespaceURI === HTML_NS ? this.tagName.toLowerCase() : this.tagName;
+      },
+    },
+  ],
+  [
+    FakeNode.prototype,
+    "remove",
+    {
+      value(this: FakeNode) {
+        this.parentNode?.removeChild(this);
+      },
+    },
+  ],
+  // The global `document` is not put back: Preact's compat and this package's read whether there is
+  // one when they load (IS_DOM), which a later test file may be the first to do.
+  // installDom gives testdom's shared document object its constructors.
+  ...["createElement", "createElementNS", "createTextNode"].map((k): [object, string, PropertyDescriptor] => [
+    new FakeText("").ownerDocument as object,
+    k,
+    { value: undefined },
+  ]),
+];
+
+/** Patch testdom for this file's tests, and put it back as it was after them. Call it once per file. */
+export function useDom(): void {
+  let saved: (PropertyDescriptor | undefined)[] = [];
+  beforeAll(() => {
+    saved = PATCHES.map(([o, k]) => Object.getOwnPropertyDescriptor(o, k));
+    for (const [o, k, d] of PATCHES)
+      Object.defineProperty(o, k, { configurable: true, ...("value" in d ? { writable: true } : {}), ...d });
+  });
+  afterAll(() =>
+    PATCHES.forEach(([o, k], i) => {
+      const d = saved[i];
+      if (d) Object.defineProperty(o, k, d);
+      else delete (o as Record<string, unknown>)[k];
+    }),
+  );
+}
 
 /** A fresh container element, connected to a document (Preact moves connected nodes with moveBefore). */
 export function container(): El {

@@ -3,7 +3,10 @@
 
 import { describe } from "bun:test";
 
+import { useDom } from "./dom.ts";
 import { same } from "./same.ts";
+
+useDom();
 
 describe("state", () => {
   same("useState and useReducer: updates, functional updates, bail-outs on equal values", async (t) => {

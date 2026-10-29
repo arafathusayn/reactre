@@ -3,8 +3,11 @@
 
 import { describe, expect, test } from "bun:test";
 
+import { useDom } from "./dom.ts";
 import { transcript } from "./same.ts";
 import { pairs } from "./scenarios/html.tsx";
+
+useDom();
 
 describe("html", () => {
   for (const [name, p] of Object.entries(pairs)) {

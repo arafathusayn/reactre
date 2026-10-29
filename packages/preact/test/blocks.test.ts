@@ -8,7 +8,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { compileSource } from "../src/compiler.ts";
+import { useDom } from "./dom.ts";
 import { type Ctx, transcript } from "./same.ts";
+
+useDom();
 
 type Scenarios = Record<string, (t: Ctx) => unknown>;
 

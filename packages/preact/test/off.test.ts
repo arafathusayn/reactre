@@ -13,7 +13,9 @@ import { checkOff, offKeys, scanApis } from "../src/api.ts";
 const usedApis = (code: string, file: string) => scanApis(code, file).used;
 import { reactrePreactCompiler } from "../src/compiler.ts";
 import * as dom from "../src/dom.ts";
-import { container, html, installDom } from "./dom.ts";
+import { container, html, installDom, useDom } from "./dom.ts";
+
+useDom();
 
 // The coverage settings skip folders named reactre-plugin-*: these bundles are not sources.
 const dir = mkdtempSync(join(tmpdir(), "reactre-plugin-preact-off-"));

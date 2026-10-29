@@ -13,7 +13,9 @@ import * as preact from "preact";
 
 import * as claim from "../src/claim.ts";
 import * as engine from "../src/engine.ts";
-import { container, type El, fire, html, installDom, tick } from "./dom.ts";
+import { container, type El, fire, html, installDom, tick, useDom } from "./dom.ts";
+
+useDom();
 
 // Each test runs on Preact 11.1.0 and on @reactre/preact: the two must agree.
 const runtimes: Record<string, any> = {

@@ -5,7 +5,10 @@ import { describe } from "bun:test";
 
 import { FakeComment, FakeText } from "@reactre/testdom";
 
+import { useDom } from "./dom.ts";
 import { type Ctx, same } from "./same.ts";
+
+useDom();
 
 const compatSame = (title: string, scenario: (t: Ctx) => unknown) => same(title, scenario, true);
 

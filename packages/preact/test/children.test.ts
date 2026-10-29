@@ -3,7 +3,10 @@
 
 import { describe } from "bun:test";
 
+import { useDom } from "./dom.ts";
 import { same } from "./same.ts";
+
+useDom();
 
 describe("placement", () => {
   same("a cursor node removed while rendering: the next sibling is looked up again, or the node appended", (t) => {
