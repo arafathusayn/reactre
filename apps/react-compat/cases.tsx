@@ -495,6 +495,58 @@ export const cases: Record<string, Case> = {
 
   // #region Classes and error boundaries
 
+  // Legacy lifecycles: setState in componentWillMount, componentWillReceiveProps only for new
+  // props, componentWillUpdate, and componentWillMount left out next to getSnapshotBeforeUpdate.
+  async "class legacy lifecycles"(t) {
+    class Legacy extends Component<{ n: number }, { m: number }> {
+      override state = { m: 0 };
+      UNSAFE_componentWillMount() {
+        t.log("will mount");
+        this.setState({ m: 1 });
+      }
+      UNSAFE_componentWillReceiveProps(next: { n: number }) {
+        t.log("will receive", next.n);
+      }
+      UNSAFE_componentWillUpdate(next: { n: number }, s: { m: number }) {
+        t.log("will update", next.n, s.m);
+      }
+      override render() {
+        t.log("render", this.props.n, this.state.m);
+        return <button onClick={() => this.setState({ m: this.state.m + 1 })}>{this.state.m}</button>;
+      }
+    }
+    class Snap extends Component<{ n: number }> {
+      UNSAFE_componentWillMount() {
+        t.log("snap will mount");
+      }
+      override getSnapshotBeforeUpdate() {
+        return null;
+      }
+      override componentDidUpdate() {}
+      override render() {
+        return <i>{this.props.n}</i>;
+      }
+    }
+    const r = mount(
+      t,
+      <>
+        <Legacy n={1} />
+        <Snap n={1} />
+      </>,
+    );
+    await t.step("mounted");
+    flushSync(() =>
+      r.render(
+        <>
+          <Legacy n={2} />
+          <Snap n={2} />
+        </>,
+      ),
+    );
+    click(t.$("button"));
+    await t.step("updated");
+  },
+
   // Classes: derived state, lifecycle order, shouldComponentUpdate, snapshots, setState callbacks.
   async "class lifecycle"(t) {
     class Child extends Component<{ n: number }, { s: number }> {

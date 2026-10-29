@@ -141,11 +141,12 @@ function support(core: ClassCore): ClassSupport {
         if (typeof C.getDerivedStateFromProps === "function") {
           const d = C.getDerivedStateFromProps(props, inst.state);
           if (d != null) inst.state = { ...inst.state, ...d };
-        } else if (typeof C.getSnapshotBeforeUpdate !== "function") {
+        } else if (typeof inst.getSnapshotBeforeUpdate !== "function") {
           const will = inst.UNSAFE_componentWillMount ?? inst.componentWillMount;
           if (typeof will === "function") {
-            will.call(inst);
-            // setState in componentWillMount applies before the first render.
+            // Called as during render, so a setState in it is queued, not scheduled: it applies
+            // before the first render, with no second render after it.
+            core.rendering(f, () => will.call(inst));
             inst.state = nextState(f, inst, inst.state, props);
           }
         }
