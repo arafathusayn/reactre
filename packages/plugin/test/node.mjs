@@ -41,6 +41,25 @@ try {
     console.log(`ok - vite build, ${mode}`);
   }
 
+  // APIs switched off: an app that keeps to the rest builds; one that uses a switched-off API
+  // fails, naming it. Under Node the scan runs on oxc's native parser.
+  const narrow = (entry, fileName) =>
+    build({
+      configFile: false,
+      logLevel: "silent",
+      plugins: [reactre({ compat: { exclude: ["useEffect"] } })],
+      build: {
+        outDir: out,
+        emptyOutDir: false,
+        minify: false,
+        lib: { entry, formats: ["es"], fileName: () => fileName },
+      },
+    });
+  await narrow(fixtures + "compat/narrow.jsx", "narrow.js");
+  assert.match(readFileSync(join(out, "narrow.js"), "utf8"), /switched off by @reactre\/plugin's compat options/);
+  await assert.rejects(narrow(fixtures + "compat/uses-off.jsx", "uses-off.js"), /uses React's useEffect/);
+  console.log("ok - vite build, compat with APIs switched off");
+
   // The dev server: the dependency scan finds the app's imports without errors, the transformed
   // module has the compiled templates, and imports of react (compat) go to @reactre/compat through
   // Vite's dependency optimizer.

@@ -12,6 +12,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### @reactre/plugin
 
+- Added: `compat.apis` and `compat.exclude` switch React's APIs on and off one by one, by export name or group (`@suspense`, `@transitions`, `@forms`, `@hints`, `@classes`). With any off, `react` resolves to a module written for the options, which imports only the APIs that are on and exports each one that is off as a function that throws, naming the fix. The build fails where a module, a dependency included, imports a switched-off API, reads it as `React.x`, or takes it from `require("react")`.
 - Changed: in compat mode, `classes` defaults to true: `react` resolves to @reactre/compat, React's whole client API. `classes: false` resolves it to @reactre/compat/core, without class components.
 - Added: in compat mode, `react-dom/server`, `react-dom/static` and their `.browser`, `.edge`, `.node` and `.bun` builds resolve to @reactre/compat/server, with or without `classes`.
 - Added: Server Components stay on React: compat mode leaves a Vite environment named `rsc`, and a build that resolves with the `react-server` condition (Vite, Rolldown, esbuild, webpack, Rspack, Bun), alone. In Vite the redirect is now a resolve hook per environment, applied in each environment's dependency optimizer too, instead of `resolve.alias`.
@@ -25,6 +26,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### @reactre/compat
 
+- Added: `@reactre/compat/api`, the keys that switch React's APIs on and off (`KEYS`, `GROUPS`, `REQUIRES`, the names every build keeps in `ALWAYS`) and `enabledApis`, which expands and checks an app's keys.
 - Changed: `@reactre/compat` includes class components, so the default entry is all of React's client API. `@reactre/compat/core` is the entry without them, for apps that render no class component; `@reactre/compat/classes` stays as an alias of `@reactre/compat`.
 - Changed: `version` is `"19.3.1"`, the React release compat matches.
 - Added: `@reactre/compat/server`, React 19.3.1's server rendering API: `renderToString`, `renderToStaticMarkup`, `renderToReadableStream` and `renderToPipeableStream` write the HTML React's production build writes, byte for byte, running compat's own hooks. `prerender`, `prerenderToNodeStream`, `resume` and `resumeToPipeableStream` are exported so imports resolve, and throw: compat does not implement partial prerendering. The README lists what else differs.

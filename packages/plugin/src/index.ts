@@ -33,10 +33,12 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { enabledApis, KEYS } from "@reactre/compat/api";
 import { compileJs as compileCompat } from "@reactre/compat/compiler";
 import { compileJs as compileCore, ReactreCompileError } from "@reactre/compiler";
 import { createUnplugin, type UnpluginInstance, type UnpluginOptions } from "unplugin";
 
+import { entrySource, offError, usedApis, writeEntry } from "./api.ts";
 import { transpile } from "./transpile.ts";
 
 // #region Options
@@ -51,6 +53,17 @@ export interface CompatOptions {
   readonly classes?: boolean;
   /** Compile the app's host element trees to templates with @reactre/compat/compiler. Default true. */
   readonly compile?: boolean;
+  /**
+   * The React APIs the app and its libraries use: `"all"` (the default), or a list of React's
+   * export names and groups (`"@suspense"`, `"@transitions"`, `"@forms"`, `"@hints"`,
+   * `"@classes"`). The keys are listed in @reactre/compat/api.
+   */
+  readonly apis?: "all" | readonly string[];
+  /**
+   * APIs to switch off, as keys or groups. The build fails where code uses one; at run time each
+   * is a function that throws, naming the fix.
+   */
+  readonly exclude?: readonly string[];
 }
 
 /** Options for the plugin. */
@@ -70,8 +83,17 @@ export interface ReactreOptions {
 
 // #region The plugin
 
-/** `react`, `react-dom` and every subpath of them. */
-const REACT = /^react(?:-dom)?(?:\/.*)?$/;
+/** @reactre/compat's client entries, which the module written for an app's options imports. */
+const COMPAT = /^@reactre\/compat(?:\/core)?$/;
+
+/** The requests the plugin resolves: `react`, `react-dom` and their subpaths, and compat's client entries. */
+const REQUEST = /^(?:react(?:-dom)?(?:\/.*)?|@reactre\/compat(?:\/core)?)$/;
+
+/** The modules the API scan reads. */
+const SCRIPT = /\.[cm]?[jt]sx?(?:$|\?)/;
+
+/** esbuild's pluginData for a resolve the plugin asks for itself, which it then leaves alone. */
+const OWN = Symbol("@reactre/plugin");
 
 /** React's server renderer and its prerender entry, in each of their builds. */
 const SERVER = /^react-dom\/(?:server|static)(?:\.(?:browser|edge|node|bun))?(?:\.js)?$/;
@@ -91,16 +113,36 @@ export const reactre: UnpluginInstance<ReactreOptions | undefined, boolean> = cr
 >((options = {}, meta) => {
   const compat = options.compat === true ? {} : options.compat === false ? undefined : options.compat;
   const compile = compat === undefined || compat.compile !== false;
-  const client = compat?.classes === false ? "@reactre/compat/core" : "@reactre/compat";
-  /** What a request for `react` or one of its subpaths resolves to. */
-  const target = (id: string): string => (SERVER.test(id) ? "@reactre/compat/server" : client);
+  // The APIs that are on. Class support off is @reactre/compat/core; anything else off is a module
+  // written for the options (./api.ts).
+  const on =
+    compat === undefined
+      ? new Set(KEYS)
+      : enabledApis(compat.apis ?? "all", [
+          ...(compat.exclude ?? []),
+          ...(compat.classes === false ? ["Component"] : []),
+        ]);
+  const narrowed = KEYS.some((k) => !on.has(k) && k !== "Component" && k !== "PureComponent");
+  const pkg = on.has("Component") ? "@reactre/compat" : "@reactre/compat/core";
+  let entry: string | undefined;
+  /** What `react` resolves to: the package entry, or the module written for the options. */
+  const client = (): string => (narrowed ? (entry ??= writeEntry(root, entrySource(on))) : pkg);
+  /** What a request for `react`, one of its subpaths, or a compat entry resolves to. */
+  const target = (id: string): string => (SERVER.test(id) ? "@reactre/compat/server" : COMPAT.test(id) ? id : client());
+  /** Throws where `code` uses an API the options switch off. */
+  const scan = (code: string, id: string): null => {
+    if (!code.includes("react")) return null;
+    const file = id.replace(/[?#].*$/, "");
+    for (const name of usedApis(code, file)) if (KEYS.includes(name) && !on.has(name)) throw offError(file, name);
+    return null;
+  };
   // The app's root, where Vite says, else the working directory.
   let root = process.cwd();
   /** The directory a request from `importer` resolves the target from (see `baseFor`). */
   const base = (importer: string | undefined): string => baseFor(importer, root);
   // Rollup, Rolldown and Vite: the bundler resolves the target, with its own conditions.
   const resolveId = {
-    filter: { id: REACT },
+    filter: { id: REQUEST },
     async handler(this: unknown, id: string, importer: string | undefined) {
       const context = this as Partial<RollupResolver>;
       // The whole result, not its id: Vite's dependency scan marks the target external.
@@ -133,6 +175,15 @@ export const reactre: UnpluginInstance<ReactreOptions | undefined, boolean> = cr
         }
       : undefined,
   };
+  /** The API scan, as a plugin of its own: it reads every module, the dependencies' too. */
+  const scanner: UnpluginOptions = {
+    name: "@reactre/plugin:api",
+    enforce: "pre",
+    transform: { filter: { id: { include: [SCRIPT] } }, handler: scan },
+  };
+  /** The plugins for a bundler: the API scan joins them when the options switch APIs off. */
+  const all = (...plugins: UnpluginOptions[]): UnpluginOptions | UnpluginOptions[] =>
+    narrowed ? [...plugins, scanner] : plugins.length === 1 ? plugins[0]! : plugins;
   if (compat === undefined) {
     // Vite's dependency scanner compiles JSX on its own, for React's runtime, and would then fail
     // to find react/jsx-runtime. It needs only the imports, so it keeps JSX as written.
@@ -141,49 +192,59 @@ export const reactre: UnpluginInstance<ReactreOptions | undefined, boolean> = cr
   }
 
   switch (meta.framework) {
-    case "vite":
+    case "vite": {
+      // Neither the redirect, the compile nor the scan reach the RSC environment.
+      const applyToEnvironment = (environment: { name: string; config: { resolve: { conditions: string[] } } }) =>
+        !isReactServer(environment.name, environment.config.resolve.conditions);
       plugin.resolveId = resolveId;
       plugin.vite = {
         configResolved(config) {
           root = config.root;
         },
-        // Neither the redirect nor the compile reach the RSC environment.
-        applyToEnvironment: (environment) => !isReactServer(environment.name, environment.config.resolve.conditions),
+        applyToEnvironment,
         // The dependency optimizer bundles with its own plugins, not the app's: the redirect goes
-        // there too, so a dependency's `react` is the app's copy of compat.
+        // there too, so a dependency's `react` is the app's copy of compat, and so does the scan.
         configEnvironment: (name, config) =>
           isReactServer(name, config.resolve?.conditions)
             ? undefined
-            : { optimizeDeps: { rolldownOptions: { plugins: [{ name: "@reactre/plugin:react", resolveId }] } } },
+            : {
+                optimizeDeps: {
+                  rolldownOptions: {
+                    plugins: [{ name: "@reactre/plugin:react", resolveId, ...(narrowed ? { transform: scan } : {}) }],
+                  },
+                },
+              },
       };
-      return plugin;
+      scanner.vite = { applyToEnvironment };
+      return all(plugin);
+    }
     case "webpack":
       plugin.webpack = (compiler) => replaceReact(compiler.webpack, compiler, target, base);
-      return plugin;
+      return all(plugin);
     case "rspack":
       plugin.rspack = (compiler) => replaceReact(compiler.rspack, compiler, target, base);
-      return plugin;
+      return all(plugin);
     case "esbuild":
       // unplugin puts a path that resolveId returns in the plugin's own namespace, where esbuild
       // cannot load it, so a plugin of its own asks esbuild to resolve the target.
-      return [
-        plugin,
-        {
-          name: "@reactre/plugin:react",
-          esbuild: {
-            setup(build) {
-              if (isReactServer(undefined, build.initialOptions.conditions)) return;
-              build.onResolve({ filter: REACT }, async (args) => {
-                const r = await build.resolve(target(args.path), {
-                  kind: args.kind,
-                  resolveDir: base(join(args.resolveDir, "_")),
-                });
-                return r.errors.length > 0 ? { errors: r.errors } : { path: r.path, sideEffects: r.sideEffects };
+      return all(plugin, {
+        name: "@reactre/plugin:react",
+        esbuild: {
+          setup(build) {
+            if (isReactServer(undefined, build.initialOptions.conditions)) return;
+            build.onResolve({ filter: REQUEST }, async (args) => {
+              // A resolve this plugin asks for comes through it again: left to esbuild.
+              if (args.pluginData === OWN) return undefined;
+              const r = await build.resolve(target(args.path), {
+                kind: args.kind,
+                resolveDir: base(join(args.resolveDir, "_")),
+                pluginData: OWN,
               });
-            },
+              return r.errors.length > 0 ? { errors: r.errors } : { path: r.path, sideEffects: r.sideEffects };
+            });
           },
         },
-      ];
+      });
     case "bun": {
       // Bun.build names the conditions it resolves with.
       let server = false;
@@ -194,14 +255,14 @@ export const reactre: UnpluginInstance<ReactreOptions | undefined, boolean> = cr
         },
       };
       plugin.resolveId = {
-        filter: { id: REACT },
+        filter: { id: REQUEST },
         handler(id, importer) {
           if (server) return null;
           const { Bun } = globalThis as unknown as { Bun: { resolveSync(id: string, from: string): string } };
           return Bun.resolveSync(target(id), base(importer));
         },
       };
-      return plugin;
+      return all(plugin);
     }
     default: {
       // Rollup, Rolldown and the rest. Rolldown names the conditions it resolves with.
@@ -217,7 +278,7 @@ export const reactre: UnpluginInstance<ReactreOptions | undefined, boolean> = cr
           return server ? null : resolveId.handler.call(this, id, importer);
         },
       };
-      return plugin;
+      return all(plugin);
     }
   }
 });
@@ -257,7 +318,7 @@ function replaceReact(
 ): void {
   const options = (compiler as { options?: { resolve?: { conditionNames?: string[] } } }).options;
   if (isReactServer(undefined, options?.resolve?.conditionNames)) return;
-  new bundler.NormalModuleReplacementPlugin(REACT, (resource) => {
+  new bundler.NormalModuleReplacementPlugin(REQUEST, (resource) => {
     resource.request = target(resource.request);
     resource.context = base(join(resource.context, "_"));
   }).apply(compiler as never);

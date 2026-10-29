@@ -210,4 +210,38 @@ describe.each(Object.keys(bundlers))("%s", (name) => {
     expect(app.html()).toBe(expected);
     expect(await app.stream()).toBe(expected);
   }, 60_000);
+
+  test("compat: switched-off APIs throw when called, and the rest runs", async () => {
+    const file = join(out, `${name}-narrow.js`);
+    await bundle(FIXTURES + "compat/narrow.jsx", file, { compat: { exclude: ["useEffect", "@suspense"] } });
+    installFakeDocument();
+    const root = new FakeElement("DIV");
+    const app = (await import(file)) as { mount(el: unknown): void; offByName(name: string): () => void };
+    app.mount(root);
+    const button = find(root, "BUTTON");
+    expect(button.textContent).toBe("Clicked 0");
+    button.dispatchEvent(new FakeEvent("click"));
+    await microtasks();
+    expect(button.textContent).toBe("Clicked 1");
+    for (const off of ["useEffect", "lazy"]) {
+      expect(typeof app.offByName(off)).toBe("function");
+      expect(app.offByName(off)).toThrow(`React's ${off} is switched off by @reactre/plugin's compat options`);
+    }
+  }, 60_000);
+
+  test("compat: code that uses a switched-off API fails the build, naming it", async () => {
+    const failure = await bundle(FIXTURES + "compat/uses-off.jsx", join(out, `${name}-uses-off.js`), {
+      compat: { exclude: ["useEffect"] },
+    }).then(
+      () => "(built)",
+      (e: unknown) => messages(e),
+    );
+    expect(failure).toContain("uses React's useEffect, which @reactre/plugin's compat options switch off");
+  }, 60_000);
 });
+
+/** Every message in a bundler's error: its own, and those of the errors or logs it carries. */
+function messages(e: unknown): string {
+  const inner = (e as { errors?: unknown[]; logs?: unknown[] }).errors ?? [];
+  return [String(e), ...inner.map((x) => (x as { message?: string }).message ?? String(x))].join("\n");
+}

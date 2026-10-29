@@ -50,7 +50,7 @@ reactre({
   - `"blocks"`, `"fastLists"`
 - **Groups** expand to lists of keys: `"@suspense"`, `"@transitions"`, `"@forms"`, `"@hints"`.
 - **`classes`** becomes the `"Component"` key, on by default like every key.
-- **The manifest** `packages/compat/src/apis.ts` maps every key to its module and its dependencies. The plugin, the entry generator and the tests all read it.
+- **The manifest** `packages/compat/src/api.ts` (`@reactre/compat/api`) maps every key to its module and its dependencies. The plugin, the entry generator and the tests all read it.
 
 At buildStart the plugin writes `node_modules/.cache/reactre/compat-<hash>.js`, and `react` and `react-dom` resolve to it. It contains:
 
@@ -122,8 +122,8 @@ At least one of `createRoot` and `hydrateRoot` must be on.
 ## Order
 
 0. The size check and its budgets (no runtime change).
-1. `index.ts` → `core.ts`, a full `index.ts`, `__install`, `missing()`, `__swap`, the manifest, and the `./api/*` exports. Done so far: the rename, the full `index.ts` with classes and the `./core` export.
-2. Plugin: `apis` and `exclude`, the generated entry, the import scan and the stubs. At first every key maps to core.
+1. `index.ts` → `core.ts`, a full `index.ts`, `__install`, `missing()`, `__swap`, and the `./api/*` exports. Done: the rename, the full `index.ts` with classes, the `./core` export and the manifest (`@reactre/compat/api`).
+2. Plugin: `apis` and `exclude`, the generated entry, the import scan and the stubs. At first every key maps to core. Done: the entry imports only what is on (a counter that imports `React` drops from 28.4 to 23.9 KB gzipped with the rest off).
 3. The extra events (~1.5 KB).
 4. Controlled fields (~1.2 KB).
 5. SVG and MathML, then custom elements (~1.1 KB together).

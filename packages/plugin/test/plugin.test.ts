@@ -126,29 +126,75 @@ describe("compat: where react resolves", () => {
     }
   });
 
+  test("APIs switched off: react resolves to a module written for them, and a scan joins every bundler", async () => {
+    const options = { compat: { exclude: ["useEffect"] } };
+    for (const framework of ["vite", "rollup", "rolldown", "webpack", "rspack", "bun"]) {
+      const plugins = raw(framework, options);
+      expect(plugins.map((p: Any) => p.name)).toEqual(["@reactre/plugin", "@reactre/plugin:api"]);
+      const { handler } = plugins[1].transform;
+      expect(handler("const x = 1;", "/app/a.js")).toBeNull();
+      expect(handler('import { useState } from "react";', "/app/a.js")).toBeNull();
+      expect(() => handler('import { useEffect } from "react";', "/app/a.jsx?v=1")).toThrow(
+        "/app/a.jsx: uses React's useEffect",
+      );
+    }
+    const [vite, scanner] = raw("vite", options);
+    vite.vite.configResolved({ root: new URL("..", import.meta.url).pathname });
+    expect((await resolveWith(vite, "react")).asked).toMatch(
+      /node_modules\/\.cache\/reactre\/compat-[0-9a-f]{12}\.js$/,
+    );
+    // The written module's own imports of compat resolve as react does.
+    expect((await resolveWith(vite, "@reactre/compat/core")).asked).toBe("@reactre/compat/core");
+    // The scan stays out of the RSC environment, and runs in the dependency optimizer too.
+    expect(scanner.vite.applyToEnvironment({ name: "rsc", config: { resolve: { conditions: [] } } })).toBe(false);
+    const optimizer = vite.vite.configEnvironment("client", {}).optimizeDeps.rolldownOptions.plugins[0];
+    expect(() => optimizer.transform('import { useEffect } from "react";', "/dep.js")).toThrow(
+      "uses React's useEffect",
+    );
+    // esbuild: the redirect plugin and the scan.
+    expect(raw("esbuild", options).map((p: Any) => p.name)).toEqual([
+      "@reactre/plugin",
+      "@reactre/plugin:react",
+      "@reactre/plugin:api",
+    ]);
+    // Options naming no key, or turning both roots off, fail when the plugin is made.
+    expect(() => raw("vite", { compat: { exclude: ["useEfect"] } })).toThrow('"useEfect" is not an API key');
+    expect(() => raw("vite", { compat: { apis: ["useState"] } })).toThrow("needs createRoot or hydrateRoot");
+    // Class support alone off is @reactre/compat/core, with no module written and no scan.
+    expect((await resolveWith(raw("vite", { compat: { exclude: ["@classes"] } }), "react")).asked).toBe(
+      "@reactre/compat/core",
+    );
+  });
+
   test("esbuild: its own resolve, not registered for a react-server build", async () => {
     const [, redirect] = raw("esbuild");
     const setup = (conditions?: string[]): Any => {
       let onResolve: Any = null;
-      const asked: string[] = [];
+      const asked: string[] = [],
+        data: unknown[] = [];
       redirect.esbuild.setup({
         initialOptions: conditions === undefined ? {} : { conditions },
         onResolve: (_: unknown, fn: Any) => (onResolve = fn),
-        resolve: async (path: string) => (
+        resolve: async (path: string, options: { pluginData: unknown }) => (
           asked.push(path),
+          data.push(options.pluginData),
           path === "missing" ? { errors: ["e"] } : { errors: [], path: "/r/" + path, sideEffects: true }
         ),
       });
-      return { onResolve, asked };
+      return { onResolve, asked, data };
     };
     expect(setup(["react-server"]).onResolve).toBeNull();
-    const { onResolve, asked } = setup();
+    const { onResolve, asked, data } = setup();
     expect(await onResolve({ path: "react-dom/server.edge", kind: "import-statement", resolveDir: "/app" })).toEqual({
       path: "/r/@reactre/compat/server",
       sideEffects: true,
     });
     await onResolve({ path: "react", kind: "import-statement", resolveDir: "/app" });
     expect(asked).toEqual(["@reactre/compat/server", "@reactre/compat"]);
+    // The plugin's own resolve of a compat entry comes back through it, and is left to esbuild.
+    expect(
+      await onResolve({ path: "@reactre/compat", kind: "import-statement", resolveDir: "/", pluginData: data[1] }),
+    ).toBe(undefined);
   });
 
   test("webpack and Rspack: a module replacement, not added for a react-server build", () => {

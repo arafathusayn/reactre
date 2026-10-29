@@ -77,12 +77,34 @@ reactre({
     // Compile your JSX's HTML element trees to templates. Off, your bundler's JSX transform
     // handles JSX and the plugin only resolves react.
     compile: true,
+    // The React APIs your app and its libraries use: "all", or a list of keys.
+    apis: "all",
+    // APIs to switch off, by key: what only they need leaves the bundle.
+    exclude: [],
   },
   // Files to compile, and files to leave alone, by path.
   include: /\.[jt]sx$/,
   exclude: /[\\/]node_modules[\\/]/,
 });
 ```
+
+### Switching React APIs off
+
+`compat.apis` and `compat.exclude` take keys:
+
+- React's export names, such as `useState`, `useEffect`, `createPortal` or `hydrateRoot`.
+- Groups: `"@suspense"`, `"@transitions"`, `"@forms"`, `"@hints"` and `"@classes"`.
+
+`@reactre/compat/api` lists them all. A key brings in what it is part of: `PureComponent` brings `Component`, and `useFormState` brings `useActionState`.
+
+With any key off, `react` resolves to a module written for your options, under `node_modules/.cache/reactre`:
+
+- It imports only the APIs that are on, so your bundler can leave out what only the others need.
+- Each switched-off API is still exported, as a function that throws and names the fix.
+
+The plugin also reads every module it bundles, your dependencies included. A named import, a `React.x` or a `require("react").x` of a switched-off API fails the build, naming the file and the key to add back. Only a use the scan cannot see, such as `React[name]`, reaches the throwing function at run time.
+
+Leaving out what a small app does not use saves about a sixth of compat's bundle today. For example, a counter that imports `React` and calls `useState` goes from 28.4 KB gzipped to 23.9 KB with every other API off. The savings grow as more of compat moves into modules of its own.
 
 ## Limits
 

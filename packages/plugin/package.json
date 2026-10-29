@@ -79,6 +79,7 @@
   "dependencies": {
     "@reactre/compat": "workspace:*",
     "@reactre/compiler": "workspace:*",
+    "oxc-parser": "catalog:",
     "oxc-transform": "catalog:",
     "unplugin": "catalog:"
   },
