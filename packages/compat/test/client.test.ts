@@ -619,7 +619,9 @@ describe("hydration mismatches", () => {
       const code = (e: Any): string => (messages.push(e.message), short(e));
       hydrate(c, client(L, log), {
         onRecoverableError: (e: Any, info: Any) =>
-          void log.push(`recoverable ${code(e)}${e.digest === undefined ? "" : " " + e.digest}${info.componentStack}`),
+          void log.push(
+            `recoverable ${code(e)}${e.digest === undefined ? "" : " " + e.digest}${e.cause === undefined ? "" : " cause " + code(e.cause)}${info.componentStack}`,
+          ),
         onCaughtError: (e: Any) => void log.push("caught " + code(e)),
         onUncaughtError: (e: Any) => void log.push("uncaught " + code(e)),
       });
@@ -863,6 +865,130 @@ describe("hydration mismatches", () => {
     );
     // No component stack: React reports this one with null. (renderToString writes no digest.)
     expect(r).toEqual({ dom: "<main><p>ok</p></main>", kept: "Ynn", log: ["recoverable 419null"] });
+  });
+
+  test("useSyncExternalStore hydrates with the server snapshot, then renders the store's", async () => {
+    const h = (L: Lib) => L.createElement;
+    // One subscribe function per log, so it stays the same across renders.
+    const subs = new WeakMap<string[], Any>();
+    const subscribe = (log: string[]) => {
+      if (!subs.has(log)) subs.set(log, () => (log.push("subscribe"), () => {}));
+      return subs.get(log);
+    };
+    const read = (L: Lib, log: string[], server: string | undefined) =>
+      function Read() {
+        const v = L.useSyncExternalStore(
+          subscribe(log),
+          // getSnapshot's calls are not logged: React calls it once more after a commit whose
+          // snapshot or getSnapshot changed, where compat leaves the check to the subscription.
+          () => "client",
+          server === undefined ? undefined : () => (log.push("getServerSnapshot"), server),
+        );
+        L.useLayoutEffect(() => void log.push("layout " + v));
+        L.useEffect(() => void log.push("passive " + v));
+        log.push("render " + v);
+        return v;
+      };
+    // The server's text hydrates; after the passive effects the store's snapshot renders.
+    const changed = await recovers(
+      (L) => h(L)("div", null, h(L)(read(L, [], "server"))),
+      (L, log) => h(L)("div", null, h(L)(read(L, log, "server"))),
+    );
+    expect(changed.kept).toBe("YY");
+    expect(changed.log).toEqual([
+      "getServerSnapshot",
+      "render server",
+      "layout server",
+      "subscribe",
+      "passive server",
+      "render client",
+      "layout client",
+      "passive client",
+    ]);
+    // The same snapshot: nothing renders again.
+    const same = await recovers(
+      (L) => h(L)("div", null, h(L)(read(L, [], "client"))),
+      (L, log) => h(L)("div", null, h(L)(read(L, log, "client"))),
+    );
+    expect(same.log).toEqual(["getServerSnapshot", "render client", "layout client", "subscribe", "passive client"]);
+    // Without getServerSnapshot, #407 is the cause of a recoverable error: #423 where the root
+    // renders on the client, #422 where a Suspense boundary does.
+    const root = await recovers(
+      (L) => h(L)("div", null, h(L)(read(L, [], "server"))),
+      (L, log) => h(L)("div", null, h(L)(read(L, log, undefined))),
+    );
+    expect(root.kept).toBe("nn");
+    expect(root.log[2]).toStartWith("recoverable 423 cause 407\n    at Read (");
+    const boundary = await recovers(
+      (L) =>
+        h(L)(
+          "div",
+          null,
+          h(L)("b", null, "x"),
+          h(L)(L.Suspense, { fallback: "…" }, h(L)("p", null, h(L)(read(L, [], "server")))),
+        ),
+      (L, log) =>
+        h(L)(
+          "div",
+          null,
+          h(L)("b", null, "x"),
+          h(L)(L.Suspense, { fallback: "…" }, h(L)("p", null, h(L)(read(L, log, undefined)))),
+        ),
+    );
+    expect(boundary.kept).toBe("YYYnn");
+    expect(boundary.log.some((l) => l.startsWith("recoverable 422 cause 407\n    at Read ("))).toBe(true);
+  });
+
+  test("useSyncExternalStoreWithSelector hydrates with the selection of the server snapshot", async () => {
+    // React's selector hook (use-sync-external-store/with-selector) hands useSyncExternalStore a
+    // server getter that selects through the client's memo: a client snapshot that is the
+    // server's, or a selection isEqual calls equal, renders nothing again.
+    const run = async (server: Any, client: Any, isEqual?: (a: Any, b: Any) => boolean) => {
+      const c = box();
+      c.innerHTML = ReactServer.renderToString(React.createElement("p", null, server.n));
+      const log: string[] = [];
+      function Read() {
+        const v = Compat.useSyncExternalStoreWithSelector(
+          noSubscription,
+          () => client,
+          () => server,
+          (s: Any) => ({ n: s.n }),
+          isEqual,
+        );
+        log.push("render " + v.n);
+        return Compat.createElement("p", null, v.n);
+      }
+      Compat.hydrateRoot(c as unknown as Element, Compat.createElement(Read), {
+        onRecoverableError: (e: Any) => void log.push("recoverable " + e.message),
+      });
+      await tasks();
+      return [...log, markup(c)];
+    };
+    const noSubscription = () => () => {};
+    const one = { n: 1 };
+    expect(await run(one, one)).toEqual(["render 1", "<p>1</p>"]);
+    expect(await run(one, { n: 1 }, (a, b) => a.n === b.n)).toEqual(["render 1", "<p>1</p>"]);
+    expect(await run(one, { n: 2 })).toEqual(["render 1", "render 2", "<p>2</p>"]);
+    // Without a server snapshot, the root renders on the client.
+    const c = box();
+    c.innerHTML = "<p>1</p>";
+    const errors: string[] = [];
+    Compat.hydrateRoot(
+      c as unknown as Element,
+      Compat.createElement(function Read() {
+        const n = Compat.useSyncExternalStoreWithSelector(
+          noSubscription,
+          () => one,
+          null,
+          (s: Any) => s.n,
+        );
+        return Compat.createElement("p", null, n);
+      }),
+      { onRecoverableError: (e: Any) => void errors.push(short(e) + " cause " + short(e.cause)) },
+    );
+    await tasks();
+    expect(errors).toEqual(["423 cause 407"]);
+    expect(markup(c)).toBe("<p>1</p>");
   });
 });
 

@@ -3152,6 +3152,21 @@ function hydrateDone(f: Fiber, thrown: Any): Any {
   return thrown;
 }
 
+/**
+ * useSyncExternalStore's snapshot while hydrating: the server's, as React's client reads it.
+ * Without getServerSnapshot, React's #407 is the cause of the error the boundary or root that
+ * renders on the client reports (#422, #423), and that client render reads getSnapshot.
+ */
+function storeSnapshot(f: Fiber, getServerSnapshot: (() => Any) | undefined): Any {
+  if (getServerSnapshot !== undefined) return getServerSnapshot();
+  // The Suspense boundary or root that recovers from a mismatch here.
+  let p = f.r!;
+  while (p.n !== SUSPENSE && p.n !== ROOT) p = p.r!;
+  const e = new Error(prodMessage(p.n === ROOT ? 423 : 422), { cause: new Error(prodMessage(407)) });
+  (hydrationErrors ??= []).push(e, stackOf(e, f));
+  throw MISMATCH;
+}
+
 /** What hydration does, which hydrateRoot hands its root (see `hydrating`). */
 const HYDRATION = {
   fork: forkRun,
@@ -3161,6 +3176,7 @@ const HYDRATION = {
   suspense: hydrateSuspense,
   root: hydrateDone,
   id: treeId,
+  store: storeSnapshot,
 };
 type Hydration = typeof HYDRATION;
 
@@ -5392,9 +5408,9 @@ function treeId(h: Hook): string {
 }
 
 /**
- * A value read from an external store, re-rendering when it changes. The client ignores the
- * server snapshot (hydration reads the client's snapshot); a server render reads only it, through
- * `select` for the selector hook.
+ * A value read from an external store, re-rendering when it changes. A server render reads only
+ * the server snapshot, through `select` for the selector hook; so does hydration, as React's
+ * client does, and the check after it subscribes renders the store's snapshot if it differs.
  */
 export function useSyncExternalStore<T>(
   subscribe: (cb: () => void) => () => void,
@@ -5412,7 +5428,9 @@ export function useSyncExternalStore<T>(
     if (server !== null) return server.snapshot(getServerSnapshot, select);
     box = h.s = h.r = { v: undefined, g: getSnapshot };
   }
-  const v = getSnapshot();
+  // While hydrating, the server snapshot (hydrating.store throws #407 without one), as React's
+  // client reads it: one test per call, as React's isHydrating.
+  const v = hydrating ? hydrating.store(f, getServerSnapshot) : getSnapshot();
   box.v = v;
   box.g = getSnapshot;
   effect(PASSIVE, () => {
@@ -5425,9 +5443,11 @@ export function useSyncExternalStore<T>(
       } catch {}
       if (changed) schedule(f);
     };
-    // The store may have changed between render and subscribing.
+    // React subscribes, then checks: the store may have changed between render and subscribing,
+    // and a hydrated snapshot (the server's) may not be the store's.
+    const unsubscribe = subscribe(check);
     check();
-    return subscribe(check);
+    return unsubscribe;
   }, [subscribe]);
   return v;
 }
@@ -5444,20 +5464,33 @@ export function useSyncExternalStoreWithSelector<S, T>(
   isEqual?: (a: T, b: T) => boolean,
 ): T {
   const memo = useRef<{ s: S; t: T } | null>(null);
-  const select = useCallback(() => {
-    const s = getSnapshot();
-    const m = memo.current;
-    if (m !== null && Object.is(m.s, s)) return m.t;
-    const t = selector(s);
-    if (m !== null && isEqual !== undefined && isEqual(m.t, t)) {
-      memo.current = { s, t: m.t };
-      return m.t;
-    }
-    memo.current = { s, t };
-    return t;
-  }, [getSnapshot, selector, isEqual]);
-  // A server render reads the selection of the server snapshot.
-  return useSyncExternalStore(subscribe, select, (getServerSnapshot ?? undefined) as Any, selector);
+  const select = useCallback(() => selection(memo, getSnapshot(), selector, isEqual), [getSnapshot, selector, isEqual]);
+  // A server render reads the selection of the server snapshot; hydration reads it through the
+  // memo the client's goes through, as React's selector hook does, so a store whose snapshot is
+  // the server's renders nothing again.
+  const server =
+    hydrating && getServerSnapshot != null
+      ? () => selection(memo, getServerSnapshot(), selector, isEqual)
+      : (getServerSnapshot ?? undefined);
+  return useSyncExternalStore(subscribe, select, server as Any, selector);
+}
+
+/** The selection of snapshot `s`: the memo's while `s` is its snapshot or `isEqual` says it is equal. */
+function selection<S, T>(
+  memo: RefObject<{ s: S; t: T } | null>,
+  s: S,
+  selector: (s: S) => T,
+  isEqual: ((a: T, b: T) => boolean) | undefined,
+): T {
+  const m = memo.current;
+  if (m !== null && Object.is(m.s, s)) return m.t;
+  const t = selector(s);
+  if (m !== null && isEqual !== undefined && isEqual(m.t, t)) {
+    memo.current = { s, t: m.t };
+    return m.t;
+  }
+  memo.current = { s, t };
+  return t;
 }
 
 /**
