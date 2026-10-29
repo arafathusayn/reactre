@@ -44,7 +44,7 @@ class El extends FakeElement {
     if (!this.handlers.some((l) => l.type === type && l.fn === fn && l.capture === capture))
       this.handlers.push({ type, fn, capture });
   }
-  removeEventListener(type: string, fn: Handler, capture = false): void {
+  override removeEventListener(type: string, fn: Handler, capture = false): void {
     const i = this.handlers.findIndex((l) => l.type === type && l.fn === fn && l.capture === capture);
     if (i >= 0) this.handlers.splice(i, 1);
   }

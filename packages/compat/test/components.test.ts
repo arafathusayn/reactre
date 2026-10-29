@@ -93,8 +93,8 @@ afterEach(() => {
 const isolated = (tag: string): Promise<typeof import("../src/core.ts")> => import(`../src/core.ts?${tag}`);
 
 // What the fake DOM lacks and these tests need, added to FakeElement while this file runs:
-// a style declaration (Suspense and Activity hide nodes with it), removeEventListener (an
-// unmounted root stops listening) and localName (hydration compares it to the tag).
+// a style declaration (Suspense and Activity hide nodes with it) and localName (hydration
+// compares it to the tag).
 type FakeStyle = Record<string, string> & { priorities: Record<string, string> };
 function fakeStyle(): FakeStyle {
   const s = { priorities: {} } as FakeStyle;
@@ -120,7 +120,7 @@ const style = (el: unknown): FakeStyle => (el as { style: FakeStyle }).style;
 type Listening = { listeners: Map<string, unknown[]> | null };
 const listenerCount = (el: FakeElement): number =>
   [...((el as unknown as Listening).listeners?.values() ?? [])].reduce((n, fns) => n + fns.length, 0);
-const added = ["style", "removeEventListener", "localName"];
+const added = ["style", "localName"];
 beforeAll(() => {
   Object.defineProperties(FakeElement.prototype, {
     style: {
@@ -129,18 +129,6 @@ beforeAll(() => {
         let s = styles.get(this);
         if (s === undefined) styles.set(this, (s = fakeStyle()));
         return s;
-      },
-    },
-    removeEventListener: {
-      configurable: true,
-      value(this: FakeElement, type: string, fn: unknown) {
-        const map = (this as unknown as Listening).listeners;
-        const fns = map?.get(type);
-        if (fns !== undefined)
-          map!.set(
-            type,
-            fns.filter((x) => x !== fn),
-          );
       },
     },
     localName: {

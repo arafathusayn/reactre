@@ -5,7 +5,7 @@
 // document position, scrolling), the listeners and observers hosts get and lose as they mount,
 // unmount, hide and show, and how hidden content, portals and compiled blocks take part.
 
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 
 import { FakeComment, FakeElement, FakeFragment, FakeNode, FakeText, installFakeDocument } from "@reactre/testdom";
 
@@ -162,6 +162,7 @@ const nodeExtras: Record<string, PropertyDescriptor> = {
 };
 const elementExtras: Record<string, PropertyDescriptor> = {
   addEventListener: nodeExtras["addEventListener"]!,
+  removeEventListener: nodeExtras["removeEventListener"]!,
   dispatchEvent: nodeExtras["dispatchEvent"]!,
   focus: {
     configurable: true,
@@ -255,6 +256,10 @@ beforeEach(() => {
   doc.activeElement = null;
   doc.body = undefined;
 });
+
+// Every root's listeners go before the fake nodes lose their listener methods (afterAll): a
+// root left mounted would add the next file's new event types to them.
+afterEach(() => root.unmount());
 
 /** A fake observer that logs what it observes and unobserves; an IntersectionObserver has rootMargin. */
 function observer(intersection: boolean): Any {
@@ -474,6 +479,7 @@ describe("listeners", () => {
     flushSync(() => dr.render(null));
     expect(fi.dispatchEvent(ev("ping"))).toBe(true);
     expect(seen).toEqual(["<!>"]);
+    dr.unmount();
   });
 });
 
@@ -540,6 +546,7 @@ describe("focus and blur", () => {
     // Unmounted: nothing.
     flushSync(() => dr.render(null));
     r.current ?? fi.blur();
+    dr.unmount();
   });
 });
 
@@ -711,6 +718,7 @@ describe("geometry", () => {
     flushSync(() => pr.render(h(Fragment, { ref: r })));
     r.current.scrollIntoView();
     expect(scrolls).toEqual([["host", true]]);
+    for (const x of [dr, sr, pr]) x.unmount();
   });
 });
 
@@ -770,6 +778,7 @@ describe("compareDocumentPosition", () => {
     flushSync(() => or.render(h("s")));
     expect(fi.compareDocumentPosition(el("s", other))).toBe(32);
     expect(fi.compareDocumentPosition(stray)).toBe(32);
+    or.unmount();
   });
 
   test("a fragment rendered in a portal compares from the portal's container", () => {

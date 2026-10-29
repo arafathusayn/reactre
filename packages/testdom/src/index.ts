@@ -273,14 +273,28 @@ export class FakeEvent {
   readonly type: string;
   target: FakeNode | null = null;
   currentTarget: FakeNode | null = null;
+  /** 1 capturing, 2 at the target, 3 bubbling, as the DOM numbers them; 0 outside a dispatch. */
+  eventPhase = 0;
   cancelBubble = false;
+  /** Set by stopImmediatePropagation: no further listener runs, on this element or any other. */
+  stoppedNow = false;
   constructor(type: string) {
     this.type = type;
   }
   stopPropagation(): void {
     this.cancelBubble = true;
   }
+  stopImmediatePropagation(): void {
+    this.cancelBubble = this.stoppedNow = true;
+  }
 }
+
+/** A listener: its function and whether it listens in the capture phase. */
+type Listener = { fn: (e: { type: string; target: FakeNode }) => void; capture: boolean };
+
+/** The capture flag of addEventListener's and removeEventListener's third argument. */
+const captures = (options?: boolean | { capture?: boolean }): boolean =>
+  typeof options === "boolean" ? options : options?.capture === true;
 
 /**
  * An element: class and attributes, handler properties, listeners and
@@ -325,7 +339,7 @@ export class FakeElement extends FakeNode {
   private attrs: Map<string, string> | null = null;
   [prop: string]: unknown;
 
-  private listeners: Map<string, ((e: { type: string; target: FakeNode }) => void)[]> | null = null;
+  private listeners: Map<string, Listener[]> | null = null;
 
   readonly tagName: string;
   /** HTML, or SVG for an `svg` element and everything parsed inside one. */
@@ -338,33 +352,84 @@ export class FakeElement extends FakeNode {
   override get nodeName(): string {
     return this.tagName;
   }
-  /** A fresh array of name/value pairs; a non-empty class comes first. */
+  /**
+   * A fresh array of name/value pairs; a non-empty class comes first. removeAttributeNode keeps
+   * the latest one up to date, as the DOM's live NamedNodeMap is.
+   */
   get attributes(): { name: string; value: string }[] {
     const out = this.attrs ? [...this.attrs].map(([name, value]) => ({ name, value })) : [];
-    return this.cls ? [{ name: "class", value: this.cls }, ...out] : out;
+    return (this.attrList = this.cls ? [{ name: "class", value: this.cls }, ...out] : out);
+  }
+  private attrList: { name: string; value: string }[] = [];
+  /** Removes the attribute an entry of `attributes` names, and the entry from that array. */
+  removeAttributeNode(a: { name: string; value: string }): void {
+    this.removeAttribute(a.name);
+    const i = this.attrList.indexOf(a);
+    if (i >= 0) this.attrList.splice(i, 1);
   }
   hasAttribute(k: string): boolean {
     return k === "class" ? this.cls !== "" : (this.attrs?.has(k) ?? false);
   }
-  addEventListener(type: string, fn: (e: { type: string; target: FakeNode }) => void): void {
-    const map = (this.listeners ??= new Map());
-    map.set(type, [...(map.get(type) ?? []), fn]);
+  /**
+   * Adds a listener for the capture phase (a third argument of true or `{ capture: true }`) or the
+   * bubble phase, once: the same function in the same phase again is ignored, as in the DOM.
+   */
+  addEventListener(
+    type: string,
+    fn: (e: { type: string; target: FakeNode }) => void,
+    options?: boolean | { capture?: boolean },
+  ): void {
+    const map = (this.listeners ??= new Map()),
+      capture = captures(options),
+      list: Listener[] = map.get(type) ?? [];
+    if (!list.some((l) => l.fn === fn && l.capture === capture)) map.set(type, [...list, { fn, capture }]);
+  }
+  /** Removes the listener added with the same type, function and phase, if there is one. */
+  removeEventListener(
+    type: string,
+    fn: (e: { type: string; target: FakeNode }) => void,
+    options?: boolean | { capture?: boolean },
+  ): void {
+    const capture = captures(options),
+      list = this.listeners?.get(type);
+    if (list !== undefined)
+      this.listeners!.set(
+        type,
+        list.filter((l) => l.fn !== fn || l.capture !== capture),
+      );
   }
   /**
-   * Dispatches a bubbling event from this element: at each element up to the
-   * top, its listeners and its `on<type>` property run with the element as
-   * `this` and as `currentTarget`, until a handler stops propagation.
+   * Dispatches a bubbling event from this element, in the DOM's phases: the capture listeners of
+   * each element from the top down to this one's parent, then this element's own (capture ones
+   * first), then the bubble listeners and `on<type>` property of each element from this one's
+   * parent up. Each runs with the element as `this` and as `currentTarget`, until one stops
+   * propagation. An element runs the listeners it has when the event reaches it in that phase.
    */
   dispatchEvent(e: FakeEvent): boolean {
     e.target ??= this;
-    for (let n: FakeNode | null = this; n !== null && !e.cancelBubble; n = n.parentNode) {
-      if (!(n instanceof FakeElement)) continue;
+    const path: FakeElement[] = [];
+    for (let n: FakeNode | null = this; n !== null; n = n.parentNode) if (n instanceof FakeElement) path.push(n);
+    const run = (n: FakeElement, capture: boolean): void => {
       e.currentTarget = n;
-      for (const fn of n.listeners?.get(e.type) ?? []) fn.call(n, e as unknown as { type: string; target: FakeNode });
+      for (const l of n.listeners?.get(e.type) ?? []) {
+        if (e.stoppedNow) return;
+        if (l.capture === capture) l.fn.call(n, e as unknown as { type: string; target: FakeNode });
+      }
+    };
+    e.eventPhase = 1;
+    for (let i = path.length - 1; i > 0 && !e.cancelBubble; i--) run(path[i]!, true);
+    for (let i = 0; i < path.length && !e.cancelBubble; i++) {
+      const n = path[i]!;
+      if (i === 0) {
+        e.eventPhase = 2;
+        run(n, true);
+      } else e.eventPhase = 3;
+      run(n, false);
       const p = (n as unknown as Record<string, unknown>)["on" + e.type];
-      if (typeof p === "function") (p as (this: FakeNode, e: FakeEvent) => void).call(n, e);
+      if (typeof p === "function" && !e.stoppedNow) (p as (this: FakeNode, e: FakeEvent) => void).call(n, e);
     }
     e.currentTarget = null;
+    e.eventPhase = 0;
     return true;
   }
   setAttribute(k: string, v: string): void {
