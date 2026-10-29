@@ -760,7 +760,7 @@ describe("updates that suspend", () => {
     }));
 
   test("a transition that mounts a boundary whose content suspends shows its fallback and commits the rest", () =>
-    same(async ({ L, log, root, flushSync, snap, task }) => {
+    same(async ({ L, log, root, flushSync, snap, settle }) => {
       const d = data();
       let set: Any;
       const Page = logs(L, log, "Page", ({ k }) => d.read(L, k));
@@ -776,7 +776,8 @@ describe("updates that suspend", () => {
       });
       flushSync(() => root.render(L.createElement(App)));
       L.startTransition(() => set("b"));
-      await task();
+      // Once its effects ran: one task races React's passive effects' task.
+      await settle();
       snap("waiting");
       // React renders the content once its data comes and shows it 300 ms after the fallback
       // appeared; compat waits, then renders.
