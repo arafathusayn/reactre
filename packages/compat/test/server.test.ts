@@ -3516,7 +3516,10 @@ describe("formState and server actions", () => {
     const ran: string[] = [];
     const passes = (L: Lib): Any => {
       const acts = [serverAction("ref"), serverAction("ref")];
-      const plain = [(s: Any, p: Any) => void ran.push("first " + s + " " + p), (s: Any, p: Any) => void ran.push("last " + s + " " + p)];
+      const plain = [
+        (s: Any, p: Any) => void ran.push("first " + s + " " + p),
+        (s: Any, p: Any) => void ran.push("last " + s + " " + p),
+      ];
       function Again(): Any {
         const [n, setN] = L.useState(0);
         const [state, formAction] = L.useActionState(acts[n === 0 ? 0 : 1], "s" + n);

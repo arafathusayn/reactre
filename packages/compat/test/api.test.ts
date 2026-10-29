@@ -29,15 +29,7 @@ describe("API manifest", () => {
 
   test("a list is those keys, groups expanded, with what each is part of, and every behaviour", () => {
     expect(enabledApis(["createRoot", "useState", "@suspense", "PureComponent"], [])).toEqual(
-      new Set([
-        "createRoot",
-        "useState",
-        "Suspense",
-        "lazy",
-        "PureComponent",
-        "Component",
-        ...BEHAVIOURS,
-      ]),
+      new Set(["createRoot", "useState", "Suspense", "lazy", "PureComponent", "Component", ...BEHAVIOURS]),
     );
     expect(enabledApis(["hydrateRoot", "useFormState"], ["useState", "repeatedKeys"])).toEqual(
       new Set([
@@ -79,13 +71,16 @@ describe("API manifest", () => {
   });
 
   test("SuspenseList is not exported, as React 19.3.1's stable react does not export it", async () => {
-    const R = await import("react");
+    // Through a variable, so the type check does not look for React's types.
+    const specifier = "react";
+    const R = (await import(specifier)) as Record<string, unknown>;
     for (const k of ["SuspenseList", "unstable_SuspenseList"]) {
       expect(k in R).toBe(false);
       expect(k in Core).toBe(false);
       expect(k in React).toBe(false);
     }
     // ViewTransition and addTransitionType are stable exports of 19.3.1.
-    for (const k of ["ViewTransition", "addTransitionType"]) expect([k in R, k in Core, k in React]).toEqual([true, true, true]);
+    for (const k of ["ViewTransition", "addTransitionType"])
+      expect([k in R, k in Core, k in React]).toEqual([true, true, true]);
   });
 });

@@ -115,6 +115,54 @@ function markup(n: FakeNode): string {
   return out;
 }
 
+// A <select> and its <option>s, as both libraries read them: the options in tree order, each
+// option's selectedness (one per single select), value and disabledness.
+class Opt extends FakeElement {
+  #on = false;
+  defaultSelected = false;
+  get selected(): boolean {
+    return this.#on;
+  }
+  set selected(v: boolean) {
+    this.#on = v;
+    const s = this.parentNode as Any;
+    if (v && s instanceof Sel && !s.multiple) for (const o of s.options) if (o !== this) o.#on = false;
+  }
+  get value(): string {
+    return this.getAttribute("value") ?? this.textContent;
+  }
+  set value(v: string) {
+    this.setAttribute("value", v);
+  }
+  get disabled(): boolean {
+    return this.hasAttribute("disabled");
+  }
+}
+class Sel extends FakeElement {
+  multiple = false;
+  get options(): Opt[] {
+    const out: Opt[] = [];
+    for (let c = this.firstChild; c !== null; c = c.nextSibling) if (c instanceof Opt) out.push(c);
+    return out;
+  }
+}
+
+/** Runs `fn` with both libraries making selects and options as Sel and Opt, through the fake document. */
+async function withSelects(fn: () => Promise<unknown>): Promise<void> {
+  const make = (tag: string): FakeElement =>
+    tag === "select" ? new Sel("SELECT") : tag === "option" ? new Opt("OPTION") : new FakeElement(tag.toUpperCase());
+  const docMake = Object.getOwnPropertyDescriptor(fakeDoc, "createElement")!;
+  const globalMake = (globalThis as Any).document.createElement;
+  Object.defineProperty(fakeDoc, "createElement", { configurable: true, writable: true, value: make });
+  (globalThis as Any).document.createElement = make;
+  try {
+    await fn();
+  } finally {
+    Object.defineProperty(fakeDoc, "createElement", docMake);
+    (globalThis as Any).document.createElement = globalMake;
+  }
+}
+
 /** A promise with its resolve, as tests hand data to components. */
 function deferred<T = void>(): { p: Promise<T>; resolve: (v: T) => void } {
   let resolve!: (v: T) => void;
@@ -600,50 +648,13 @@ describe("updates that suspend", () => {
     }));
 
   test("a transition undone puts back its selects' selection", async () => {
-    // A <select> and its <option>s, as both libraries read them: the options in tree order, each
-    // option's selectedness (one per single select), value and disabledness. Both libraries make
-    // their elements through the fake document, which makes these for the time of this test.
-    class Opt extends FakeElement {
-      #on = false;
-      defaultSelected = false;
-      get selected(): boolean {
-        return this.#on;
-      }
-      set selected(v: boolean) {
-        this.#on = v;
-        const s = this.parentNode as Any;
-        if (v && s instanceof Sel && !s.multiple) for (const o of s.options) if (o !== this) o.#on = false;
-      }
-      get value(): string {
-        return this.getAttribute("value") ?? this.textContent;
-      }
-      set value(v: string) {
-        this.setAttribute("value", v);
-      }
-      get disabled(): boolean {
-        return this.hasAttribute("disabled");
-      }
-    }
-    class Sel extends FakeElement {
-      multiple = false;
-      get options(): Opt[] {
-        const out: Opt[] = [];
-        for (let c = this.firstChild; c !== null; c = c.nextSibling) if (c instanceof Opt) out.push(c);
-        return out;
-      }
-    }
-    const make = (tag: string): FakeElement =>
-      tag === "select" ? new Sel("SELECT") : tag === "option" ? new Opt("OPTION") : new FakeElement(tag.toUpperCase());
-    const docMake = Object.getOwnPropertyDescriptor(fakeDoc, "createElement")!;
-    Object.defineProperty(fakeDoc, "createElement", { configurable: true, writable: true, value: make });
-    (globalThis as Any).document.createElement = make;
-    try {
-      await same(async ({ L, log, root, flushSync, task, c }) => {
+    await withSelects(() =>
+      same(async ({ L, log, root, flushSync, task, c }) => {
         const d = data();
         await d.ready("a");
         let set: Any;
         const chosen = () => {
-          const opts = (nodes(c).find((n) => n instanceof Sel) as Sel).options;
+          const opts = (nodes(c).find((n) => n.nodeName === "SELECT") as Any).options as Any[];
           log.push("selected " + opts.map((o) => (o.selected ? o.value : "-")).join(" "));
         };
         const Page = logs(L, log, "Page", ({ k }) => d.read(L, k));
@@ -671,10 +682,8 @@ describe("updates that suspend", () => {
         d.resolve("c");
         await task();
         chosen();
-      });
-    } finally {
-      Object.defineProperty(fakeDoc, "createElement", docMake);
-    }
+      }),
+    );
   });
 
   test("an urgent update renders a transition that waits for data again, over it", () =>
@@ -887,6 +896,142 @@ describe("updates that suspend", () => {
       d.resolve("b");
       await new Promise((r) => setTimeout(r, 350));
       snap("resolved");
+    }));
+});
+
+describe("throttled reveals", () => {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  test("content a boundary shows again within the throttle renders at once and commits when it ends", () =>
+    same(async ({ L, log, root, flushSync, snap, task }) => {
+      const d = deferred<string>();
+      const Page = logs(L, log, "Page", () => L.use(d.p));
+      flushSync(() =>
+        root.render(
+          L.createElement("div", null, L.createElement(L.Suspense, { fallback: "loading" }, L.createElement(Page))),
+        ),
+      );
+      snap("fallback");
+      await sleep(40);
+      d.resolve("data");
+      await task();
+      await task();
+      snap("rendered");
+      await sleep(320);
+      snap("committed");
+    }));
+
+  test("an update while a reveal waits to commit drops it; it renders again and commits when the throttle ends", () =>
+    same(async ({ L, log, root, flushSync, snap, task }) => {
+      const d = deferred<string>();
+      let set: Any;
+      const Page = logs(L, log, "Page", () => L.use(d.p));
+      const Count = logs(L, log, "Count", () => {
+        const [n, s] = L.useState(0);
+        set = s;
+        return "n" + n;
+      });
+      flushSync(() =>
+        root.render(
+          L.createElement(
+            "div",
+            null,
+            L.createElement(Count),
+            L.createElement(L.Suspense, { fallback: "loading" }, L.createElement(Page)),
+          ),
+        ),
+      );
+      await sleep(40);
+      d.resolve("data");
+      await task();
+      await task();
+      snap("rendered");
+      flushSync(() => set(1));
+      snap("updated");
+      await task();
+      await task();
+      snap("again");
+      await sleep(320);
+      snap("committed");
+    }));
+
+  test("a held reveal makes again the text, attributes, nodes and fields it changed", () =>
+    withSelects(() =>
+      same(async ({ L, log, root, flushSync, snap, task, c }) => {
+        const d = deferred<string>();
+        let set: Any;
+        const fields = () => {
+          const all = nodes(c) as Any[];
+          const input = all.find((n) => n.nodeName === "INPUT");
+          const sel = all.find((n) => n.nodeName === "SELECT");
+          log.push(`fields ${input.value} ${sel.options.map((o: Any) => (o.selected ? o.value : "-")).join(" ")}`);
+        };
+        const Page = logs(L, log, "Page", () => L.use(d.p));
+        const App = () => {
+          const [k, s] = L.useState("a");
+          set = s;
+          return L.createElement(
+            "form",
+            null,
+            L.createElement("input", { value: "text " + k, onChange() {} }),
+            L.createElement(
+              "select",
+              { value: k, onChange() {} },
+              L.createElement("option", { value: "a" }, "a"),
+              L.createElement("option", { value: "b" }, "b"),
+            ),
+            L.createElement(
+              L.Suspense,
+              { fallback: L.createElement("i", null, "loading") },
+              "text",
+              L.createElement("b", { style: { display: "flex" } }, "flex"),
+              L.createElement(Page),
+            ),
+          );
+        };
+        flushSync(() => root.render(L.createElement(App)));
+        flushSync(() => set("b"));
+        fields();
+        await sleep(40);
+        d.resolve("data");
+        await task();
+        await task();
+        snap("rendered");
+        fields();
+        await sleep(320);
+        snap("committed");
+        fields();
+      }),
+    ));
+
+  test("a second boundary that can show its content while one waits renders with it", () =>
+    same(async ({ L, log, root, flushSync, snap, task }) => {
+      const a = deferred<string>(),
+        b = deferred<string>();
+      const A = logs(L, log, "A", () => L.use(a.p));
+      const B = logs(L, log, "B", () => L.use(b.p));
+      flushSync(() =>
+        root.render(
+          L.createElement(
+            "div",
+            null,
+            L.createElement(L.Suspense, { fallback: "a…" }, L.createElement(A)),
+            L.createElement(L.Suspense, { fallback: "b…" }, L.createElement(B)),
+          ),
+        ),
+      );
+      await sleep(40);
+      a.resolve("a");
+      await task();
+      await task();
+      snap("a rendered");
+      await sleep(40);
+      b.resolve("b");
+      await task();
+      await task();
+      snap("b rendered");
+      await sleep(320);
+      snap("committed");
     }));
 });
 

@@ -5193,13 +5193,14 @@ const FALLBACK_THROTTLE = 300;
  *
  * As React does, content a settled promise reveals waits until 300 ms after the last fallback
  * appeared, so content arriving in quick succession shows at once instead of in pieces. React
- * skips the wait when it is 10 ms or less.
+ * skips the wait when it is 10 ms or less. React renders the content at once and commits it then:
+ * with ./features/concurrent.ts too (see laneReveal); without, it renders then.
  */
 function retry(f: Fiber): () => void {
   return () => {
     const ms = fallbackShownAt + FALLBACK_THROTTLE - performance.now();
-    if (ms > 10) setTimeout(() => schedule(f), ms);
-    else schedule(f);
+    if (ms <= 10) schedule(f);
+    else if (lanes === null || !lanes.reveal(f)) setTimeout(() => schedule(f), ms);
   };
 }
 
@@ -7069,6 +7070,8 @@ interface Lanes {
   wake(): void;
   /** A component threw in a transition's attempt: whether it is passed over (see skipSuspended). */
   skip(f: Fiber, e: Any): boolean;
+  /** Boundary `f` shows its content again within the throttle: whether its render is held (see laneReveal). */
+  reveal(f: Fiber): boolean;
 }
 let lanes: Lanes | null = null;
 
@@ -7082,6 +7085,8 @@ interface Batch {
   readonly k: Any[];
   /** It suspended where content showed: it waits until the data settles. */
   w: boolean;
+  /** Boundaries that show their content again (see laneReveal), not transitions. */
+  readonly r?: boolean;
 }
 // The batches waiting to render, in order; the one this event's transitions join; the one this
 // render's deferred values join; how many async actions run.
@@ -7194,6 +7199,7 @@ function newBatch(): Batch {
  * its suspended lanes: replayed over the update, one may not suspend now.
  */
 function unhold(): void {
+  dropPending();
   waiting = false;
   for (const b of batches)
     if (b.w) {
@@ -7302,7 +7308,9 @@ function runLanes(): boolean {
 /**
  * Render batch `b`. Where the DOM can be watched (MutationObserver), it renders where it can be
  * undone: if something suspends where content showed, nothing commits and it waits for the
- * data (false). A store it read that moved meanwhile (`check`) renders it again at once.
+ * data (false). A store it read that moved meanwhile (`check`) renders it again at once. A reveal
+ * (`b.r`) within React's throttle after the last fallback renders now and commits when the
+ * throttle ends (see Pending).
  */
 function attempt(b: Batch, check: boolean): boolean {
   // Its roots, saved whole before anything changes: what it renders, and the boundaries above.
@@ -7387,71 +7395,60 @@ function attempt(b: Batch, check: boolean): boolean {
   let moved = false;
   if (check) for (const box of at.s) if (!Object.is(box.g(), box.v)) moved = true;
   if (mo !== null) {
-    if (at.bad.length || moved) {
-      undoDom(records, null);
-      undoDom(headRecords, head!);
-      // The properties the DOM does not reflect in attributes, as the fields had them: a select's
-      // options (its nodes put back above) get their selectedness, the others value and checked.
-      for (let i = 0; i < fv.length; i += 4) {
-        const dom = fv[i],
-          sel: boolean[] | null = fv[i + 2];
-        if (sel !== null) {
-          for (let j = 0, o = dom.options; j < sel.length; j++) if (o[j].selected !== sel[j]) o[j].selected = sel[j];
-          continue;
-        }
-        if (dom.value !== fv[i + 1]) dom.value = fv[i + 1];
-        if (dom.checked !== fv[i + 3]) dom.checked = fv[i + 3];
-      }
-      for (let i = 0; i < sv.length;) {
-        const f = sv[i++];
-        if (f instanceof RootImpl) {
-          f.mounted = sv[i++];
-          f.tr = sv[i++];
-          f.waits = sv[i++];
-          continue;
-        }
-        f.p = sv[i++];
-        f.e = sv[i++];
-        f.c = sv[i++];
-        f.i = sv[i++];
-        f.d = sv[i++];
-        f.f = sv[i++];
-        f.h = sv[i++];
-        f.s = sv[i++];
-        f.q = sv[i++];
-        f.rx = sv[i++];
-        f.tx = sv[i++];
-        f.b = sv[i++];
-        f.bs = sv[i++];
-        f.pk = sv[i++];
-        f.x = null;
-        const inst = sv[i++];
-        if (inst !== null) [inst.props, inst.state, inst.context] = sv[i++];
-      }
-      for (let i = 0; i < hv.length; i += 8) {
-        const h: Hook = hv[i];
-        h.k = hv[i + 1];
-        h.v = hv[i + 2];
-        h.d = hv[i + 3];
-        h.c = hv[i + 4];
-        h.x = hv[i + 5];
-        h.s = hv[i + 6];
-        h.r = hv[i + 7];
-      }
-      for (let i = 0; i < undo.length; i += 3) pend.set(undo[i], { b: undo[i + 1], u: undo[i + 2] });
+    // Content a boundary shows again, within React's throttle after the last fallback appeared:
+    // React renders it now and commits it when the throttle ends (its retry lanes' timeout).
+    const ms = b.r && !at.bad.length && !moved ? shownAt + FALLBACK_THROTTLE - performance.now() : 0;
+    if (at.bad.length || moved || ms > 10) {
+      // What the render did, to redo it if it is held: the fibers' fields and the fields' values.
+      const p: Pending | null =
+        ms > 10
+          ? {
+              b,
+              at,
+              redo: [],
+              sv: resave(sv),
+              hv: [],
+              fv: fieldsNow(fv),
+              hidden: hiddenCount,
+              shownAt: fallbackShownAt,
+              q: [layoutQ, passiveQ, passiveUnmountQ],
+              timer: 0,
+            }
+          : null;
+      if (p !== null) for (let i = 0; i < hv.length; i += 8) p.hv.push(hv[i], ...hookNow(hv[i]));
+      undoDom(records, null, p && p.redo);
+      undoDom(headRecords, head!, p && p.redo);
+      // The properties the DOM does not reflect in attributes, as the fields had them.
+      restoreFields(fv);
+      restoreFibers(sv, hv);
       layoutQ = [];
       passiveQ = [];
       passiveUnmountQ = [];
       hiddenCount = hidden;
       fallbackShownAt = shownAt;
+      if (p !== null) {
+        // The DOM and the fibers are as they were, until the throttle ends or an update comes.
+        pending = p;
+        waiting = true;
+        p.timer = setTimeout(commitPending, ms) as Any;
+        return true;
+      }
+      for (let i = 0; i < undo.length; i += 3) pend.set(undo[i], { b: undo[i + 1], u: undo[i + 2] });
       if (moved) return attempt(b, false);
       // It renders again once any of what it waits for settles (React's ping).
       b.w = waiting = true;
       for (const t of at.bad) t.then(unhold, unhold);
+      // A reveal that suspends where content showed waits as a transition does.
+      if (b.r) batches.push(b);
       return false;
     }
   }
-  // It commits: the deferred user code, the boundaries' retries, then a commit as any flush's.
+  commit(b, at);
+  return true;
+}
+
+/** Commit batch `b`'s render: the deferred user code, the boundaries' retries, then a commit as any flush's. */
+function commit(b: Batch, at: Held): void {
   for (let i = 0; i < at.t.length; i += 2) {
     const again = retry(at.t[i]);
     at.t[i + 1].then(again, again);
@@ -7460,7 +7457,176 @@ function attempt(b: Batch, check: boolean): boolean {
   for (const h of b.h) if (h.f.f & DEAD) pend.delete(h);
   flushWork(false);
   if (waiting) unhold();
+}
+
+/**
+ * A render held before it commits, its DOM changes undone and its fibers put back as they were:
+ * `redo` (undoDom's), `sv`, `hv` and `fv` make it again, then it commits with its deferred user
+ * code (`at`) and effects (`q`). An update that comes first drops it, as React's next render
+ * cancels its timeout, and the reveal renders again.
+ */
+interface Pending {
+  readonly b: Batch;
+  readonly at: Held;
+  readonly redo: Any[];
+  readonly sv: Any[];
+  readonly hv: Any[];
+  readonly fv: Any[];
+  readonly hidden: number;
+  readonly shownAt: number;
+  readonly q: [Hook[], Hook[], Any[]];
+  timer: number;
+}
+let pending: Pending | null = null;
+
+/** Make the held render again and commit it (its timeout). */
+function commitPending(): void {
+  const p = pending!;
+  pending = null;
+  redoDom(p.redo);
+  restoreFields(p.fv);
+  restoreFibers(p.sv, p.hv);
+  hiddenCount = p.hidden;
+  fallbackShownAt = p.shownAt;
+  [layoutQ, passiveQ, passiveUnmountQ] = p.q;
+  commit(p.b, p.at);
+}
+
+/** Drop the held render, if any (an update came): its boundaries reveal again, in a render of their own. */
+function dropPending(): void {
+  const p = pending;
+  if (p === null) return;
+  pending = null;
+  clearTimeout(p.timer);
+  for (const f of p.b.f) laneReveal(f);
+}
+
+// The boundaries whose content a settled promise reveals, waiting for their render (see laneReveal).
+let reveal: Batch | null = null;
+
+/**
+ * Boundary `f` can show its content again within React's throttle after the last fallback: it
+ * renders in a task, as React's retry lane, and commits when the throttle ends (see attempt).
+ * Returns false where its render cannot be held (no MutationObserver, or a root that hydrates).
+ */
+function laneReveal(f: Fiber): boolean {
+  if (typeof MutationObserver !== "function" || f.o.hydrate) return false;
+  // A render held for others renders again with this one, as React renders retry lanes together.
+  dropPending();
+  if (reveal === null) {
+    reveal = { f: new Set(), h: new Set(), k: [], w: false, r: true };
+    afterPaint(runReveal);
+  }
+  reveal.f.add(f);
   return true;
+}
+
+function runReveal(): void {
+  const b = reveal!;
+  reveal = null;
+  // Urgent work, and the last commit's passive effects, first.
+  flushWork(true);
+  attempt(b, true);
+}
+
+/** Put back the fibers and hooks save() saved in `sv` and `hv`. */
+function restoreFibers(sv: Any[], hv: Any[]): void {
+  for (let i = 0; i < sv.length;) {
+    const f = sv[i++];
+    if (f instanceof RootImpl) {
+      f.mounted = sv[i++];
+      f.tr = sv[i++];
+      f.waits = sv[i++];
+      continue;
+    }
+    f.p = sv[i++];
+    f.e = sv[i++];
+    f.c = sv[i++];
+    f.i = sv[i++];
+    f.d = sv[i++];
+    f.f = sv[i++];
+    f.h = sv[i++];
+    f.s = sv[i++];
+    f.q = sv[i++];
+    f.rx = sv[i++];
+    f.tx = sv[i++];
+    f.b = sv[i++];
+    f.bs = sv[i++];
+    f.pk = sv[i++];
+    f.x = null;
+    const inst = sv[i++];
+    if (inst !== null) [inst.props, inst.state, inst.context] = sv[i++];
+  }
+  for (let i = 0; i < hv.length; i += 8) {
+    const h: Hook = hv[i];
+    h.k = hv[i + 1];
+    h.v = hv[i + 2];
+    h.d = hv[i + 3];
+    h.c = hv[i + 4];
+    h.x = hv[i + 5];
+    h.s = hv[i + 6];
+    h.r = hv[i + 7];
+  }
+}
+
+/** The fields of the fibers saved in `sv` as they are now, in its form: what restoreFibers makes again. */
+function resave(sv: Any[]): Any[] {
+  const out: Any[] = [];
+  for (let i = 0; i < sv.length;) {
+    const f = sv[i];
+    if (f instanceof RootImpl) {
+      out.push(f, f.mounted, f.tr, f.waits);
+      i += 4;
+      continue;
+    }
+    fiberNow(f, out);
+    i += 16;
+    if (sv[i - 1] !== null) i++;
+  }
+  return out;
+}
+
+/** Push fiber `f`'s fields onto `sv`, as save() and restoreFibers read them. */
+function fiberNow(f: Fiber, sv: Any[]): void {
+  const copy = (x: Any): Any => (Array.isArray(x) && x !== NO_FIBERS ? x.slice() : x);
+  sv.push(f, f.p, f.e, copy(f.c), f.i, f.d, f.f, copy(f.h), f.n === PROVIDER && f.s !== null ? new Set(f.s) : f.s);
+  sv.push(copy(f.q), copy(f.rx), f.tx, f.b, copy(f.bs), f.pk);
+  if (f.n === CLASS && f.s !== null) sv.push(f.s, [f.s.props, f.s.state, f.s.context]);
+  else sv.push(null);
+}
+
+/** Hook `h`'s fields, as restoreFibers puts them back. */
+const hookNow = (h: Hook): Any[] => [h.k, h.v, h.d, h.c, h.x, h.s, h.r];
+
+/** Set the fields save() saved in `fv` back: value and checked, or a select's options' selectedness. */
+function restoreFields(fv: Any[]): void {
+  for (let i = 0; i < fv.length; i += 4) {
+    const dom = fv[i],
+      sel: boolean[] | null = fv[i + 2];
+    if (sel !== null) {
+      for (let j = 0, o = dom.options; j < sel.length; j++) if (o[j].selected !== sel[j]) o[j].selected = sel[j];
+      continue;
+    }
+    if (dom.value !== fv[i + 1]) dom.value = fv[i + 1];
+    if (dom.checked !== fv[i + 3]) dom.checked = fv[i + 3];
+  }
+}
+
+/** The fields `fv` saved, as they are now, in its form. */
+function fieldsNow(fv: Any[]): Any[] {
+  const out: Any[] = [];
+  for (let i = 0; i < fv.length; i += 4) {
+    const dom = fv[i];
+    if (fv[i + 2] !== null)
+      out.push(
+        dom,
+        null,
+        Array.from(dom.options, (o: Any) => o.selected),
+        null,
+      );
+    else out.push(dom, dom.value, null, dom.checked);
+  }
+  return out;
 }
 
 /**
@@ -7492,15 +7658,17 @@ function bailRender(f: Fiber): void {
  * `targets`: all a render can change.
  */
 function save(f: Fiber, sv: Any[], hv: Any[], fv: Any[], targets: Any[]): void {
-  const copy = (x: Any): Any => (Array.isArray(x) && x !== NO_FIBERS ? x.slice() : x);
-  sv.push(f, f.p, f.e, copy(f.c), f.i, f.d, f.f, copy(f.h), f.n === PROVIDER && f.s !== null ? new Set(f.s) : f.s);
-  sv.push(copy(f.q), copy(f.rx), f.tx, f.b, copy(f.bs), f.pk);
-  if (f.n === CLASS && f.s !== null) sv.push(f.s, [f.s.props, f.s.state, f.s.context]);
-  else sv.push(null);
-  if (f.h !== null) for (const h of f.h) hv.push(h, h.k, h.v, h.d, h.c, h.x, h.s, h.r);
+  fiberNow(f, sv);
+  if (f.h !== null) for (const h of f.h) hv.push(h, ...hookNow(h));
   if (f.n === PORTAL) targets.push(f.d);
   else if (f.n === HOST && (f.t === "input" || f.t === "textarea")) fv.push(f.d, f.d.value, null, f.d.checked);
-  else if (f.n === HOST && f.t === "select") fv.push(f.d, null, Array.from(f.d.options, (o: Any) => o.selected), null);
+  else if (f.n === HOST && f.t === "select")
+    fv.push(
+      f.d,
+      null,
+      Array.from(f.d.options, (o: Any) => o.selected),
+      null,
+    );
   for (let ix = 0, xs = f.c; ix < xs.length; ix++) save(xs[ix]!, sv, hv, fv, targets);
 }
 
@@ -7533,29 +7701,50 @@ const WATCH: MutationObserverInit = {
 
 /**
  * Undo the DOM changes `records` saw, last first. Under `head` (<head>), only those to compat's
- * hoisted elements: what other code put there stays, as React leaves it.
+ * hoisted elements: what other code put there stays, as React leaves it. With `redo`, what makes
+ * each change again goes there, in fives (see redoDom).
  */
-function undoDom(records: MutationRecord[], head: Node | null): void {
+function undoDom(records: MutationRecord[], head: Node | null, redo: Any[] | null): void {
   for (let i = records.length - 1; i >= 0; i--) {
     const r = records[i]!,
       t: Any = r.target;
     if (head !== null && t !== head && !ownNode(t, head)) continue;
     if (r.type === "childList") {
+      const added: Any[] = [],
+        removed: Any[] = [];
       for (let j = r.addedNodes.length - 1; j >= 0; j--) {
         const n: Any = r.addedNodes[j];
-        if (t !== head || n[FIBER] !== undefined) t.removeChild(n);
+        if (t !== head || n[FIBER] !== undefined) added.push(t.removeChild(n));
       }
       for (let j = 0; j < r.removedNodes.length; j++) {
         const n: Any = r.removedNodes[j];
-        if (t !== head || n[FIBER] !== undefined) t.insertBefore(n, r.nextSibling);
+        if (t !== head || n[FIBER] !== undefined) removed.push(t.insertBefore(n, r.nextSibling));
       }
-    } else if (r.type === "attributes")
-      // Chrome writes a style attribute that CSSOM changed when something reads it, so one removed
-      // before that comes back empty: hasAttribute reads it first.
-      r.oldValue === null
-        ? t.hasAttribute(r.attributeName) && t.removeAttribute(r.attributeName)
-        : t.setAttribute(r.attributeName, r.oldValue);
-    else t.data = r.oldValue;
+      redo?.push(0, t, added, removed, r.nextSibling);
+    } else if (r.type === "attributes") {
+      // Reading it first also makes Chrome write a style attribute CSSOM changed, which a
+      // removal before that would leave behind, empty.
+      const now = t.getAttribute(r.attributeName);
+      if (r.oldValue !== null) t.setAttribute(r.attributeName, r.oldValue);
+      else if (now !== null) t.removeAttribute(r.attributeName);
+      redo?.push(1, t, r.attributeName, now, null);
+    } else {
+      redo?.push(2, t, t.data, null, null);
+      t.data = r.oldValue;
+    }
+  }
+}
+
+/** Make again, first first, the changes undoDom undid and kept in `redo`. */
+function redoDom(redo: Any[]): void {
+  for (let i = redo.length - 5; i >= 0; i -= 5) {
+    const t = redo[i + 1];
+    if (redo[i] === 0) {
+      for (const n of redo[i + 3]) t.removeChild(n);
+      for (let j = redo[i + 2].length - 1; j >= 0; j--) t.insertBefore(redo[i + 2][j], redo[i + 4]);
+    } else if (redo[i] === 1)
+      redo[i + 3] === null ? t.removeAttribute(redo[i + 2]) : t.setAttribute(redo[i + 2], redo[i + 3]);
+    else t.data = redo[i + 2];
   }
 }
 
@@ -7580,6 +7769,7 @@ export function __installConcurrent(): void {
     flush: runLanes,
     wake: unhold,
     skip: skipSuspended,
+    reveal: laneReveal,
   };
 }
 

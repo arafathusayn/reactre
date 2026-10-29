@@ -25,8 +25,8 @@ import {
   lazy,
   memo,
   PureComponent,
-  startTransition,
   type ReactNode,
+  startTransition,
   StrictMode,
   Suspense,
   use,
@@ -1038,7 +1038,12 @@ export const cases: Record<string, Case> = {
     }
     const chosen = () => {
       const s = t.$("select") as HTMLSelectElement;
-      t.log("selected", s.value, s.selectedIndex, [...s.options].map((o) => o.selected));
+      t.log(
+        "selected",
+        s.value,
+        s.selectedIndex,
+        [...s.options].map((o) => o.selected),
+      );
     };
     mount(t, <App />);
     chosen();
