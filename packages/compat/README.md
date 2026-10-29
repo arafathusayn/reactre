@@ -69,9 +69,9 @@ Every change is checked against React 19 itself, scenario by scenario: the same 
 Server Components stay on React: the plugin leaves the RSC environment, and any build resolving with the `react-server` condition, on real React. Where compat differs from React's server renderer:
 
 - `prerender`, `prerenderToNodeStream`, `resume` and `resumeToPipeableStream` are exported but throw: partial prerendering is not implemented.
-- A promise created during render rather than cached suspends again on each retry, where React replays it.
+- A promise created during render rather than cached suspends again on each retry, where React replays the one it suspended on. Replaying needs compat's `use()` to hand every promise it reads to the server first, a check client renders would pay for too.
 - `preload`, `preinit` and the other resource functions reach a server render from code its work runs, such as its components, as in React's browser and Bun builds. React's Node build, and its edge build where `AsyncLocalStorage` exists, also take hints made afterwards in a promise callback the render started; compat's go to the browser's document there, if there is one.
-- `formState` and `unstable_externalRuntimeSrc` are not supported.
+- `formState` is not supported: matching a server action's state needs compat's `useActionState` to report to the server on every render, client renders included. (`unstable_externalRuntimeSrc` is ignored, as React's production build ignores it.)
 - Errors carry React's full messages rather than minified codes.
 - `onError`'s `componentStack` is React's production stack, each component's frame read from a native stack trace as React reads it, with two exceptions. A component whose first call that throws without props is `use()` of a promise gets a frame with only its name, as compat's `use()` reads a promise outside a render where React's throws. Under JavaScriptCore (Bun, Safari), a component that returns a hook's result directly, a tail call, has no frame of its own, so the frame shown is the hook's, in compat's code rather than React's. Frames are formatted as React's browser, Bun and legacy builds format them; its Node and edge builds use an `Error.prepareStackTrace` of their own, which Bun writes differently for an engine-made frame such as a class's implicit constructor.
 - `useId`'s server ids follow React's, but compat's client makes its own ids, so hydration patches the attributes that hold them.
@@ -83,11 +83,11 @@ Each module bundled whole, minified, for the browser in production mode, with Re
 
 | Bundle                              | Minified |    gzip |  brotli |
 | ----------------------------------- | -------: | ------: | ------: |
-| `@reactre/compat`                   |  77.2 KB | 28.3 KB | 25.1 KB |
-| `@reactre/compat/core`              |  73.9 KB | 27.1 KB | 24.1 KB |
+| `@reactre/compat`                   |  77.3 KB | 28.3 KB | 25.1 KB |
+| `@reactre/compat/core`              |  74.1 KB | 27.2 KB | 24.2 KB |
 | `react` + `react-dom/client` 19.3.1 | 214.1 KB | 66.7 KB | 57.4 KB |
 
-Class support costs about 3.3 KB minified, 1.2 KB gzipped, which apps on `@reactre/compat/core` leave out. Most of the runtime ships whatever an app imports: a counter with one `useState` and `createRoot` comes to 20.2 KB gzipped (19.0 KB on core), against 64.4 KB on React. Measured with Bun's bundler, gzip at level 9 and brotli at quality 11; Rolldown, the bundler in Vite, gives sizes within 1 KB of these.
+Class support costs about 3.3 KB minified, 1.1 KB gzipped, which apps on `@reactre/compat/core` leave out. Most of the runtime ships whatever an app imports: a counter with one `useState` and `createRoot` comes to 20.2 KB gzipped (19.0 KB on core), against 64.4 KB on React. Measured with Bun's bundler, gzip at level 9 and brotli at quality 11; Rolldown, the bundler in Vite, gives sizes within 1 KB of these.
 
 ## License
 
