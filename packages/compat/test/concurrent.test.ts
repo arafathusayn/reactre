@@ -874,6 +874,68 @@ describe("updates that suspend", () => {
       snap("resolved");
     }));
 
+  test("an update outside a transition that suspends with no boundary above keeps the screen", () =>
+    same(async ({ L, log, root, flushSync, snap, task }) => {
+      const d = data();
+      await d.ready("a");
+      let set: Any;
+      const Page = logs(L, log, "Page", ({ k }) => d.read(L, k));
+      const App = logs(L, log, "App", () => {
+        const [k, s] = L.useState("a");
+        set = s;
+        // Text, an attribute changed and one added, and a node that comes and goes.
+        return L.createElement(
+          "div",
+          { className: "k-" + k, title: k === "b" ? "b" : undefined },
+          L.createElement("h1", null, k),
+          k === "a" ? L.createElement("p", null, "only a") : L.createElement("i", null, "only b"),
+          L.createElement(Page, { k }),
+        );
+      });
+      flushSync(() => root.render(L.createElement(App)));
+      flushSync(() => set("b"));
+      snap("urgent");
+      await task();
+      snap("waiting");
+      d.resolve("b");
+      await task();
+      snap("resolved");
+    }));
+
+  test("without a MutationObserver, such an update commits what rendered (compat only)", async () => {
+    const g = globalThis as { MutationObserver?: unknown };
+    const observer = g.MutationObserver;
+    delete g.MutationObserver;
+    try {
+      const d = data();
+      await d.ready("a");
+      let set: Any;
+      const Page = ({ k }: Any) => d.read(Compat, k);
+      const App = () => {
+        const [k, s] = Compat.useState("a");
+        set = s;
+        return Compat.createElement(
+          "div",
+          null,
+          Compat.createElement("h1", null, k),
+          Compat.createElement(Page, { k }),
+        );
+      };
+      const c = new FakeElement("DIV");
+      c.isDocument = true;
+      const root = Compat.createRoot(c as unknown as Element);
+      Compat.flushSync(() => root.render(Compat.createElement(App)));
+      Compat.flushSync(() => set("b"));
+      expect(markup(c)).toBe("<div><h1>b</h1>A</div>");
+      d.resolve("b");
+      await new Promise((r) => setTimeout(r, 0));
+      expect(markup(c)).toBe("<div><h1>b</h1>B</div>");
+      root.unmount();
+    } finally {
+      g.MutationObserver = observer;
+    }
+  });
+
   test("a transition that mounts a boundary whose content suspends shows its fallback and commits the rest", () =>
     same(async ({ L, log, root, flushSync, snap, settle }) => {
       const d = data();

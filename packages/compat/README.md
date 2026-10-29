@@ -47,24 +47,25 @@ The plugin has an entry for each: `@reactre/plugin/rollup`, `/rolldown`, `/esbui
 
 ## Modules
 
-| Module                                     | What it is                                                                        |
-| ------------------------------------------ | --------------------------------------------------------------------------------- |
-| `@reactre/compat`                          | React's client API, whole: core and the feature modules                           |
-| `@reactre/compat/core`                     | The slim base: React's client API without the feature modules                     |
-| `@reactre/compat/features/classes`         | Class components (lifecycles, setState, error boundaries), installed when loaded  |
-| `@reactre/compat/features/stacks`          | React's component stacks in error reports, installed when loaded                  |
-| `@reactre/compat/features/keys`            | React's handling of a list whose keys repeat, installed when loaded               |
-| `@reactre/compat/features/retry`           | React's retry of a render that throws, installed when loaded                      |
-| `@reactre/compat/features/concurrent`      | React's transition lanes, installed when loaded                                   |
-| `@reactre/compat/features/viewTransitions` | React's view transitions (needs the lanes, and loads them), installed when loaded |
-| `@reactre/compat/classes`                  | `@reactre/compat` under its earlier name, for apps that resolve to it             |
-| `@reactre/compat/server`                   | `react-dom/server`: React's server rendering, on compat's hooks                   |
-| `@reactre/compat/static`                   | `react-dom/static`: the same module, picked by `react-dom/static`'s conditions    |
-| `@reactre/compat/server.browser`           | `react-dom/server.browser`: the server with React's minified error codes          |
-| `@reactre/compat/server.edge`              | `react-dom/server.edge` and `.bun`: the codes from `renderToString` alone         |
-| `@reactre/compat/server.node`              | `react-dom/server.node`: the server with React's full error messages              |
-| `@reactre/compat/compiler`                 | The compiler @reactre/plugin runs, and a Bun plugin of its own                    |
-| `@reactre/compat/api`                      | The keys that switch React's APIs and behaviours on and off, and their rules      |
+| Module                                     | What it is                                                                                 |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------ |
+| `@reactre/compat`                          | React's client API, whole: core and the feature modules                                    |
+| `@reactre/compat/core`                     | The slim base: React's client API without the feature modules                              |
+| `@reactre/compat/features/classes`         | Class components (lifecycles, setState, error boundaries), installed when loaded           |
+| `@reactre/compat/features/stacks`          | React's component stacks in error reports, installed when loaded                           |
+| `@reactre/compat/features/keys`            | React's handling of a list whose keys repeat, installed when loaded                        |
+| `@reactre/compat/features/retry`           | React's retry of a render that throws, installed when loaded                               |
+| `@reactre/compat/features/concurrent`      | React's transition lanes, installed when loaded                                            |
+| `@reactre/compat/features/viewTransitions` | React's view transitions (needs the lanes, and loads them), installed when loaded          |
+| `@reactre/compat/features/undo`            | React's handling of an urgent render that suspends with no boundary, installed when loaded |
+| `@reactre/compat/classes`                  | `@reactre/compat` under its earlier name, for apps that resolve to it                      |
+| `@reactre/compat/server`                   | `react-dom/server`: React's server rendering, on compat's hooks                            |
+| `@reactre/compat/static`                   | `react-dom/static`: the same module, picked by `react-dom/static`'s conditions             |
+| `@reactre/compat/server.browser`           | `react-dom/server.browser`: the server with React's minified error codes                   |
+| `@reactre/compat/server.edge`              | `react-dom/server.edge` and `.bun`: the codes from `renderToString` alone                  |
+| `@reactre/compat/server.node`              | `react-dom/server.node`: the server with React's full error messages                       |
+| `@reactre/compat/compiler`                 | The compiler @reactre/plugin runs, and a Bun plugin of its own                             |
+| `@reactre/compat/api`                      | The keys that switch React's APIs and behaviours on and off, and their rules               |
 
 `@reactre/compat` is all of React's client API. The plugin builds narrower entries from the same modules: with `compat: { classes: false }`, or any key in `compat.exclude`, `react` resolves to a module built on `@reactre/compat/core` that loads each feature module still on, so every set of options behaves as React does for everything it keeps. Without class support, a class that renders throws an error naming the fix. Without the `componentStack` key, errors are reported with an empty `componentStack`; without `repeatedKeys`, a list whose keys repeat, which React warns about, is reconciled by compat's own rules; without `renderRetry`, an error a render throws goes to the nearest error boundary or the root at once, and nothing is reported as recoverable. See [the plugin's docs](https://www.npmjs.com/package/@reactre/plugin). `@reactre/compat/core` alone, with no feature module, is for builds that choose all four off, as the js-framework-benchmark app does. The compiler is optional; without it, everything still runs.
 

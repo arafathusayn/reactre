@@ -2,13 +2,13 @@
 
 Items 25 to 29 of [compat-remaining.md](compat-remaining.md) have one cause. React renders into a work-in-progress tree and commits it at the end, so a render it abandons leaves the screen and the committed tree untouched. Compat writes the DOM and its one fiber tree as it renders. To match React on these items, compat has to put back what a render changed, as it already does for transitions (the lanes module, [compat-concurrent.md](compat-concurrent.md)).
 
-| #   | What React does                                                                | What compat needs                                                                                               |
-| --- | ------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
-| 25  | The retry renders again after any render error, not only a component's own     | The state from before the render, to render again from it                                                       |
-| 26  | An update's retry renders the whole root again                                 | The same, for the root                                                                                          |
-| 27  | The retry computes `useMemo` again                                             | Closed without an undo: the retry module notes what each memo held before it computed, and a retry puts it back |
-| 28  | A hydration error renders the root again, client-side, before it recovers      | The state from before the hydrating pass                                                                        |
-| 29  | An update outside a transition that suspends with no boundary keeps the screen | The undo started before the render, since the suspension comes later                                            |
+| #   | What React does                                                                | What compat needs                                                                                                      |
+| --- | ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| 25  | The retry renders again after any render error, not only a component's own     | The state from before the render, to render again from it                                                              |
+| 26  | An update's retry renders the whole root again                                 | The same, for the root                                                                                                 |
+| 27  | The retry computes `useMemo` again                                             | Closed without an undo: the retry module notes what each memo held before it computed, and a retry puts it back        |
+| 28  | A hydration error renders the root again, client-side, before it recovers      | The state from before the hydrating pass                                                                               |
+| 29  | An update outside a transition that suspends with no boundary keeps the screen | Closed by `features/undo`: the subtrees of the fibers an urgent render renders are saved before it, not the whole tree |
 
 ## What the transition undo costs, and why it cannot simply run for every render
 
@@ -25,3 +25,7 @@ A transition's attempt saves the fibers and hooks of the whole tree under each r
 Option 2, as its own opt-in key (`renderUndo`), with `@reactre/compat` loading it, is the only way to match React on these items without making updates O(tree). Its cost to `@reactre/compat/core` is the indirection at each mutation site. That cost has to be measured before anything ships, with the A/B rules: an A/A control and 95% CIs. If the A/B shows any cost to core outside the A/A noise, the items stay as option 3.
 
 Item 24 is separate: React itself does not check the hook's kind there, and many of its outcomes are TypeErrors from React's internals, whose messages depend on the engine. Matching it means mirroring React's hook object layout in every hook, which is a rewrite of the hooks, not a module.
+
+## What shipped first (item 29)
+
+A third way avoids both the O(tree) save and a hook in every mutation site: save, before an urgent render, the subtrees of the fibers the flush is about to render. Those are the only fibers the render can change, apart from DOM placement in their hosts, which the MutationObserver records. The cost then follows the update: a click that renders one row saves one row. An update at the top of a large memoized tree saves that whole tree, more than the render itself visits. The module `features/undo` (key `renderUndo`) does this through the `beforeRender` slot the flush already tests, so `@reactre/compat/core` adds no work to a render, only one flag test where a render with held work ends. Items 25, 26 and 28 can build on the same saved state: a retry that starts from it renders again the way React's does.

@@ -3888,6 +3888,7 @@ const HYDRATION = {
   listen: (r: RootImpl): void => {
     // Behind bail renders waiting for the next flush (see laneSame), if any.
     if (beforeRender === runBails) bailNext = selective;
+    else if (undoRender !== null) undoNext = selective;
     else beforeRender = selective;
     listenForReplay(r);
   },
@@ -5872,6 +5873,12 @@ function throwTo(f: Fiber, e: Any): void {
   }
   // Every fiber has its root above it, so only a root itself finds none.
   if (p === null) p = f;
+  // With ./features/undo.ts, an urgent render that suspends with no boundary is undone.
+  if (promise && undoWatch !== null && p.n === ROOT && holding === MUT) {
+    undoing = true;
+    // So mutations() runs after the render, whatever else it holds.
+    MUT.q.push(null, noop);
+  }
   p.x = e;
   schedule(p);
 }
@@ -7252,6 +7259,8 @@ function mutations(): void {
   const q = MUT.q;
   if (q.length === 0) return;
   MUT.q = [];
+  // The render suspended with no boundary (see undoLater): it is undone, its held work dropped.
+  if (undoing) return undoRender!();
   for (let i = 0; i < q.length; i += 2)
     if (q[i].f & DEAD) {
       deletionsFirst(q, i);
@@ -7578,6 +7587,119 @@ interface Watch {
   records: MutationRecord[];
   headRecords: MutationRecord[];
 }
+
+// #region Urgent render undo (./features/undo.ts)
+
+// The watch of the render the flush is running, while ./features/undo.ts is installed; the
+// beforeRender work that was there before it; whether that render is to be undone.
+let undoWatch: Watch | null = null,
+  undoNext: ((q: Fiber[]) => void) | null = null,
+  undoing = false,
+  undoQueued: Fiber[] = [],
+  // undoNow, once the module installed it: the core reaches the undo only through this.
+  undoRender: (() => void) | null = null,
+  // Whether the next render, and the one under way, is the one React tries once more in a task
+  // after an undo, before it waits for the promise.
+  undoRetryNext = false,
+  undoRetrying = false;
+
+/**
+ * Internal: React's handling of an urgent render that suspends with no boundary above (it keeps
+ * the screen); @reactre/compat/features/undo calls it when it loads. Until then, compat commits
+ * what rendered.
+ */
+export function __installUndo(): void {
+  // Ahead of whatever is there: a module installs as it loads, before any render.
+  if (undoRender !== null) return;
+  undoRender = undoNow;
+  undoNext = beforeRender;
+  beforeRender = undoBefore;
+}
+
+/**
+ * Before a render: save what the queued fibers' renders can change (their subtrees, not the
+ * whole tree) and watch their roots' DOM, so the render can be undone. Disconnected once the
+ * flush is over.
+ */
+function undoBefore(q: Fiber[]): void {
+  if (undoWatch !== null) unwatch(undoWatch);
+  undoWatch = null;
+  // Without a MutationObserver nothing records the DOM's changes: what renders commits.
+  if (typeof MutationObserver !== "function") {
+    if (undoNext !== null) undoNext(q);
+    return;
+  }
+  const sv: Any[] = [],
+    hv: Any[] = [],
+    fv: Any[] = [],
+    targets: Any[] = [];
+  undoQueued = q.slice();
+  undoRetrying = undoRetryNext;
+  undoRetryNext = false;
+  for (const f of q) {
+    if ((f.f & (DIRTY | DEAD)) !== DIRTY) continue;
+    save(f, sv, hv, fv, targets);
+    let r: Fiber = f;
+    while (r.r !== null) r = r.r;
+    if (!targets.includes(r.d)) targets.push(r.d);
+  }
+  // Nodes and text only: watching attributes with their old values makes the browser write each
+  // element's style attribute at once, which changes the attribute order libraries' own nodes get.
+  // The attributes compat sets are put back from the props instead (see undoNow).
+  const mo = new MutationObserver(noop);
+  for (const t of targets) mo.observe(t, NODES);
+  const head: Node | null = document.head ?? null,
+    ho = head === null ? null : new MutationObserver(noop);
+  if (ho !== null) ho.observe(head!, NODES);
+  const w: Watch = (undoWatch = {
+    sv,
+    hv,
+    fv,
+    mo,
+    ho,
+    head,
+    hidden: hiddenCount,
+    shownAt: fallbackShownAt,
+    records: [],
+    headRecords: [],
+  });
+  queueMicrotask(() => {
+    if (undoWatch === w) {
+      unwatch(w);
+      undoWatch = null;
+    }
+  });
+  if (undoNext !== null) undoNext(q);
+}
+
+/** Undo the render: its DOM changes, fibers, hooks and queued effects; its updates wait to render again. */
+function undoNow(): void {
+  const w = undoWatch!;
+  undoing = false;
+  undoWatch = null;
+  unwatch(w);
+  // The hosts the render gave new props: [fiber, props now, props before], read before the fibers
+  // are put back (each fiber's fields are 16 entries of w.sv, 17 for a class; see fiberNow).
+  const hosts: Any[] = [];
+  for (let i = 0; i < w.sv.length;) {
+    const f: Fiber = w.sv[i];
+    if (f.n === HOST && f.p !== w.sv[i + 1]) hosts.push(f, f.p, w.sv[i + 1]);
+    i += 16;
+    if (w.sv[i - 1] !== null) i++;
+  }
+  undoWatched(w, null);
+  for (let i = 0; i < hosts.length; i += 3) setProps(hosts[i], hosts[i].d, hosts[i + 1], hosts[i + 2], false);
+  const q = undoQueued;
+  for (const f of q) f.f &= ~(QUEUED | LATER);
+  // React renders once more in a task, then waits for the promise (the root's retry).
+  if (!undoRetrying)
+    afterPaint(() => {
+      undoRetryNext = true;
+      for (const f of q) if ((f.f & (DIRTY | DEAD)) === DIRTY) schedule(f);
+    });
+}
+
+// #endregion
 
 /** Save roots `rs` whole and watch their DOM, before a render that may be undone. */
 function watchRoots(rs: Set<RootImpl>): Watch {
@@ -8054,6 +8176,14 @@ function rebase(h: Hook, undo: Any[]): boolean {
   h.v = s;
   return changed;
 }
+
+// What the urgent render undo watches: nodes and text, with what they replaced (see undoBefore).
+const NODES: MutationObserverInit = {
+  childList: true,
+  subtree: true,
+  characterData: true,
+  characterDataOldValue: true,
+};
 
 // What a MutationObserver records to undo a render: every change, with what it replaced.
 const WATCH: MutationObserverInit = {

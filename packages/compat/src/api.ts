@@ -95,7 +95,8 @@ export const KEYS: readonly string[] = [
  * render them, after urgent updates, keeping the screen while one suspends (else at once).
  * `viewTransitions`: a transition that changes a <ViewTransition> commits through
  * `document.startViewTransition`, as React's does (else it commits plainly); it needs
- * `concurrentRendering`.
+ * `concurrentRendering`. `renderUndo`: an urgent render that suspends with no Suspense boundary
+ * above is undone and the screen kept, as React keeps it (else what rendered commits).
  */
 export const BEHAVIOURS: readonly string[] = [
   "componentStack",
@@ -103,6 +104,7 @@ export const BEHAVIOURS: readonly string[] = [
   "renderRetry",
   "concurrentRendering",
   "viewTransitions",
+  "renderUndo",
 ];
 
 /**
@@ -116,6 +118,7 @@ export const MODULES: Readonly<Record<string, string>> = {
   renderRetry: "@reactre/compat/features/retry",
   concurrentRendering: "@reactre/compat/features/concurrent",
   viewTransitions: "@reactre/compat/features/viewTransitions",
+  renderUndo: "@reactre/compat/features/undo",
 };
 
 /** Groups of keys, by the feature they make up. A group is written where a key may be. */

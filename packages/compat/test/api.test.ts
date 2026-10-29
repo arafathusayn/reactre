@@ -41,6 +41,7 @@ describe("API manifest", () => {
         "renderRetry",
         "concurrentRendering",
         "viewTransitions",
+        "renderUndo",
       ]),
     );
   });
@@ -66,7 +67,7 @@ describe("API manifest", () => {
   test("an unknown key, or no root, is an error", () => {
     expect(() => enabledApis("all", ["useStat"])).toThrow('"useStat" is not an API key');
     expect(() => enabledApis("all", ["useStat"])).toThrow(
-      "the behaviours componentStack, repeatedKeys, renderRetry, concurrentRendering, viewTransitions and the groups",
+      "the behaviours componentStack, repeatedKeys, renderRetry, concurrentRendering, viewTransitions, renderUndo and the groups",
     );
     expect(() => enabledApis(["@forms"], [])).toThrow("an app needs createRoot or hydrateRoot");
     expect(() => enabledApis("all", ["createRoot", "hydrateRoot"])).toThrow("needs createRoot or hydrateRoot");
