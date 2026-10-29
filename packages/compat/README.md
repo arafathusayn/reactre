@@ -98,11 +98,11 @@ Each module bundled whole, minified, for the browser in production mode, with Re
 
 | Bundle                              | Minified |    gzip |  brotli |
 | ----------------------------------- | -------: | ------: | ------: |
-| `@reactre/compat`                   |  92.8 KB | 34.0 KB | 30.2 KB |
-| `@reactre/compat/core`              |  87.5 KB | 32.0 KB | 28.4 KB |
+| `@reactre/compat`                   |  96.6 KB | 35.4 KB | 31.4 KB |
+| `@reactre/compat/core`              |  90.3 KB | 33.1 KB | 29.4 KB |
 | `react` + `react-dom/client` 19.3.1 | 214.1 KB | 66.7 KB | 57.4 KB |
 
-The feature modules cost an app about 10.2 KB minified, 3.9 KB gzipped: class support 1.6 KB gzipped, component stacks 1.1 KB, React's render retry 0.8 KB and React's handling of repeated keys 0.5 KB, each left out with its key off. `@reactre/compat/core` holds the code of the keys and the retry, which a bundle that does not load their modules leaves out. Most of the runtime ships whatever an app imports: a counter with one `useState` and `createRoot` comes to 23.1 KB gzipped (19.2 KB on core alone), against 64.4 KB on React. Measured with Bun's bundler, gzip at level 9 and brotli at quality 11; Rolldown, the bundler in Vite, gives sizes within 1 KB of these.
+The feature modules cost an app about 10.2 KB minified, 3.9 KB gzipped: class support 1.6 KB gzipped, component stacks 1.1 KB, React's render retry 0.8 KB and React's handling of repeated keys 0.5 KB, each left out with its key off. `@reactre/compat/core` holds the code of the keys and the retry, which a bundle that does not load their modules leaves out. Most of the runtime ships whatever an app imports: a counter with one `useState` and `createRoot` comes to 23.2 KB gzipped (19.4 KB on core alone), against 64.4 KB on React. Measured with Bun's bundler, gzip at level 9 and brotli at quality 11; Rolldown, the bundler in Vite, gives sizes within 1 KB of these.
 
 ## License
 
