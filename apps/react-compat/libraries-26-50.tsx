@@ -1,5 +1,5 @@
 // Scenarios with the React libraries ranked 26th to 50th by npm weekly downloads, chosen as the
-// first 25 in ./libraries.tsx were: one package per project, libraries an app imports itself;
+// first 25 in ./libraries-1-25.tsx were: one package per project, libraries an app imports itself;
 // not dependencies of other libraries, frameworks, renderers (react-reconciler, react-native,
 // @react-three/fiber), build or test tools.
 //
@@ -9,7 +9,7 @@
 //   @vercel/analytics, react-draggable, react-syntax-highlighter, @headlessui/react, react-pdf,
 //   jotai, react-colorful, react-window, @apollo/client, @lexical/react and react-number-format.
 //
-// They run like the scenarios in ./libraries.tsx: the same code on React 19 and on each runtime,
+// They run like the scenarios in ./libraries-1-25.tsx: the same code on React 19 and on each runtime,
 // with every log and step compared.
 
 import { ApolloClient, ApolloLink, gql, InMemoryCache } from "@apollo/client";
@@ -93,31 +93,7 @@ import styled, { createGlobalStyle, css, keyframes, ThemeProvider } from "styled
 import useSWR, { SWRConfig, useSWRConfig } from "swr";
 
 import { type T, type } from "./cases.tsx";
-import { frames, key, mount, wait } from "./libraries.tsx";
-
-/** A short, stable digest of a string, for logging large values such as canvas data URLs. */
-function digest(s: string): string {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) h = (Math.imul(h, 31) + s.charCodeAt(i)) | 0;
-  return `${s.length}:${(h >>> 0).toString(16)}`;
-}
-
-/** A keydown of `k` that also carries its legacy keyCode, for libraries that read it. */
-function keyWithCode(el: Element, k: string, keyCode: number): void {
-  const e = new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true });
-  Object.defineProperty(e, "keyCode", { value: keyCode });
-  el.dispatchEvent(e);
-}
-
-/** A pointer-capable mouse event of `type` at (x, y), as a real mouse sends it. */
-const mouse = (el: EventTarget, type: string, x = 0, y = 0) =>
-  el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0 }));
-
-/** Resolves once `done()` holds, checking every animation frame, or after `ms` milliseconds. */
-async function until(done: () => boolean, ms: number): Promise<void> {
-  const end = performance.now() + ms;
-  while (!done() && performance.now() < end) await frames(1);
-}
+import { digest, frames, key, keyWithCode, mount, mouse, until, wait } from "./helpers.tsx";
 
 /** A PDF of one page per text, each line drawn in Helvetica, with a valid cross-reference table. */
 function tinyPdf(pages: string[]): Uint8Array {
@@ -149,8 +125,8 @@ function tinyPdf(pages: string[]): Uint8Array {
 
 // #region Scenarios
 
-/** The scenarios by name, run after ./libraries.tsx's. */
-export const moreLibraryCases: Record<string, (t: T) => Promise<void>> = {
+/** The scenarios by name, run after ./libraries-1-25.tsx's. */
+export const libraries26To50: Record<string, (t: T) => Promise<void>> = {
   // Data fetching through useSyncExternalStore: loading, errors, a shared cache between two hooks
   // with the same key, revalidation, and mutation from inside and outside the component.
   async "swr: fetch, shared cache, errors, mutate"(t) {

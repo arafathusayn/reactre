@@ -1,4 +1,4 @@
-// Runs every scenario in ./cases.tsx, ./libraries.tsx and ./more-libraries.tsx in order and leaves a
+// Runs every scenario in ./cases.tsx and the libraries-*.tsx files in order and leaves a
 // transcript per scenario in window.__results for run.ts to compare.
 //
 // The same page is built once per runtime, so this harness must not depend on any runtime's
@@ -6,8 +6,8 @@
 // window.__done tells run.ts the transcripts are ready.
 
 import { cases, type T } from "./cases.tsx";
-import { libraryCases } from "./libraries.tsx";
-import { moreLibraryCases } from "./more-libraries.tsx";
+import { libraries1To25 } from "./libraries-1-25.tsx";
+import { libraries26To50 } from "./libraries-26-50.tsx";
 
 declare global {
   interface Window {
@@ -30,7 +30,7 @@ const settle = async (): Promise<void> => {
 /** Runs each scenario on a fresh body and collects its transcript. */
 async function main(): Promise<void> {
   const results: Record<string, string[]> = {};
-  for (const [name, run] of Object.entries({ ...cases, ...libraryCases, ...moreLibraryCases })) {
+  for (const [name, run] of Object.entries({ ...cases, ...libraries1To25, ...libraries26To50 })) {
     // run.ts --only: just the scenarios whose names contain one of the comma-separated texts.
     if (window.__only !== undefined && !window.__only.split(",").some((s) => name.includes(s))) continue;
     const out: string[] = (results[name] = []);

@@ -1,4 +1,4 @@
-// React compatibility check: runs the scenarios in cases.tsx and libraries.tsx in headless Chrome
+// React compatibility check: runs the scenarios in cases.tsx and libraries-*.tsx in headless Chrome
 // against React 19 and against each runtime that stands in for it, and compares every transcript
 // (logged values and the HTML after each step) with React's, line for line.
 //
