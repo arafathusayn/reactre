@@ -6089,6 +6089,22 @@ function renderAgain(f: Fiber, e: Any): Any {
   const errors = isThenable(e) ? null : failed(f, e);
   if (errors === null) return e;
   draftAt(f, e);
+  // With ./features/undo.ts, an update's retry is React's: the pass goes on, is undone when it
+  // ends, and its fibers render again, errors counting (see undoNow).
+  if (undoWatch !== null && holding === MUT && errors !== DRAFT) {
+    if (undoErrors === null) {
+      undoErrors = errors;
+      undoAt = f;
+      undoing = true;
+      MUT.q.push(null, noop);
+    } else undoErrors.push(...errors);
+    // With no error boundary above, React's pass ends here: the rest of the batch is left
+    // unrendered (the undo puts its update flags back for the retry).
+    let b = f.r;
+    while (b !== null && !(b.n === CLASS && classes !== null && classes.boundary(b))) b = b.r;
+    if (b === null) for (const x of undoQueued) x.f &= ~DIRTY;
+    return null;
+  }
   const x = retryRender(f, errors, () => run(f, f.p, false));
   if (x !== null && !isThenable(x)) captureStacks(x, f);
   return x;
@@ -7628,6 +7644,10 @@ let undoWatch: Watch | null = null,
   undoQueued: Fiber[] = [],
   // undoNow, once the module installed it: the core reaches the undo only through this.
   undoRender: (() => void) | null = null,
+  // The render errors of the pass under way, which renders again once undone (see renderAgain),
+  // and the first fiber that threw one.
+  undoErrors: Any[] | null = null,
+  undoAt: Fiber | null = null,
   // Whether the next render, and the one under way, is the one React tries once more in a task
   // after an undo, before it waits for the promise.
   undoRetryNext = false,
@@ -7716,6 +7736,22 @@ function undoNow(): void {
   for (let i = 0; i < hosts.length; i += 3) setProps(hosts[i], hosts[i].d, hosts[i + 1], hosts[i + 2], false);
   const q = undoQueued;
   for (const f of q) f.f &= ~(QUEUED | LATER);
+  const errors = undoErrors;
+  if (errors !== null) {
+    // React's retry: the fibers render again from where they were, errors counting this time;
+    // then what they hold runs, as after any render.
+    undoErrors = null;
+    holding = MUT;
+    try {
+      retryRender(undoAt!, errors, () => {
+        for (const f of q) if ((f.f & (DIRTY | DEAD)) === DIRTY) rerender(f);
+      });
+    } finally {
+      holding = null;
+      undoAt = null;
+    }
+    return mutations();
+  }
   // React renders once more in a task, then waits for the promise (the root's retry).
   if (!undoRetrying)
     afterPaint(() => {

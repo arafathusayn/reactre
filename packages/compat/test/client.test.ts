@@ -3266,6 +3266,99 @@ describe("the render loop", () => {
       return [(root, flush) => flush(() => root.render(h(L)(Once))), (_, flush) => flush(() => set(1))];
     });
   });
+
+  test("an update's retry renders again from the component whose update it is", async () => {
+    const h = (L: Lib) => L.createElement;
+    await stepsSame((L, log) => {
+      let set: Any = null,
+        calls = 0;
+      const A = withEffects(L, log, "A");
+      const B = named(log, "B", ({ n }: Any) => {
+        if (n && calls++ === 0) throw new Error("once");
+        return "b" + n;
+      });
+      const App = named(log, "App", () => {
+        const [n, s] = L.useState(0);
+        set = s;
+        return [h(L)(A, { key: 1, n }), h(L)(B, { key: 2, n })];
+      });
+      return [(root, flush) => flush(() => root.render(h(L)(App))), (_, flush) => flush(() => set(1))];
+    });
+    // Two updates in one batch: React's retry renders the root again, so the one that rendered
+    // without an error renders again too.
+    await stepsSame((L, log) => {
+      let setA: Any = null,
+        setB: Any = null,
+        calls = 0;
+      const A = named(log, "A", () => {
+        const [n, s] = L.useState(0);
+        setA = s;
+        return "a" + n;
+      });
+      const B = named(log, "B", () => {
+        const [n, s] = L.useState(0);
+        setB = s;
+        if (n && calls++ === 0) throw new Error("once");
+        return "b" + n;
+      });
+      return [
+        (root, flush) => flush(() => root.render([h(L)(A, { key: 1 }), h(L)(B, { key: 2 })])),
+        (_, flush) =>
+          flush(() => {
+            setA(1);
+            setB(1);
+          }),
+      ];
+    });
+    // Two components that throw once in the same pass, each with an update of its own: both
+    // errors are recoverable.
+    await stepsSame((L, log) => {
+      const sets: Any[] = [];
+      const thrown = new Set<string>();
+      const Flaky = named(log, "Flaky", ({ id }: Any) => {
+        const [n, s] = L.useState(0);
+        sets.push(s);
+        if (n && !thrown.has(id)) {
+          thrown.add(id);
+          throw new Error("once " + id);
+        }
+        return id + n;
+      });
+      return [
+        (root, flush) => flush(() => root.render([h(L)(Flaky, { key: 1, id: "x" }), h(L)(Flaky, { key: 2, id: "y" })])),
+        (_, flush) =>
+          flush(() => {
+            for (const s of sets.slice(0, 2)) s(1);
+          }),
+      ];
+    });
+    // The same, each in an error boundary: React's pass goes on past the first, so both throw
+    // in it, and the retry renders both.
+    await stepsSame((L, log) => {
+      const sets: Any[] = [];
+      const thrown = new Set<string>();
+      const Flaky = named(log, "Flaky", ({ id }: Any) => {
+        const [n, s] = L.useState(0);
+        sets.push(s);
+        if (n && !thrown.has(id)) {
+          thrown.add(id);
+          throw new Error("once " + id);
+        }
+        return id + n;
+      });
+      const B = boundary(L, log);
+      return [
+        (root, flush) =>
+          flush(() =>
+            root.render([h(L)(B, { key: 1 }, h(L)(Flaky, { id: "x" })), h(L)(B, { key: 2 }, h(L)(Flaky, { id: "y" }))]),
+          ),
+        (_, flush) =>
+          flush(() => {
+            for (const s of sets.slice(0, 2)) s(1);
+          }),
+      ];
+    });
+  });
 });
 
 // #endregion
@@ -3306,6 +3399,43 @@ describe("@reactre/compat/core", () => {
     };
     Core.flushSync(() => root.render(Core.createElement(Once)));
     expect(seen).toEqual(["render", "uncaught once"]);
+  });
+
+  test("with the retry module and not the undo, the component that threw renders again on the spot", async () => {
+    // An instance of its own, with only the retry installed.
+    const only = "core-retry";
+    const Core: typeof import("../src/core.ts") = await import(`../src/core.ts?${only}`);
+    Core.__installRetry();
+    const h = Core.createElement,
+      log: string[] = [];
+    let set: Any = null,
+      calls = 0;
+    const Once = ({ n }: Any) => {
+      log.push("render Once " + n);
+      if (n && calls++ === 0) throw new Error("once");
+      return "o";
+    };
+    // A ref that changes with the update: the retry renders the host without it, so the one the
+    // first pass would detach is detached once.
+    const Parent = () => {
+      const [n, s] = Core.useState(0);
+      set = s;
+      return [h("i", { key: 1, ref: (x: Any) => void log.push("ref " + n + " " + !!x) }), h(Once, { key: 2, n })];
+    };
+    const root = Core.createRoot(box() as unknown as Element, {
+      onRecoverableError: (e: Any) => void log.push("recoverable " + e.cause.message),
+    });
+    Core.flushSync(() => root.render(h(Parent)));
+    Core.flushSync(() => set(1));
+    expect(log).toEqual([
+      "render Once 0",
+      "ref 0 true",
+      "render Once 1",
+      "render Once 1",
+      "ref 0 false",
+      "ref 1 true",
+      "recoverable once",
+    ]);
   });
 
   test("reconciles repeated keys by its own rules: no row is left outside the list", async () => {
