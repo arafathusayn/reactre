@@ -60,16 +60,20 @@ interface Source {
   subs: Observer[];
 }
 
-/** What runs again when a source it read changes. */
-interface Observer {
-  /** Note that this observer read `s`. */
+/** What reads are recorded for while it runs. */
+interface Reader {
+  /** Note that this reader read `s`. */
   read(s: Source): void;
+}
+
+/** What runs again when a source it read changes. */
+interface Observer extends Reader {
   /** A source it read has changed. */
   stale(): void;
 }
 
-/** The observer whose reads are being recorded; null outside any observer and inside `untrack`. */
-let current: Observer | null = null;
+/** The reader whose reads are being recorded; null outside any observer and inside `untrack`. */
+let current: Reader | null = null;
 /** Depth of nested `batch` calls; observers are deferred while it is above 0. */
 let batching = 0;
 /** Observers notified during a batch, in first-notified order, each once. */
@@ -181,7 +185,6 @@ export function signal<T>(v: T): [() => T, Setter<T>] {
 class Effect implements Observer {
   private readonly fn: () => void;
   private sources: Source[] = [];
-  private dead = false;
   constructor(fn: () => void) {
     this.fn = fn;
   }
@@ -192,7 +195,7 @@ class Effect implements Observer {
     s.subs.push(this);
   }
   stale(): void {
-    if (!this.dead) this.run();
+    this.run();
   }
   /** Run `fn` as the current observer, after dropping the sources of the last run. */
   run(): void {
@@ -216,11 +219,6 @@ class Effect implements Observer {
       if (j >= 0) subs.splice(j, 1);
     }
     this.sources = [];
-  }
-  /** Stop for good. A notification already in flight (a pending batch entry) is ignored. */
-  dispose(): void {
-    this.dead = true;
-    this.drop();
   }
 }
 
@@ -303,8 +301,8 @@ class Selector<K> {
   readonly lists: ForList<unknown, unknown>[] = [];
   // Anything else that asked, by key.
   readonly byKey = new Map<K, Observer[]>();
-  /** Record that observer `o` asked about key `k`. */
-  watch(o: Observer, k: K): void {
+  /** Record that reader `o` asked about key `k`. */
+  watch(o: Reader, k: K): void {
     if (o === rowContext) {
       // A row asks: it keeps the key itself; the list is told of changes.
       // A row keeps one (selector, key) pair: of several selectors it asks,
@@ -315,9 +313,11 @@ class Selector<K> {
       if (!this.lists.includes(rowContext.list)) this.lists.push(rowContext.list);
       return;
     }
+    // Any reader but the row context is an observer.
+    const obs = o as Observer;
     const list = this.byKey.get(k);
-    if (list === undefined) this.byKey.set(k, [o]);
-    else if (!list.includes(o)) list.push(o);
+    if (list === undefined) this.byKey.set(k, [obs]);
+    else if (!list.includes(obs)) list.push(obs);
   }
   /** The key moved from `prev` to `next`: re-run what asked about either. */
   changed(prev: K, next: K): void {
@@ -411,9 +411,10 @@ class RowObserver implements Observer {
  * One instance serves every row of every list: `runDyn` points it at the
  * row being run, so running a row allocates nothing.
  */
-class RowContext implements Observer {
+class RowContext implements Reader {
   list!: ForList<unknown, unknown>;
   entry!: Row<unknown>;
+  // Only a reader, never notified itself: signals subscribe the row's own RowObserver.
   read(s: Source): void {
     // Created on the first signal read: a row that reads only a selector, or
     // nothing reactive, never pays for an observer.
@@ -421,8 +422,6 @@ class RowContext implements Observer {
     if (o === null) o = this.entry.obs = new RowObserver(this.list, this.entry);
     o.read(s);
   }
-  // Never notified itself: signals subscribe the row's own RowObserver.
-  stale(): void {}
 }
 const rowContext = new RowContext();
 

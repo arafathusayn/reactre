@@ -437,6 +437,21 @@ describe("html templates", () => {
     expect(tr.attributes.some((x) => x.name.startsWith("bk"))).toBe(false);
   });
 
+  // A strict Content Security Policy blocks `new Function`: holes are then found by walking.
+  test("holes are found by walking their paths where generated code is blocked", () => {
+    const real = globalThis.Function;
+    globalThis.Function = function () {
+      throw new EvalError("blocked by CSP");
+    } as unknown as FunctionConstructor;
+    try {
+      const T = html`<p><b>${0}</b><i><u>${1}</u></i></p>`;
+      const b = T.mount(["one", "two"]);
+      expect(fake(b.root).textContent).toBe("onetwo");
+    } finally {
+      globalThis.Function = real;
+    }
+  });
+
   test("set writes only on change and handles null, false and true", () => {
     const T = html`<input class=${0} disabled=${1} placeholder=${2} />`;
     const b = T.mount(["a", true, null]);
@@ -733,5 +748,23 @@ describe("morph", () => {
     again["value"] = "from store";
     morph(asDom(root), kids(again));
     expect(input["value"]).toBe("from store");
+  });
+
+  test("an option's selection follows the new tree", () => {
+    const root = el("select");
+    const a = el("option"),
+      b = el("option");
+    a["selected"] = true;
+    b["selected"] = false;
+    root.appendChild(a);
+    root.appendChild(b);
+    const fa = el("option"),
+      fb = el("option");
+    fa["selected"] = false;
+    fb["selected"] = true;
+    morph(asDom(root), kids(fa, fb));
+    expect([a["selected"], b["selected"]]).toEqual([false, true]);
+    morph(asDom(root), kids(fa, fb));
+    expect([a["selected"], b["selected"]]).toEqual([false, true]);
   });
 });

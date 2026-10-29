@@ -2,12 +2,13 @@
 // here are compiled as the plugin compiles them and run against the runtime.
 // They cover holes that follow signals, components and slots, batch, memo and
 // untrack, and <For>: node reuse, selector updates, delegated handlers and
-// row subscriptions. Compile errors are checked last.
+// row subscriptions; selectors read outside lists, __insert's flattening and an
+// uncompiled <For>. Compile errors are checked last.
 
 import { beforeEach, describe, expect, test } from "bun:test";
 
 import { compileSource, ReactreCompileError } from "@reactre/compiler";
-import { FakeElement, FakeEvent, installFakeDocument } from "@reactre/testdom";
+import { FakeElement, FakeEvent, FakeText, installFakeDocument } from "@reactre/testdom";
 
 import * as runtime from "../src/index.ts";
 
@@ -251,6 +252,41 @@ describe("reactre: <For>", () => {
     // Only the remaining row re-ran.
     expect(api.calls() - before).toBe(1);
     expect(trs()[0]!.lastChild!.textContent).toBe("r1?");
+  });
+});
+
+describe("reactre: runtime helpers", () => {
+  test("a selector read by an effect re-runs it only when its key gains or loses the selection", () => {
+    const [sel, setSel] = runtime.signal<string>("x");
+    const is = runtime.selector(sel);
+    const runs: string[] = [];
+    runtime.effect(() => void runs.push("a " + is("a")));
+    runtime.effect(() => void runs.push("b " + is("b")));
+    runtime.effect(() => void runs.push("b again " + is("b")));
+    setSel("a");
+    setSel("c");
+    expect(runs).toEqual(["a false", "b false", "b again false", "a true", "a false"]);
+    setSel("b");
+    expect(runs.slice(5)).toEqual(["b true", "b again true"]);
+  });
+
+  test("__insert places text for values and nodes as they are, flattening arrays and skipping holes", () => {
+    const parent = new FakeElement("P");
+    const anchor = parent.appendChild(new FakeText(""));
+    const node = new FakeElement("B");
+    const at = (v: unknown, prev: unknown[] | null) =>
+      runtime.__insert(anchor as unknown as Node, v, prev as Node[] | null) as unknown[] | null;
+    const out = at(["a", [1, null, [false, node]], true, undefined], null);
+    expect(html(parent)).toBe("a1<b></b>");
+    expect(out).toHaveLength(3);
+    expect(at(false, out)).toBeNull();
+    expect(html(parent)).toBe("");
+  });
+
+  test("<For> run without the compiler says it must be compiled", () => {
+    expect(() => runtime.For({ each: [], key: (r) => r, children: () => null })).toThrow(
+      "reactre: <For> must be compiled by @reactre/compiler",
+    );
   });
 });
 

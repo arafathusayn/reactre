@@ -1206,17 +1206,13 @@ function intRange(keys: readonly Key[], from: number, to: number, len: number): 
   }
   const span = hi - lo + 1;
   if (span > 8 * len + 64 || span > TABLE_MAX) return -1;
-  if (lutPos.length < span) {
-    // Doubling keeps regrowth rare; fresh arrays are zeroed, so stamps restart.
-    const size = Math.min(TABLE_MAX, Math.max(span, 2 * lutPos.length));
+  // Fresh arrays are zeroed, so stamps restart: made when the table is too
+  // small (doubling keeps regrowth rare), and at the same size before the
+  // generation counter wraps, so no stale stamp can equal a reused generation.
+  if (lutPos.length < span || lutGen === 0xffffffff) {
+    const size = Math.min(TABLE_MAX, Math.max(span, lutPos.length < span ? 2 * lutPos.length : lutPos.length));
     lutPos = new Int32Array(size);
     lutStamp = new Uint32Array(size);
-    lutGen = 0;
-  }
-  // Before the generation counter wraps, clear the stamps once so no stale
-  // stamp can equal a reused generation.
-  if (lutGen === 0xffffffff) {
-    lutStamp.fill(0);
     lutGen = 0;
   }
   return lo;
