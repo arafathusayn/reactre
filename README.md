@@ -90,7 +90,7 @@ The template is parsed once. `mount` clones it with values for its holes, in ord
 
 ## Already on React?
 
-Keep your app as it is. `@reactre/compat` is React 19's API on reactre's templates: hooks, context, Suspense, portals, transitions, controlled fields and hydration, and libraries such as React Router, TanStack Query, Radix and Recharts run on it.
+Keep your app as it is. `@reactre/compat` is React 19's API on reactre's templates: hooks, context, Suspense, portals, transitions, controlled fields and hydration, and libraries such as React Router, TanStack Query, Radix and Recharts run on it. It is about 19 KB gzipped, against 67 KB for React and React DOM; class component support adds 1 KB more ([sizes](packages/compat#size)).
 
 ```sh
 bun add @reactre/compat
