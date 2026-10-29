@@ -648,6 +648,8 @@ export const cases: Record<string, Case> = {
     const reveal = () => new Promise((r) => setTimeout(r, 400));
     resolve("data");
     await p;
+    await new Promise((r) => setTimeout(r, 100));
+    await t.step("resolved, still held back");
     await reveal();
     await t.step("data");
     resolveLazy({ default: () => <u>lazy</u> });

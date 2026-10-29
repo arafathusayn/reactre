@@ -20,6 +20,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Fixed: the class build (`@reactre/compat/classes`) is declared as having side effects, so bundlers that trust `sideEffects`, such as Vite's, keep the code that installs class support.
 - Fixed: when an update arrives while a commit renders, its refs and layout effects still run before its passive effects, as in React (cmdk's list height).
 - Fixed: a `<noscript>` renders its children only as text, as React does (input-otp's fallback style).
+- Fixed: content a settled promise reveals inside `<Suspense>` waits until 300 ms after the last fallback appeared, as React throttles it (jotai's async atoms).
 - Added: an ES module build of `@reactre/compat/compiler` in `dist/`, so Node can load `compileJs`.
 - Docs: setting up Vite, with @reactre/plugin or an alias.
 

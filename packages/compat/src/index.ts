@@ -3029,6 +3029,7 @@ function runSuspense(f: Fiber): void {
   }
   let fb: Fiber | null = f.q;
   if (fb === null) {
+    fallbackShownAt = performance.now();
     fb = f.q = frag(f, 1);
     try {
       reconcile(fb, f.p.fallback);
@@ -3045,9 +3046,24 @@ function runSuspense(f: Fiber): void {
   thrown.then(again, again);
 }
 
-/** A callback that re-renders `f`: what a suspended boundary attaches to the promise. */
+/** When a boundary last switched to its fallback (performance.now()), for retry's throttle. */
+let fallbackShownAt = -Infinity;
+/** React's FALLBACK_THROTTLE_MS. */
+const FALLBACK_THROTTLE = 300;
+
+/**
+ * A callback that re-renders `f`: what a suspended boundary attaches to the promise.
+ *
+ * As React does, content a settled promise reveals waits until 300 ms after the last fallback
+ * appeared, so content arriving in quick succession shows at once instead of in pieces. React
+ * skips the wait when it is 10 ms or less.
+ */
 function retry(f: Fiber): () => void {
-  return () => schedule(f);
+  return () => {
+    const ms = fallbackShownAt + FALLBACK_THROTTLE - performance.now();
+    if (ms > 10) setTimeout(() => schedule(f), ms);
+    else schedule(f);
+  };
 }
 
 /**
