@@ -22,8 +22,10 @@
 //      one listener on the element; mouseenter and friends are derived from over and out events.
 //   4. Effects: insertion effects run when their component completes, layout effects and refs
 //      before the render returns, passive effects after paint (or before the next render,
-//      whichever comes first). Updates batch automatically and flush in a microtask; updates
-//      from an event handler or inside flushSync flush before the handler returns.
+//      whichever comes first). Updates batch automatically. Those from an event handler or
+//      inside flushSync flush before the handler returns; those from a discrete event's native
+//      listener (a click, a key) in a microtask; any other (timers, promises, continuous events
+//      such as mouseover) in a task of their own, as React's lanes order them.
 //   5. Blocks: @reactre/compat/compiler turns JSX trees of host elements into templates. A block
 //      clones a prebuilt prototype and on update writes only the holes whose values changed. A
 //      component whose whole render is one block hosts it itself, so a list row costs one fiber.
@@ -3233,11 +3235,14 @@ let spareQueue: Fiber[] = []; // the other of the two swapped queue arrays (see 
 let flushing = false; // inside flushWork: updates made now join this flush
 let batch = 0; // depth of event handlers, flushSync, batchedUpdates and act: no flush until 0
 let micro = false; // a microtask flush is queued
+let task = false; // a flush in a task of its own is queued
 let passiveTimer = false; // a passive-effect flush is queued after paint
 
 /**
- * Mark `f` for re-render and queue it once. Outside a batch or a flush, a microtask flush is
- * queued, so several updates in one task render together.
+ * Mark `f` for re-render and queue it once. Outside a batch or a flush, a flush is queued as
+ * React picks its lane: in a microtask during a discrete event (a listener outside React's own,
+ * for a click or a key), as its sync lane; otherwise in a task of its own, as its default and
+ * continuous lanes, so updates from timers that fire one after another render together.
  */
 function schedule(f: Fiber): void {
   if (f.f & DEAD) return;
@@ -3246,8 +3251,30 @@ function schedule(f: Fiber): void {
     f.f |= QUEUED;
     queue.push(f);
   }
-  if (!batch && !flushing) flushSoon(false);
+  if (!batch && !flushing && !micro) {
+    const e = (globalThis as Any).event;
+    if (e !== undefined && DISCRETE.has(e.type)) flushSoon(false);
+    else if (!task) {
+      task = true;
+      afterPaint(runTask);
+    }
+  }
 }
+function runTask(): void {
+  task = false;
+  if (!micro) runMicro();
+}
+// Events whose updates React renders on its sync lane (getEventPriority's discrete events).
+const DISCRETE = new Set(
+  (
+    "beforetoggle cancel click close contextmenu copy cut auxclick dblclick dragend dragstart drop focusin " +
+    "focusout input invalid keydown keypress keyup mousedown mouseup paste pause play pointercancel " +
+    "pointerdown pointerup ratechange reset seeked submit toggle touchcancel touchend touchstart " +
+    "volumechange change selectionchange textInput compositionstart compositionend compositionupdate " +
+    "beforeblur afterblur beforeinput blur fullscreenchange fullscreenerror focus hashchange popstate " +
+    "select selectstart"
+  ).split(" "),
+);
 
 // Flush in a microtask. `sync`: updates from an event, whose passive
 // effects also run before the microtask ends (React's sync lane).

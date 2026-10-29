@@ -157,24 +157,60 @@ describe("rendering", () => {
     expect(html()).toBe("<div>2<span>child</span></div>");
   });
 
-  test("updates batch and render in a microtask; flushSync renders at once", async () => {
-    let renders = 0;
-    let set!: (f: (n: number) => number) => void;
+  // A counter whose setter the test calls from outside any React event.
+  function counter() {
+    const c = { renders: 0, set: (_f: (n: number) => number) => {} };
     function App() {
       const [n, setN] = useState(0);
-      set = setN;
-      renders++;
+      c.set = setN;
+      c.renders++;
       return h("b", null, n);
     }
     render(h(App));
-    set((n) => n + 1);
-    set((n) => n + 1);
-    expect(html()).toBe("<b>0</b>");
+    return c;
+  }
+  // A task after the current one, past the one the update scheduler posts.
+  const nextTask = () => new Promise((r) => setTimeout(r, 10));
+  const g = globalThis as unknown as { event: { type: string } | undefined };
+  // Runs `fn` as a listener of a native `type` event runs, with window.event set.
+  const during = (type: string, fn: () => void) => {
+    g.event = { type };
+    try {
+      fn();
+    } finally {
+      g.event = undefined;
+    }
+  };
+
+  test("updates outside events render together in a task of their own, as React's default lane", async () => {
+    const c = counter();
+    c.set((n) => n + 1);
     await Promise.resolve();
+    // A microtask later is still the same batch.
+    c.set((n) => n + 1);
+    await Promise.resolve();
+    expect(html()).toBe("<b>0</b>");
+    await nextTask();
     expect(html()).toBe("<b>2</b>");
-    expect(renders).toBe(2);
-    flushSync(() => set((n) => n + 1));
+    expect(c.renders).toBe(2);
+    flushSync(() => c.set((n) => n + 1));
     expect(html()).toBe("<b>3</b>");
+  });
+
+  test("an update in a discrete event's listener renders in a microtask, as React's sync lane", async () => {
+    const c = counter();
+    during("keydown", () => c.set((n) => n + 1));
+    await Promise.resolve();
+    expect(html()).toBe("<b>1</b>");
+  });
+
+  test("an update in a continuous event's listener waits for a task, as React's continuous lane", async () => {
+    const c = counter();
+    during("mouseover", () => c.set((n) => n + 1));
+    await Promise.resolve();
+    expect(html()).toBe("<b>0</b>");
+    await nextTask();
+    expect(html()).toBe("<b>1</b>");
   });
 
   test("context reaches consumers through a memo boundary", () => {
