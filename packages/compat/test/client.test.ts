@@ -2939,7 +2939,8 @@ describe("the render loop", () => {
       return [(root, flush) => flush(() => root.render(h(L)(Parent))), (_, flush) => flush(() => set(1))];
     });
     // The parent's update: a class before the child that throws once runs componentDidUpdate
-    // once, after the retry.
+    // once, after the retry, and a ref that changed is detached once and attached once.
+    const refs: string[][] = [];
     await stepsSame((L, log) => {
       let set: Any = null,
         calls = 0;
@@ -2956,13 +2957,22 @@ describe("the render loop", () => {
         if (props.n && calls++ === 0) throw new Error("once");
         return "o";
       });
+      // A ref that changes with the update: compat detaches the old one as the element renders,
+      // React as it commits, so its calls are compared apart, in order (see below).
+      const refLog = (refs[L === React ? 0 : 1] = [] as string[]);
       const Parent = named(log, "Parent", () => {
         const [n, s] = L.useState(0);
         set = s;
-        return [h(L)(K, { key: 1, n }), h(L)(Once, { key: 3, n })];
+        return [
+          h(L)(K, { key: 1, n }),
+          h(L)("i", { key: 2, ref: (x: Any) => void refLog.push("ref " + n + " " + !!x) }),
+          h(L)(Once, { key: 3, n }),
+        ];
       });
       return [(root, flush) => flush(() => root.render(h(L)(Parent))), (_, flush) => flush(() => set(1))];
     });
+    expect(refs[1]).toEqual(refs[0]!);
+    expect(refs[0]).toEqual(["ref 0 true", "ref 0 false", "ref 1 true"]);
   });
 });
 

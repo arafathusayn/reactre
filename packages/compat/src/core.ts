@@ -5778,6 +5778,17 @@ function failed(f: Fiber, e: Any): Any[] | null {
 function retryRender(f: Fiber, errors: Any[], fn: () => void): Any {
   const l = layoutQ.length,
     p = passiveQ.length;
+  // A host or Fragment with a callback queued (its ref, which the commit attaches) never held its
+  // ref: the retry renders it from props without one, so it detaches nothing it never attached.
+  const unheld: Any[] = [];
+  for (let i = 0; i < l; i++) {
+    const x = layoutQ[i]!.f;
+    if ((x.n === HOST || x.t === FRAGMENT) && x.p.ref != null) {
+      const without = { ...x.p, ref: null };
+      unheld.push(x, x.p, without);
+      x.p = without;
+    }
+  }
   let thrown: Any = null;
   retrying = true;
   refailed = false;
@@ -5788,6 +5799,8 @@ function retryRender(f: Fiber, errors: Any[], fn: () => void): Any {
     refailed = true;
   } finally {
     retrying = false;
+    // One the retry did not render again keeps its props.
+    for (let i = 0; i < unheld.length; i += 3) if (unheld[i].p === unheld[i + 2]) unheld[i].p = unheld[i + 1];
   }
   if (!refailed) recovered(f, errors, l, p);
   return thrown;
