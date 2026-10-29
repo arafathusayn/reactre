@@ -24,7 +24,7 @@ To beat 8 KB, those must become switches too: `"fastLists"` and `"blocks"`. Then
 
 Cuts that cost no speed:
 
-- production error codes instead of development messages (~0.6 KB, estimated);
+- production error codes instead of development messages (~0.6 KB estimated; 0.8 KB measured, done);
 - a slimmer `nameOfType` (~0.4 KB).
 
 ## Configuration
@@ -135,6 +135,6 @@ At least one of `createRoot` and `hydrateRoot` must be on.
 11. Transitions.
 12. Forms and actions.
 13. Hints.
-14. Production error codes.
+14. Production error codes. Done: one helper builds React's formatProdErrorMessage text, and the client throws and reports React's production codes (each checked against React's production client in `client.test.ts`), the full messages where React keeps them (`Children`). The server keeps React's full messages, as React's Node, Deno, Bun and edge builds do. Full and core 0.8 KB smaller gzipped, JFB 0.4 KB (21.7 to 21.3 KB).
 
 Fragment refs land as their own API module, checked only when a fragment mounts.

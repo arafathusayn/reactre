@@ -61,7 +61,7 @@ The plugin has an entry for each: `@reactre/plugin/rollup`, `/rolldown`, `/esbui
 
 `@reactre/compat` is all of React's client API. The plugin builds narrower entries from the same modules: with `compat: { classes: false }`, or any key in `compat.exclude`, `react` resolves to a module built on `@reactre/compat/core` that loads each feature module still on, so every set of options behaves as React does for everything it keeps. Without class support, a class that renders throws an error naming the fix. Without the `componentStack` key, errors are reported with an empty `componentStack`; without `repeatedKeys`, a list whose keys repeat, which React warns about, is reconciled by compat's own rules. See [the plugin's docs](https://www.npmjs.com/package/@reactre/plugin). `@reactre/compat/core` alone, with no feature module, is for builds that choose all three off, as the js-framework-benchmark app does. The compiler is optional; without it, everything still runs.
 
-Every change is checked against React 19 itself, scenario by scenario: the same app runs on both, and what each renders and logs must match line for line.
+Every change is checked against React 19 itself, scenario by scenario: the same app runs on both, and what each renders and logs must match line for line. Errors are React's production errors too: the client throws and reports the minified codes React's production client does (`Minified React error #31; visit https://react.dev/errors/31?args[]=…`, the full message one click away), and the full messages where React keeps them, as in `Children`.
 
 ## Where the client differs
 
@@ -72,7 +72,7 @@ Every change is checked against React 19 itself, scenario by scenario: the same 
   - A boundary whose content suspends while hydrating drops the server's nodes and shows its fallback until the content can render; React keeps the server's HTML and hydrates it once the content is ready. A boundary still streaming in (`<!--$?-->`) is rendered on the client with React's error even while the document loads, where React waits for it.
   - Claimed elements get the client's attributes and styles, written as on a mount. React's production client checks no attribute and keeps the server's until the prop next changes.
   - An Activity boundary is not one hydration recovers at: a mismatch inside it renders the nearest Suspense boundary or the root on the client. An error other than a mismatch thrown while hydrating goes to the nearest error boundary or the root at once; React first renders the nearest Suspense boundary or root on the client again, reporting the first error as recoverable.
-  - Recovering a whole document, compat replaces `<html>` and everything in it; React keeps the `<html>`, `<head>` and `<body>` elements. Errors carry React's full messages rather than minified codes.
+  - Recovering a whole document, compat replaces `<html>` and everything in it; React keeps the `<html>`, `<head>` and `<body>` elements.
 
 ## Server rendering
 
@@ -83,7 +83,7 @@ Server Components stay on React: the plugin leaves the RSC environment, and any 
 - `prerender`, `prerenderToNodeStream`, `resume` and `resumeToPipeableStream` are exported but throw: partial prerendering is not implemented.
 - `preload`, `preinit` and the other resource functions called in async work a stream's render started, such as a promise callback, reach that render wherever `AsyncLocalStorage` exists (a global one, as edge runtimes have, or `node:async_hooks`'), as in React's Node build and its edge build. Under Bun, `react-dom/server` resolves to React's Bun build, which keeps no such storage and drops those hints; compat takes them there too, as `react-dom/server.node` does under Bun. Without `AsyncLocalStorage`, only code the render's work runs reaches it, as in React's browser build.
 - `useActionState`'s server action key (`$ACTION_KEY`) hashes the hook's place in the tree as each React build does for the entry: MD5 for `renderToPipeableStream`, as React's Node build; MurmurHash3 for `renderToReadableStream` and `renderToString`, as its browser, edge and legacy builds. React's Node build hashes its `renderToReadableStream`'s keys with MD5 too, and its Bun build hashes with `Bun.hash`; a postback still matches the server that wrote the form. A component that sets state while it renders keeps the action and dispatch of its first pass, where React takes the action each pass renders. (`unstable_externalRuntimeSrc` is ignored, as React's production build ignores it.)
-- Errors carry React's full messages rather than minified codes.
+- Errors carry React's full messages, as React's builds for Node, Deno, Bun and edge runtimes throw them, while compat's client throws React's production codes. React's browser build (`react-dom/server.browser`, which a bundle for the browser or a web worker resolves to) throws the minified codes instead.
 - `onError`'s `componentStack` is React's production stack, each component's frame read from a native stack trace as React reads it, with two exceptions. A component whose first call that throws without props is `use()` of a promise gets a frame with only its name, as compat's `use()` reads a promise outside a render where React's throws. Under JavaScriptCore (Bun, Safari), a component that returns a hook's result directly, a tail call, has no frame of its own, so the frame shown is the hook's, in compat's code rather than React's. Frames are formatted as React's browser, Bun and legacy builds format them; its Node and edge builds use an `Error.prepareStackTrace` of their own, which Bun writes differently for an engine-made frame such as a class's implicit constructor.
 - Stream chunks are those of one React build per entry: `renderToPipeableStream` writes as React's Node build does (4096-byte views, a long string as it is, and a pause when the writable is full until it drains), `renderToReadableStream` enqueues as its browser and edge builds do (2048-byte views). React's Bun build, which `react-dom/server` resolves to under Bun, writes each piece on its own instead. The bytes are the same.
 
@@ -93,11 +93,11 @@ Each module bundled whole, minified, for the browser in production mode, with Re
 
 | Bundle                              | Minified |    gzip |  brotli |
 | ----------------------------------- | -------: | ------: | ------: |
-| `@reactre/compat`                   |  85.0 KB | 31.5 KB | 28.0 KB |
-| `@reactre/compat/core`              |  79.7 KB | 29.5 KB | 26.2 KB |
+| `@reactre/compat`                   |  83.1 KB | 30.7 KB | 27.3 KB |
+| `@reactre/compat/core`              |  77.8 KB | 28.7 KB | 25.5 KB |
 | `react` + `react-dom/client` 19.3.1 | 214.1 KB | 66.7 KB | 57.4 KB |
 
-The feature modules cost an app about 7.1 KB minified, 2.7 KB gzipped: class support 1.3 KB gzipped, component stacks 0.9 KB and React's handling of repeated keys 0.5 KB, each left out with its key off. Most of the runtime ships whatever an app imports: a counter with one `useState` and `createRoot` comes to 21.6 KB gzipped (18.9 KB on core alone), against 64.4 KB on React. Measured with Bun's bundler, gzip at level 9 and brotli at quality 11; Rolldown, the bundler in Vite, gives sizes within 1 KB of these.
+The feature modules cost an app about 7.1 KB minified, 2.7 KB gzipped: class support 1.3 KB gzipped, component stacks 0.9 KB and React's handling of repeated keys 0.5 KB, each left out with its key off. Most of the runtime ships whatever an app imports: a counter with one `useState` and `createRoot` comes to 21.2 KB gzipped (18.5 KB on core alone), against 64.4 KB on React. Measured with Bun's bundler, gzip at level 9 and brotli at quality 11; Rolldown, the bundler in Vite, gives sizes within 1 KB of these.
 
 ## License
 
