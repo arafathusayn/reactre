@@ -14,7 +14,7 @@ class Style {
   [k: string]: unknown;
   cssText = "";
   setProperty(k: string, v: string): void {
-    this.log.push(`${k}=${v}`);
+    // Called on the proxy: the write below is logged by its set trap.
     this[k] = v;
   }
 }
@@ -28,9 +28,6 @@ export class El extends FakeElement {
       return true;
     },
   });
-  get localName(): string {
-    return this.namespaceURI === HTML_NS ? this.tagName.toLowerCase() : this.tagName;
-  }
   get id(): string {
     return this.getAttribute("id") ?? "";
   }
@@ -43,13 +40,27 @@ export class El extends FakeElement {
   set title(v: string) {
     this.setAttribute("title", v);
   }
+  constructor(tag: string, ns?: string) {
+    super(tag, ns);
+    // Form controls have value and checked properties, with no attribute behind them.
+    if (/^(INPUT|TEXTAREA|SELECT|OPTION|PROGRESS)$/.test(tag)) Object.assign(this, { value: "", checked: false });
+  }
   /** A DOM property with no attribute, which a clone does not copy. */
   expando: unknown = "";
+  /** A read-only DOM property: writing it throws, and Preact falls back to the attribute. */
+  get frozen(): string {
+    return "";
+  }
+
   private removed: [string, unknown][] = [];
   override removeEventListener(type: string, fn: unknown): void {
     this.removed.push([type, fn]);
     const map = (this as unknown as { listeners: Map<string, unknown[]> | null }).listeners;
-    if (map) map.set(type, (map.get(type) ?? []).filter((f) => f !== fn));
+    if (map)
+      map.set(
+        type,
+        (map.get(type) ?? []).filter((f) => f !== fn),
+      );
   }
   override cloneNode(deep?: boolean): El {
     const c = new El(this.tagName, this.namespaceURI);
@@ -71,13 +82,28 @@ export function installDom(): void {
   Object.assign(new FakeText("").ownerDocument, doc);
 }
 
-// Nodes remove themselves, as in the DOM.
+// As in the DOM: attribute values are strings, every element (parsed ones too) has a localName,
+// and nodes remove themselves.
+const proto = FakeElement.prototype as unknown as Record<string, unknown>;
+const setAttr = proto.setAttribute as (this: FakeElement, k: string, v: string) => void;
+proto.setAttribute = function (this: FakeElement, k: string, v: unknown) {
+  setAttr.call(this, k, String(v));
+};
+Object.defineProperty(proto, "localName", {
+  get(this: FakeElement) {
+    return this.namespaceURI === HTML_NS ? this.tagName.toLowerCase() : this.tagName;
+  },
+});
 (FakeNode.prototype as unknown as { remove(): void }).remove = function (this: FakeNode) {
   this.parentNode?.removeChild(this);
 };
 
-/** A fresh container element. */
-export const container = (): El => new El("DIV");
+/** A fresh container element, connected to a document (Preact moves connected nodes with moveBefore). */
+export function container(): El {
+  const root = new El("HTML");
+  root.isDocument = true;
+  return root.appendChild(new El("DIV")) as El;
+}
 
 /** The HTML of a node's children: attributes in the order they were set, as a browser shows. */
 export function html(n: FakeNode): string {
@@ -86,7 +112,7 @@ export function html(n: FakeNode): string {
     if (c instanceof FakeText) out += c.data;
     else if (c instanceof FakeComment) out += `<!--${c.data}-->`;
     else if (c instanceof FakeElement) {
-      const tag = (c as El).localName;
+      const tag = (c as El).localName as string;
       out += `<${tag}${c.attributes.map((a) => ` ${a.name}="${a.value}"`).join("")}>${html(c)}</${tag}>`;
     }
   }

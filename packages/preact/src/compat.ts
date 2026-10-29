@@ -24,12 +24,12 @@ import {
   options,
   cloneElement as preactCloneElement,
   createPortal as preactCreatePortal,
-  hydrate as preactHydrate,
   render as preactRender,
   REF_DETACHED,
   toChildArray,
   VNODE_MARKER,
 } from "./engine.ts";
+import { hydrate as preactHydrate } from "./claim.ts";
 import {
   useCallback,
   useContext,

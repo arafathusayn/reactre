@@ -12,10 +12,9 @@ export {
   createRef,
   Fragment,
   createElement as h,
-  hydrate,
   isValidElement,
   options,
-  render,
   toChildArray,
 } from "./engine.ts";
+export { hydrate, render } from "./claim.ts";
 export * from "./hooks.ts";

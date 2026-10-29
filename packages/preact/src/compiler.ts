@@ -84,6 +84,11 @@ export function compileSource(source: string, loader: "jsx" | "tsx" = "tsx", opt
 const BAIL_TAGS = new Set(["input", "textarea", "select", "option", "progress", "template", "noscript"]);
 // Props with a behavior of their own in Preact's element diff, or none in a template.
 const BAIL_PROPS = new Set(["ref", "key", "dangerouslySetInnerHTML", "is", "value", "checked", "defaultValue", "defaultChecked"]);
+// DOM properties with no attribute behind them: set on a template's prototype, a clone would not
+// carry them, so a literal value for one is a hole, written on each use.
+const UNCLONED = new Set(
+  "muted volume playbackRate defaultPlaybackRate currentTime srcObject scrollTop scrollLeft indeterminate selectedIndex innerText outerHTML outerText nodeValue".split(" "),
+);
 
 // #endregion
 
@@ -202,7 +207,7 @@ class Compiler {
         return null;
       }
       const lit = literal(value);
-      if (!dynamic && lit !== NOT_LITERAL && (lit === null || typeof lit !== "object")) {
+      if (!dynamic && !UNCLONED.has(name) && lit !== NOT_LITERAL && (lit === null || typeof lit !== "object")) {
         // A prop set to undefined is no prop.
         if (lit !== undefined) ps[name] = lit;
       } else {

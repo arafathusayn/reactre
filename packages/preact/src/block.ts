@@ -7,8 +7,8 @@
 //   - a children hole is the only child of its element, and its value is the element's
 //     `props.children` as Preact would see it, diffed by Preact's diffChildren. Children keep
 //     Preact's matching by key and type, and its placement;
-//   - static props are set once on the prototype. One that lives in a DOM property the clone
-//     does not copy (the browser decides; checked once per template) is set again on each clone.
+//   - static props are set once on the prototype; the compiler makes a hole of any prop whose DOM
+//     property a clone does not copy (muted, scrollTop, ...).
 // A block vnode is a host vnode: its type is its root's tag, so it matches an old element of
 // that tag and key as Preact matches elements. When it meets anything but a block of its own
 // template (a plain element, another template, a server node to hydrate), it and the old vnode
@@ -24,6 +24,7 @@ import {
   createVNode,
   diffChildren,
   diffElementNodes,
+  EMPTY_ARR,
   EMPTY_OBJ,
   FORCE_PROPS_REVALIDATE,
   getDomSibling,
@@ -57,7 +58,7 @@ interface Template {
 interface Built {
   /** The prototype every use clones. */
   p: Any;
-  /** Path (child indexes) from the root to each element a hole or replay writes. */
+  /** Path (child indexes) from the root to each element a hole writes. */
   paths: number[][];
   /** Per hole: the element it writes (an index into paths). */
   el: number[];
@@ -67,10 +68,6 @@ interface Built {
   ns: string[];
   /** Per children hole: its element's depth under the root. */
   dp: number[];
-  /** Per children hole: its element's tag. */
-  tg: string[];
-  /** Static props the clone loses: element, name, value, namespace. */
-  replay: Any[];
 }
 
 /**
@@ -93,19 +90,9 @@ const nsOf = (tag: string, parentNs: string): string =>
 const childNsOf = (tag: string, ns: string): string =>
   tag == "foreignObject" || (ns == MATH_NAMESPACE && /^m(i|n|o|s|text|space)$/.test(tag)) ? XHTML_NAMESPACE : ns;
 
-/** Whether setProperty writes `name` on `dom` as a DOM property (Preact's `in` rule). */
-const viaProperty = (dom: Any, name: string, ns: string): boolean =>
-  ns != SVG_NAMESPACE &&
-  name != "style" &&
-  !(name[0] == "o" && name[1] == "n") &&
-  !/^(width|height|href|list|form|tabIndex|download|rowSpan|colSpan|role|popover)$/.test(name) &&
-  name in dom;
-
 /** Build template `t` with its root in namespace `ns`. */
 function build(t: Template, ns: string): Built {
-  const b: Built = { p: NULL, paths: [], el: [], nm: [], ns: [], dp: [], tg: [], replay: [] };
-  /** Static props set as DOM properties, to check against a clone: element, path, name, value, ns. */
-  const props: Any[] = [];
+  const b: Built = { p: NULL, paths: [], el: [], nm: [], ns: [], dp: [] };
   const at = (path: number[]): number => b.paths.push(path) - 1;
   const make = (d: Desc, ns: string, path: number[], depth: number): Any => {
     const tag = d[0],
@@ -124,10 +111,7 @@ function build(t: Template, ns: string): Built {
         } else {
           if (blockHooks.v) v = blockHooks.v(name, v);
           // As on a mount: a prop set to undefined is not written.
-          if (v !== undefined) {
-            setProperty(dom, name, v, undefined, ns);
-            if (viaProperty(dom, name, ns)) props.push(dom, path, name, v, ns);
-          }
+          if (v !== undefined) setProperty(dom, name, v, undefined, ns);
         }
       }
     const cns = childNsOf(tag, ns);
@@ -142,21 +126,11 @@ function build(t: Template, ns: string): Built {
         b.nm[c] = NULL;
         b.ns[c] = cns;
         b.dp[c] = depth;
-        b.tg[c] = tag;
       } else dom.appendChild(make(c, nsOf(c[0], cns), path.concat(k++), depth + 1));
     }
     return dom;
   };
   b.p = make(t.d, ns, [], 0);
-  // A property the clone does not carry (it lives in the DOM object, not in an attribute) is
-  // written on every clone.
-  if (props.length) {
-    const clone = b.p.cloneNode(true);
-    for (let i = 0; i < props.length; i += 5) {
-      const name = props[i + 2];
-      if (walk(clone, props[i + 1])[name] !== props[i][name]) b.replay.push(at(props[i + 1]), name, props[i + 3], props[i + 4]);
-    }
-  }
   return (t.b[ns] = b);
 }
 
@@ -294,25 +268,6 @@ function expand(b: Any): void {
   for (const k of b.__k) if (k) k.__ = b;
 }
 
-/** A vnode standing for an element with a children hole, as the parent of its rendered children. */
-function shadow(b: Any, dom: Any, tag: string, depth: number): Any {
-  return {
-    type: tag,
-    props: EMPTY_OBJ,
-    key: undefined,
-    ref: undefined,
-    __k: NULL,
-    __: b,
-    __b: depth,
-    __e: dom,
-    __c: NULL,
-    constructor: VNODE_MARKER,
-    __v: 0,
-    __i: -1,
-    __u: 0,
-  };
-}
-
 /** Whether a children value is one text node in Preact: a string, number or bigint. */
 const isText = (x: Any): boolean => x != NULL && typeof x != "object" && typeof x != "boolean" && typeof x != "function";
 
@@ -338,76 +293,63 @@ function diffBlock(
   const ns = nsOf(b.type, namespace),
     built = t.b[ns] || build(t, ns),
     v = b.__a,
-    n = built.el.length,
-    hv = blockHooks.v;
-  let dom: Any, nodes: Any[], shadows: Any[], i: number;
-  if (old.__e) {
-    // The same template: write what changed.
-    dom = old.__e;
-    nodes = b.__h = old.__h;
+    // Mounting: the old values are none, and every prop is written as Preact writes a new
+    // element's (any value but undefined). Updating: only what changed.
+    o = old.__a || EMPTY_ARR,
+    revalidate = old.__u & FORCE_PROPS_REVALIDATE,
+    hv = blockHooks.v,
+    dom = old.__e || built.p.cloneNode(true),
+    nodes = (b.__h = old.__h || built.paths.map((p) => walk(dom, p))),
     shadows = old.__k;
-    b.__k = [];
-    const o = old.__a,
-      revalidate = old.__u & FORCE_PROPS_REVALIDATE;
-    let s = 0;
-    for (i = 0; i < n; i++) {
-      const name = built.nm[i]!;
-      let x = v[i];
-      if (name !== NULL) {
-        let y = o[i];
-        if (hv) (x = hv(name, x)), (y = hv(name, y));
-        if (x !== y || (revalidate && x != NULL)) setProperty(nodes[built.el[i]!], name, x, y, built.ns[i]);
-        continue;
-      }
-      const sh = shadows[s++];
-      const kids = sh.__k;
-      // Text replaced by text: Preact's text diff, without a new text vnode.
-      if (isText(x) && kids.length == 1 && kids[0] && kids[0].type === NULL && isText(o[i])) {
-        sh.__ = b;
-        b.__k.push(sh);
-        if (kids[0].props !== x) kids[0].__e.data = kids[0].props = x;
-        continue;
-      }
-      // A new shadow, as Preact makes a new vnode per render: until the diff ends, a lookup that
-      // climbs the old tree finds the old children with their DOM.
-      const next = shadow(b, sh.__e, sh.type, sh.__b);
-      b.__k.push(next);
+  b.__k = [];
+  for (let i = 0, s = 0; i < built.el.length; i++) {
+    const name = built.nm[i]!,
+      el = nodes[built.el[i]!];
+    let x = v[i],
+      y = o[i];
+    if (name !== NULL) {
+      if (hv) (x = hv(name, x)), (y = hv(name, y));
+      if (x !== y || (revalidate && x != NULL)) setProperty(el, name, x, y, built.ns[i]);
+      continue;
+    }
+    const sh = shadows && shadows[s++],
+      kids = sh && sh.__k;
+    // Text replaced by text: Preact's text diff, without a new text vnode.
+    if (sh && isText(x) && isText(y) && kids.length == 1 && kids[0] && kids[0].type === NULL) {
+      sh.__ = b;
+      b.__k.push(sh);
+      if (kids[0].props !== x) kids[0].__e.data = kids[0].props = x;
+      continue;
+    }
+    // A new parent vnode for the children each render, as Preact makes a new vnode: until the
+    // diff ends, a lookup that climbs the old tree finds the old children with their DOM.
+    const next = createVNode("", EMPTY_OBJ, undefined, undefined, 1);
+    next.__ = b;
+    next.__b = b.__b + built.dp[i]!;
+    b.__k.push(next);
+    if (!sh && isText(x)) {
+      // One text child: the text vnode and node Preact's diff would make, made directly.
+      const tv = createVNode(NULL, x, undefined, undefined, NULL);
+      tv.__ = next;
+      tv.__b = next.__b + 1;
+      tv.__i = 0;
+      el.appendChild((tv.__e = el.ownerDocument.createTextNode(x)));
+      next.__k = [tv];
+    } else
       diffChildren(
-        sh.__e,
+        el,
         isArray(x) ? x : [x],
         next,
-        sh,
+        sh || EMPTY_OBJ,
         globalContext,
         built.ns[i],
         NULL,
         commitQueue,
-        getDomSibling(sh, 0),
+        sh ? getDomSibling(sh, 0) : NULL,
         false,
         refQueue,
       );
-      next.__e = sh.__e;
-    }
-    return dom;
-  }
-  // A new block: clone, find the holes' elements, write every hole.
-  dom = built.p.cloneNode(true);
-  nodes = b.__h = built.paths.map((p) => walk(dom, p));
-  const r = built.replay;
-  for (i = 0; i < r.length; i += 4) setProperty(nodes[r[i]], r[i + 1], r[i + 2], undefined, r[i + 3]);
-  shadows = b.__k = [];
-  for (i = 0; i < n; i++) {
-    const name = built.nm[i]!,
-      el = nodes[built.el[i]!];
-    let x = v[i];
-    if (name !== NULL) {
-      if (hv) x = hv(name, x);
-      if (x !== undefined) setProperty(el, name, x, undefined, built.ns[i]);
-      continue;
-    }
-    const sh = shadow(b, el, built.tg[i]!, b.__b + built.dp[i]!);
-    shadows.push(sh);
-    diffChildren(el, isArray(x) ? x : [x], sh, EMPTY_OBJ, globalContext, built.ns[i], NULL, commitQueue, NULL, false, refQueue);
-    sh.__e = el;
+    next.__e = el;
   }
   return dom;
 }
@@ -417,24 +359,20 @@ function install(): void {
   slots.expand = expand;
   // A block rendered in a second place: a copy with the same identity, as Preact copies a vnode.
   slots.copy = (b: Any): Any => {
-  const c = new Block(b.__t, b.key, b.__a, b.__v);
-  c.__p = b.__p;
-  return c;
-};
-// An unmounted block's event listeners stop calling handlers, as Preact clears each element's.
+    const c = new Block(b.__t, b.key, b.__a, b.__v);
+    c.__p = b.__p;
+    return c;
+  };
+  // An unmounted block's event listeners stop calling handlers, as Preact clears each element's.
   slots.drop = (b: Any): void => {
-  const nodes = b.__h;
-  if (nodes) {
-    const built = b.__t.b[nsOfDom(b)]!;
-    for (let i = 0; i < built.el.length; i++) {
-      const name = built.nm[i];
-      if (name && name[0] == "o" && name[1] == "n") nodes[built.el[i]!].l = NULL;
-    }
-  }
-};
+    const nodes = b.__h,
+      built = b.__t.b[b.__e.namespaceURI];
+    if (nodes)
+      for (let i = 0; i < built.el.length; i++) {
+        const name = built.nm[i];
+        if (name && name[0] == "o" && name[1] == "n") nodes[built.el[i]].l = NULL;
+      }
+  };
 }
-
-/** The namespace block `b` was built in: its root's. */
-const nsOfDom = (b: Any): string => b.__e.namespaceURI;
 
 // #endregion

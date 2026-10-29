@@ -2,9 +2,9 @@
 // rendering through `options`, as Preact's do. Loading this module installs them; an app that
 // imports no hook ships none of this.
 //
-// Timing is Preact's: layout effects run in the commit, after refs; passive effects run after
-// the next frame (requestAnimationFrame, or a 35 ms timeout when frames do not come), or before
-// the component renders again, whichever is first.
+// Timing is Preact's: layout effects run in the commit, after refs; passive effects (src/
+// effects.ts, bundled only with useEffect) run after the next frame, or before the component
+// renders again, whichever is first.
 //
 // Field legend. Hooks: __ list, __h pending passive effects. A hook's state: __ value, __N next
 // value, t reducer, __c component (useReducer) or cleanup (effects), __H args, u pending args,
@@ -12,7 +12,10 @@
 //
 // Preact is MIT licensed, Copyright (c) 2015-present Jason Miller; see NOTICE.
 
-import { type Any, options } from "./engine.ts";
+import { type Any, options, slots } from "./engine.ts";
+
+export { useEffect } from "./effects.ts";
+export { useImperativeHandle, useLayoutEffect } from "./layout.ts";
 
 const ObjectIs = Object.is;
 
@@ -21,19 +24,12 @@ let currentComponent: Any;
 let previousComponent: Any;
 /** The kind of hook being read, for `options.__h` (devtools). */
 let currentHook = 0;
-const afterPaintEffects: Any[] = [];
-const unmountCleanups: Any[] = [];
 
 const oldBeforeDiff = options.__b;
 const oldBeforeRender = options.__r;
 const oldAfterDiff = options.diffed;
-const oldCommit = options.__c;
-const oldBeforeUnmount = options.unmount;
 const oldRoot = options.__;
 
-/** How long a passive effect waits for a frame before it runs anyway. */
-const RAF_TIMEOUT = 35;
-let prevRaf: Any;
 
 options.__b = (vnode: Any) => {
   currentComponent = null;
@@ -75,7 +71,7 @@ options.diffed = (vnode: Any) => {
   if (oldAfterDiff) oldAfterDiff(vnode);
   const c = vnode.__c;
   if (c && c.__H) {
-    if (c.__H.__h.length) afterPaint(afterPaintEffects.push(c));
+    if (c.__H.__h.length) slots.p(c);
     c.__H.__.some((hookItem: Any) => {
       if (hookItem.u) hookItem.__H = hookItem.u;
     });
@@ -83,49 +79,10 @@ options.diffed = (vnode: Any) => {
   previousComponent = currentComponent = null;
 };
 
-// Layout effects run in the commit: cleanups first, then the effects. An error is rethrown from
-// the component's render callbacks, where the commit routes it to a boundary.
-options.__c = (vnode: Any, commitQueue: Any[]) => {
-  commitQueue.some((component) => {
-    try {
-      component.__h.some(invokeCleanup);
-      component.__h = component.__h.filter((cb: Any) => (cb.__ ? invokeEffect(cb) : true));
-    } catch (e) {
-      component.__h = [
-        () => {
-          throw e;
-        },
-      ];
-    }
-  });
-  if (oldCommit) oldCommit(vnode, commitQueue);
-};
-
-options.unmount = (vnode: Any) => {
-  if (oldBeforeUnmount) oldBeforeUnmount(vnode);
-  const c = vnode.__c;
-  if (c && c.__H) {
-    let hasErrored: Any, errorParent: Any;
-    c.__H.__.some((s: Any) => {
-      try {
-        if (s.__P && s.__c) {
-          // A passive cleanup runs after paint; its errors go to the nearest mounted ancestor.
-          if (errorParent === undefined) {
-            errorParent = vnode.__;
-            while (errorParent && !(errorParent.__c && errorParent.__c.__P)) errorParent = errorParent.__;
-            errorParent = errorParent && errorParent.__c;
-          }
-          s.__P = errorParent;
-          afterPaint(unmountCleanups.push(s));
-        } else invokeCleanup(s);
-      } catch (e) {
-        hasErrored = e;
-      }
-    });
-    c.__H = undefined;
-    if (hasErrored) options.__e(hasErrored, c.__v);
-  }
-};
+/** The next hook's state in the component rendering, and the component. */
+export function nextHook(type: number): [Any, Any] {
+  return [getHookState(currentIndex++, type), currentComponent];
+}
 
 /** The state of hook `index` of the component rendering, created on first use. */
 function getHookState(index: number, type: number): Any {
@@ -188,52 +145,10 @@ export function useReducer(reducer: Any, initialState: Any, init?: Any): Any {
   return hookState.__;
 }
 
-/** Run `callback` after paint when `args` changed (every render without args). */
-export function useEffect(callback: Any, args?: Any[]): void {
-  const state = getHookState(currentIndex++, 3);
-  if (!options.__s && argsChanged(state.__H, args)) {
-    state.__P = true;
-    state.__ = callback;
-    state.u = args;
-    currentComponent.__H.__h.push(state);
-  }
-}
-
-/** Run `callback` in the commit when `args` changed. */
-export function useLayoutEffect(callback: Any, args?: Any[]): void {
-  const state = getHookState(currentIndex++, 4);
-  if (!options.__s && argsChanged(state.__H, args)) {
-    state.__P = false;
-    state.__ = callback;
-    state.u = args;
-    currentComponent.__h.push(state);
-  }
-}
-
 /** A ref object kept across renders. */
 export function useRef<T>(initialValue?: T): { current: T } {
   currentHook = 5;
   return useMemo(() => ({ current: initialValue }), []) as Any;
-}
-
-/** Set `ref` to `createHandle()`'s value in the commit. */
-export function useImperativeHandle(ref: Any, createHandle: Any, args?: Any[]): void {
-  currentHook = 6;
-  useLayoutEffect(
-    () => {
-      if (typeof ref == "function") {
-        const result = ref(createHandle());
-        return () => {
-          ref(null);
-          if (result && typeof result == "function") result();
-        };
-      } else if (ref) {
-        ref.current = createHandle();
-        return () => (ref.current = null);
-      }
-    },
-    args == null ? args : args.concat(ref),
-  );
 }
 
 /** `factory()`'s value, computed again only when `args` changed. */
@@ -301,59 +216,7 @@ export function useId(): string {
   return state.__;
 }
 
-/** Run the cleanups of unmounted components, then the passive effects of rendered ones. */
-function flushAfterPaintEffects(): void {
-  let component: Any;
-  do {
-    while ((component = unmountCleanups.shift())) {
-      try {
-        invokeCleanup(component);
-      } catch (e) {
-        component = component.__P;
-        options.__e(e, { __: component && component.__v });
-      }
-    }
-    while ((component = afterPaintEffects.shift())) {
-      const hooks = component.__H;
-      if (!component.__P || !hooks) continue;
-      try {
-        hooks.__h.some(invokeCleanup);
-        hooks.__h.some(invokeEffect);
-        hooks.__h = [];
-      } catch (e) {
-        hooks.__h = [];
-        options.__e(e, component.__v);
-      }
-    }
-  } while (unmountCleanups.length);
-}
-
-const HAS_RAF = typeof requestAnimationFrame == "function";
-
-/**
- * Call `callback` after the next frame: a timeout after requestAnimationFrame fires, so it runs
- * after paint; a 35 ms timeout covers a hidden tab, where frames do not come.
- */
-function afterNextFrame(callback: () => void): void {
-  let raf: Any;
-  const done = () => {
-    clearTimeout(timeout);
-    if (HAS_RAF) cancelAnimationFrame(raf);
-    setTimeout(callback);
-  };
-  const timeout = setTimeout(done, RAF_TIMEOUT);
-  if (HAS_RAF) raf = requestAnimationFrame(done);
-}
-
-/** Schedule the flush when the first effect is queued, or when the scheduler changed. */
-function afterPaint(newQueueLength: number): void {
-  if (newQueueLength == 1 || prevRaf != options.requestAnimationFrame) {
-    prevRaf = options.requestAnimationFrame;
-    (prevRaf || afterNextFrame)(flushAfterPaintEffects);
-  }
-}
-
-function invokeCleanup(hook: Any): void {
+export function invokeCleanup(hook: Any): void {
   // A cleanup can render (a setState inside it): keep the component being rendered.
   const comp = currentComponent;
   const cleanup = hook.__c;
@@ -364,14 +227,14 @@ function invokeCleanup(hook: Any): void {
   currentComponent = comp;
 }
 
-function invokeEffect(hook: Any): void {
+export function invokeEffect(hook: Any): void {
   const comp = currentComponent;
   hook.__c = hook.__();
   currentComponent = comp;
 }
 
 /** Whether the deps changed: none before, another length, or an entry not Object.is the old. */
-function argsChanged(oldArgs: Any, newArgs: Any): boolean {
+export function argsChanged(oldArgs: Any, newArgs: Any): boolean {
   return !oldArgs || oldArgs.length != newArgs.length || newArgs.some((arg: Any, index: number) => !ObjectIs(arg, oldArgs[index]));
 }
 

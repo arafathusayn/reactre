@@ -89,10 +89,21 @@ export const options: Any = {
 };
 
 /**
- * Render paths only src/block.ts fills, when a compiled template exists: diffing a block, copying
- * one rendered twice, dropping one that unmounts, and expanding one into plain vnodes.
+ * Render paths another module fills. src/block.ts fills `block`, `copy`, `drop` and `expand`
+ * when a compiled template exists: diffing a block, copying one rendered twice, dropping one that
+ * unmounts, and expanding one into plain vnodes. src/claim.ts fills `claim` when an app renders
+ * over existing DOM (core's render, hydrate): only then does a diff see DOM it did not create.
+ * src/effects.ts fills `p` and `u`, which queue passive effects and their cleanups after paint.
  */
-export const slots: { block: Any; copy: Any; drop: Any; expand: Any } = { block: NULL, copy: NULL, drop: NULL, expand: NULL };
+export const slots: { block: Any; copy: Any; drop: Any; expand: Any; claim: Any; p: Any; u: Any } = {
+  p: NULL,
+  u: NULL,
+  block: NULL,
+  copy: NULL,
+  drop: NULL,
+  expand: NULL,
+  claim: NULL,
+};
 
 /**
  * How compat writes a compiled template's host props (src/compat.ts fills these): `n` renames a
@@ -468,12 +479,13 @@ export function diff(
   if (newVNode.constructor !== VNODE_MARKER) return NULL;
 
   // A suspended hydration resumes on the DOM range it kept.
-  if (oldVNode.__u & MODE_SUSPENDED && ((isHydrating = oldVNode.__u & MODE_HYDRATE), (tmp = oldVNode.__c.__z))) {
-    newVNode.__u |= isHydrating;
-    resumed = excessDomChildren = [];
-    if (tmp.nodeType == 8) oldDom = rangeEnd(tmp, excessDomChildren);
-    else excessDomChildren.push(tmp);
-    oldDom = excessDomChildren[0] || oldDom;
+  if (oldVNode.__u & MODE_SUSPENDED) {
+    tmp = slots.claim.r(newVNode, oldVNode, oldDom);
+    isHydrating = tmp[0];
+    if (tmp[1]) {
+      resumed = excessDomChildren = tmp[1];
+      oldDom = tmp[2];
+    }
   }
 
   if ((tmp = options.__b)) tmp(newVNode);
@@ -639,41 +651,8 @@ export function diff(
       commitQueue.length = oldCommitQueueLength;
       // Not the same vnode as before any more: a later render must not bail out on it.
       newVNode.__v = NULL;
-      if (isHydrating || excessDomChildren) {
-        if (e.then) {
-          // A suspension while hydrating keeps the server's DOM for this subtree, up to the
-          // matching `/$s` comment when the server marked the boundary.
-          let commentMarkersToFind = 0,
-            startMarker: Any;
-          newVNode.__u |= MODE_SUSPENDED | isHydrating;
-          if (excessDomChildren) {
-            let i = excessDomChildren.indexOf(oldDom || undefined),
-              child;
-            if (!~i) i = excessDomChildren.length;
-            while ((child = excessDomChildren[i - 1]) && child.nodeType == 8) i--;
-            for (; i < excessDomChildren.length; i++) {
-              child = excessDomChildren[i];
-              if (!child) continue;
-              excessDomChildren[i] = NULL;
-              if (child.nodeType == 8) {
-                if (child.data.startsWith("$s")) {
-                  if (!commentMarkersToFind++) startMarker = child;
-                } else if (commentMarkersToFind && child.data.startsWith("/$s") && !--commentMarkersToFind) break;
-              } else if (!commentMarkersToFind) break;
-            }
-          }
-          if (!startMarker) {
-            while (oldDom && oldDom.nodeType == 8 && oldDom.nextSibling) oldDom = oldDom.nextSibling;
-            startMarker = oldDom;
-          }
-          startMarker = newVNode.__c.__z || (newVNode.__c.__z = startMarker);
-          if ((tmp = rangeEnd(startMarker))) {
-            newVNode.__e = startMarker;
-            oldDom = tmp;
-          } else newVNode.__e = oldDom;
-          oldDom = oldDom && oldDom.nextSibling;
-        } else if (excessDomChildren) excessDomChildren.some(removeNode);
-      } else newVNode.__e = oldVNode.__e;
+      if (isHydrating || excessDomChildren) oldDom = slots.claim.c(e, newVNode, excessDomChildren, oldDom, isHydrating);
+      else newVNode.__e = oldVNode.__e;
       if (!newVNode.__k) newVNode.__k = oldVNode.__k || [];
       if (!e.then) markAsForce(newVNode);
       options.__e(e, newVNode, oldVNode);
@@ -709,19 +688,6 @@ export function diff(
 
   if ((tmp = options.diffed)) tmp(newVNode);
   return oldDom;
-}
-
-/** The comment closing the server's Suspense range opened by `start`, collecting the nodes between. */
-function rangeEnd(start: Any, nodes?: Any[]): Any {
-  if (start && start.nodeType == 8 && start.data.startsWith("$s")) {
-    for (let depth = 1; (start = start.nextSibling); ) {
-      if (start.nodeType == 8) {
-        if (start.data.startsWith("$s")) depth++;
-        else if (start.data.startsWith("/$s") && !--depth) return start;
-      }
-      if (nodes) nodes.push(start);
-    }
-  }
 }
 
 /** Mark every component in the subtree to skip shouldComponentUpdate next time. */
@@ -772,16 +738,7 @@ export function diffElementNodes(
   else if (!namespace) namespace = XHTML_NAMESPACE;
 
   // Hydrating: claim the first unclaimed node of the same kind.
-  if (excessDomChildren) {
-    for (i = 0; i < excessDomChildren.length; i++) {
-      value = excessDomChildren[i];
-      if (value && (nodeType ? value.localName == nodeType : value.nodeType == 3)) {
-        dom = value;
-        excessDomChildren[i] = NULL;
-        break;
-      }
-    }
-  }
+  if (excessDomChildren) dom = slots.claim.n(excessDomChildren, nodeType) || dom;
 
   if (!dom) {
     const doc = parentDom.ownerDocument || document;
@@ -805,13 +762,7 @@ export function diffElementNodes(
         : excessDomChildren && slice.call(parentDom.childNodes);
 
     // Claiming a server node without hydrating: its attributes are the old props.
-    if (!isHydrating && excessDomChildren) {
-      oldProps = {};
-      for (i = 0; i < dom.attributes.length; i++) {
-        value = dom.attributes[i];
-        oldProps[value.name] = value.value;
-      }
-    }
+    if (!isHydrating && excessDomChildren) oldProps = slots.claim.a(dom);
 
     for (i in oldProps) {
       value = oldProps[i];
@@ -902,7 +853,7 @@ export function applyRef(ref: Any, value: Any, vnode: Any, owner?: Any): void {
  * (unless `skipRemove`, when an ancestor's removal takes it along).
  */
 export function unmount(vnode: Any, parentVNode: Any, skipRemove?: Any): void {
-  let r: Any, end, nodes: Any;
+  let r: Any;
   if (options.unmount) options.unmount(vnode);
   if ((r = vnode.ref) && (!r.current || r.current == vnode.__e)) applyRef(r, NULL, parentVNode, vnode);
   if ((r = vnode.__c)) {
@@ -921,11 +872,7 @@ export function unmount(vnode: Any, parentVNode: Any, skipRemove?: Any): void {
     }
   }
   // A suspended hydration's kept server range goes with it.
-  if (!skipRemove && (r = vnode.__c) && (r = r.__z) && (end = rangeEnd(r, (nodes = [])))) {
-    if (r == vnode.__e) nodes.some(removeNode);
-    removeNode(end);
-    removeNode(r);
-  }
+  if (!skipRemove && (r = vnode.__c) && r.__z) slots.claim.u(vnode, r.__z);
   if ((r = vnode.__e)) {
     if (!skipRemove) removeNode(r);
     if (r.l) r.l = NULL;

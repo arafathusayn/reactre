@@ -226,6 +226,10 @@
       "dependencies": {
         "@reactre/compiler": "workspace:*",
       },
+      "devDependencies": {
+        "@reactre/testdom": "workspace:*",
+        "preact": "11.1.0",
+      },
     },
     "packages/testdom": {
       "name": "@reactre/testdom",
