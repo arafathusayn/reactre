@@ -1,7 +1,7 @@
 // Switching APIs off (@reactre/preact/compiler's `off` option, src/api.ts): small apps bundled
 // with Bun through the plugin. A switched-off import fails the build; a use the scan cannot see
-// meets a function that throws; class support off leaves the class code out and a class that
-// renders throws.
+// meets a function that throws; class support off leaves the class code out, an import of
+// Component fails the build, and a class that renders throws.
 
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
@@ -113,11 +113,20 @@ describe("builds", () => {
     expect(code).toContain('["p",{class:"x"},"1"]');
   });
 
-  test("class support off: a class that renders throws, and the class code is gone", async () => {
+  test("class support off: importing Component fails the build", async () => {
+    const { error } = await bundle({ "main.jsx": `import { Component } from "react"; export const C = Component;` }, [
+      "@classes",
+    ]);
+    expect(error).toContain("main.jsx: uses Component");
+  });
+
+  test("class support off: a class the scan cannot see throws when it renders, and the class code is gone", async () => {
     const files = {
       "main.jsx": `
-        import { Component, render } from "preact";
-        class K extends Component { render() { return null; } }
+        import * as P from "preact";
+        import { render } from "preact";
+        const Base = P["Comp" + "onent"];
+        class K extends Base { render() { return null; } }
         export const go = (c) => render(<K />, c);
         import { e } from "./engine.ts";
         export const fn = (c) => render(<p>{"f" + e}</p>, c);

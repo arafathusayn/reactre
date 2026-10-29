@@ -8,7 +8,14 @@
     "react",
     "compat",
     "jsx",
-    "templates"
+    "templates",
+    "vite-plugin",
+    "rollup-plugin",
+    "rolldown-plugin",
+    "esbuild-plugin",
+    "webpack-plugin",
+    "rspack-plugin",
+    "unplugin"
   ],
   "homepage": "https://github.com/arafathusayn/reactre/tree/main/packages/preact#readme",
   "bugs": "https://github.com/arafathusayn/reactre/issues",
@@ -51,6 +58,11 @@
       "types": "./src/compiler.ts",
       "bun": "./src/compiler.ts",
       "default": "./dist/compiler.js"
+    },
+    "./plugin": {
+      "types": "./src/plugin.ts",
+      "bun": "./src/plugin.ts",
+      "default": "./dist/plugin.js"
     }
   },
   "files": [
@@ -59,15 +71,24 @@
     "NOTICE"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/core.ts src/compat.ts src/jsx-runtime.ts src/dom.ts --outdir dist --target browser --format esm --splitting --chunk-naming \"chunk-[hash].[ext]\" --packages external && bun build src/compiler.ts --outdir dist --target node --format esm --packages external"
+    "build": "rm -rf dist && bun build src/core.ts src/compat.ts src/jsx-runtime.ts src/dom.ts --outdir dist --target browser --format esm --splitting --chunk-naming \"chunk-[hash].[ext]\" --packages external && bun build src/compiler.ts src/plugin.ts --outdir dist --target node --format esm --splitting --chunk-naming \"node-[hash].[ext]\" --packages external"
   },
   "dependencies": {
     "@reactre/compiler": "workspace:*",
     "@reactre/dom": "workspace:*",
-    "oxc-parser": "catalog:"
+    "oxc-parser": "catalog:",
+    "oxc-transform": "catalog:",
+    "unplugin": "catalog:"
   },
   "devDependencies": {
+    "@reactre/testdom": "workspace:*",
+    "@rollup/plugin-node-resolve": "catalog:",
+    "@rspack/core": "catalog:",
+    "esbuild": "catalog:",
     "preact": "11.1.0",
-    "@reactre/testdom": "workspace:*"
+    "rolldown": "catalog:",
+    "rollup": "catalog:",
+    "vite": "catalog:",
+    "webpack": "catalog:"
   }
 }

@@ -8,9 +8,10 @@
 //     the compiled-template helpers) is not a key.
 //   - A switched-off name stays exported as a function that throws, so a library's
 //     `typeof x === "function"` check passes and a use the scan cannot see still fails loudly.
-//   - "Component" is class support: off, the engine's class-only code leaves the bundle, and a
-//     class that renders throws an error naming the fix. Component itself stays, as the base every
-//     function component runs on. A class-based API (PureComponent, compat's Suspense) needs it.
+//   - "Component" is class support: off, the engine's class-only code leaves the bundle, an import
+//     of Component fails the build as any other key's does, and a class the scan cannot see
+//     throws when it renders, naming the fix. A class-based API (PureComponent, compat's Suspense)
+//     needs it.
 //   - The scan parses with oxc and reads what a module takes from those modules: named imports
 //     and re-exports, `x.name` through a default or namespace import, and `require(...)`.
 
@@ -68,7 +69,7 @@ export function offKeys(off: readonly string[], known: ReadonlySet<string>): Set
 
 /** The module an app's imports of `entry` resolve to, with `off`'s names throwing. */
 export function entrySource(entry: string, exports: readonly string[], off: ReadonlySet<string>): string {
-  const stubs = exports.filter((k) => off.has(k) && k != "Component");
+  const stubs = exports.filter((k) => off.has(k));
   return (
     `// Written by @reactre/preact/compiler. Switched off: ${[...off].join(", ")}.\n` +
     `export * from ${JSON.stringify(entry)};\n` +
@@ -80,6 +81,24 @@ export function entrySource(entry: string, exports: readonly string[], off: Read
     `}\n` +
     stubs.map((k) => `export const ${k} = /* @__PURE__ */ off(${JSON.stringify(k)});\n`).join("")
   );
+}
+
+/** Throws where `code`, the module at `path`, uses a key of `off`, naming the file and the key. */
+export function checkOff(code: string, path: string, off: ReadonlySet<string>): void {
+  for (const k of usedApis(code, path))
+    if (off.has(k)) throw new Error(`${path}: uses ${k}, which @reactre/preact/compiler's off option switches off.`);
+}
+
+/**
+ * The engine's or compat's code with class support off: its CLASSES constants false, so a
+ * minifier drops the class-only code. A top-level `if` on one is rewritten too, since Bun does
+ * not fold the constant there. Reads the sources (`const X: boolean = true;`) and the dist build
+ * (`var X = true;`).
+ */
+export function classesOff(code: string): string {
+  return code
+    .replace(/\b(const|let|var) (CLASSES\w*)(: boolean)? = true;/g, "$1 $2$3 = false;")
+    .replace("if (CLASSES_COMPAT)", "if (false)");
 }
 
 // biome-ignore lint: ESTree nodes are read loosely here.

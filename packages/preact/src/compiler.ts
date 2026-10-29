@@ -29,7 +29,7 @@
 import { isIdent, literal, NOT_LITERAL, skipToken, split, until } from "@reactre/compiler/scan";
 import type { BunPlugin } from "bun";
 
-import { ALWAYS, entrySource, offKeys, SOURCES, usedApis } from "./api.ts";
+import { ALWAYS, checkOff, classesOff, entrySource, offKeys, SOURCES } from "./api.ts";
 import { BAIL_PROPS, BAIL_TAGS, reactName, reactValue, UNCLONED } from "./rules.ts";
 
 // #region Plugin
@@ -94,22 +94,14 @@ export function reactrePreactCompiler(options: CompilerOptions = {}): BunPlugin 
         build.onLoad({ filter: /(engine|compat)\.ts$/ }, async ({ path }) =>
           path === `${SRC}/engine.ts` || path === `${SRC}/compat.ts`
             ? {
-                // Bun folds the constant inside functions, but not in a top-level `if`: that one
-                // is rewritten too.
-                contents: (await Bun.file(path).text())
-                  .replace(/const (CLASSES\w*): boolean = true;/, "const $1: boolean = false;")
-                  .replace("if (CLASSES_COMPAT)", "if (false)"),
+                contents: classesOff(await Bun.file(path).text()),
                 loader: "ts",
               }
             : undefined,
         );
       build.onLoad({ filter: /\.[cm]?[jt]sx?$/ }, async ({ path }) => {
         const source = await Bun.file(path).text();
-        // Component stays importable with class support off (instanceof checks, a class never
-        // rendered); a class that renders throws.
-        for (const k of usedApis(source, path))
-          if (off.has(k) && k != "Component")
-            throw new Error(`${path}: uses ${k}, which @reactre/preact/compiler's off option switches off.`);
+        checkOff(source, path, off);
         return filter.test(path) && !skip(path) ? compile(source, path) : undefined;
       });
     },

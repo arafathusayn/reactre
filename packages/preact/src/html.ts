@@ -9,7 +9,7 @@
 // built once and cloned, and the rest are vnodes. So a tagged template renders exactly what the
 // same JSX renders on Preact. Text follows JSX's whitespace rules: a run of text that spans
 // lines is trimmed line by line, and whitespace with a line break in it is no text at all.
-// HTML entities are not decoded.
+// HTML entities in text and quoted attributes are decoded, as JSX decodes them.
 //
 // Preact is MIT licensed, Copyright (c) 2015-present Jason Miller; see NOTICE.
 
@@ -125,13 +125,13 @@ function parse(strings: readonly string[]): Kid[] {
         while (p < items.length && items[p] !== q) {
           const c = items[p++]!;
           if (typeof c == "number") {
-            if (s) parts.push(s);
+            if (s) parts.push(decode(s));
             s = "";
             parts.push({ i: c });
           } else s += c;
         }
         p++;
-        if (s || !parts.length) parts.push(s);
+        if (s || !parts.length) parts.push(decode(s));
         a.push([name, parts.length == 1 ? parts[0]! : parts]);
       } else a.push([name, chars(/[\s>]/)]);
     }
@@ -140,8 +140,28 @@ function parse(strings: readonly string[]): Kid[] {
   return nodes();
 }
 
-/** A run of text as JSX keeps it: lines trimmed, joined by a space, blank lines dropped. */
+/**
+ * HTML entities decoded as JSX decodes them: `&name;`, `&#n;` and `&#xh;`, with an unknown name
+ * left as it is. A named one is resolved by the document, so no table of names is bundled.
+ */
+function decode(s: string): string {
+  return s.replace(/&(#x[\da-f]+|#\d+|[a-z][a-z\d]*);/gi, (m, e: string) => {
+    if (e[0] == "#") {
+      const n = e[1] == "x" || e[1] == "X" ? parseInt(e.slice(2), 16) : +e.slice(1);
+      return n <= 0x10ffff ? String.fromCodePoint(n) : m;
+    }
+    const el = document.createElement("div");
+    el.innerHTML = m;
+    return el.textContent!;
+  });
+}
+
+/** A run of text as JSX keeps it: lines trimmed, joined by a space, blank lines dropped; entities decoded. */
 function jsxText(s: string): string {
+  return decode(jsxLines(s));
+}
+
+function jsxLines(s: string): string {
   if (!/[\r\n]/.test(s)) return s;
   const lines = s.split(/\r\n|\n|\r/);
   let out = "";

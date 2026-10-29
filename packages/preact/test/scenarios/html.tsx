@@ -201,4 +201,19 @@ export const pairs: Record<string, Pair> = {
       t.snap("edge");
     },
   },
+
+  "HTML entities in text and quoted attributes, as JSX decodes them": {
+    jsx: () => (x: string) => (
+      <p title='a &amp; b &#65; "' data-x={`< ${x} B`}>
+        x &amp; y &copy; &#x41; &nbsp;z &bogus; & {x}
+      </p>
+    ),
+    html: (t) => (x: string) =>
+      t.R
+        .html`<p title="a &amp; b &#65; &quot;" data-x="&lt; ${x} &#x42;">x &amp; y &copy; &#x41; &nbsp;z &bogus; & ${x}</p>`,
+    run: (t, view) => {
+      t.R.render(view("v"), t.c);
+      t.snap("entities");
+    },
+  },
 };
