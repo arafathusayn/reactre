@@ -2890,7 +2890,7 @@ describe("the render loop", () => {
               return "snap" + pp.k;
             }
             state = { n: 0 };
-            override render() {
+            render() {
               if (where === "class" && this.props.k === 1 && throws-- > 0) throw new Error("once");
               return this.props.children;
             }

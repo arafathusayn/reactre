@@ -7110,7 +7110,7 @@ let waiting = false;
 /** A batch rendering where it can be undone (see attempt). */
 interface Held {
   /** The user code safely() was asked to run, in pairs (fiber, function), run if it commits. */
-  readonly q: Any[];
+  q: Any[];
   /** What suspended where content showed. */
   readonly bad: Any[];
   /** Boundaries' retries (boundary, thenable), attached if it commits. */
