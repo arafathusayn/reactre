@@ -3020,13 +3020,16 @@ function blockHandlers(f: Fiber, prop: string, from: Any, out: Any[]): void {
 /** What a mismatch throws, up to the boundary or root that recovers from it. */
 const MISMATCH = { hydration: "mismatch" };
 
-// The errors hydration found, each with its component stack, until the pass reports them.
-let hydrationErrors: Any[] | null = null;
+// The errors hydration found, each with its component stack, until the pass reports them; the
+// fiber of the last mismatch.
+let hydrationErrors: Any[] | null = null,
+  mismatchAt: Fiber | null = null;
 
 /** Queue React's error for a mismatch at `f` and throw MISMATCH. */
 function mismatch(f: Fiber, text: boolean): never {
   const e = new Error(prodMessage(418, text ? "text" : "HTML", ""));
   (hydrationErrors ??= []).push(e, stackOf(e, f));
+  mismatchAt = f;
   // A host that claimed nothing has no node for the unmount that follows to remove.
   f.d ??= { parentNode: null };
   throw MISMATCH;
@@ -3467,9 +3470,21 @@ function clientRender(f: Fiber): void {
   for (let i = 0, xs = f.c; i < xs.length; i++) unmount(xs[i]!, true);
   f.c = NO_FIBERS;
   f.hc = null;
-  // React's render on the client is its retry: an error it throws counts (see failed).
-  counting(() => (f.n === SUSPENSE ? suspense(f) : activity(f)));
+  // React's render on the client is its retry: an error it throws counts (see failed), its stacks
+  // captured as any render's, as React no longer hydrates there.
+  clientRendering++;
+  try {
+    counting(() => (f.n === SUSPENSE ? suspense(f) : activity(f)));
+  } catch (e) {
+    if (retries !== null && !isThenable(e)) retries.failed(f, e);
+    throw e;
+  } finally {
+    clientRendering--;
+  }
 }
+
+// How deep in boundaries' renders on the client (see clientRender) the render is.
+let clientRendering = 0;
 
 /**
  * Queue React's #422 (a boundary) or #423 (the root) for an error thrown while hydrating, caused
@@ -3644,6 +3659,10 @@ function hydrateDone(f: Fiber, thrown: Any): Any {
   }
   if (thrown !== null) {
     if (thrown !== MISMATCH) recover(thrown, f, 423);
+    // React captures its one mismatch exception too, for an error update it drops: an object keeps
+    // its first stack, so only the first mismatch at a root ever builds it.
+    else stackOf(MISMATCH, mismatchAt);
+    mismatchAt = null;
     const d = f.d;
     let html: Any = null;
     if (d.nodeType === 9) {
@@ -3657,12 +3676,14 @@ function hydrateDone(f: Fiber, thrown: Any): Any {
     }
     hydrating = false;
     thrown = null;
-    // React's render on the client is its retry: an error it throws counts (see failed).
+    // React's render on the client is its retry: an error it throws counts (see failed), its stacks
+    // captured as any render's.
     counting(() => {
       try {
         reconcile(f, f.p);
       } catch (e) {
         thrown = e;
+        if (retries !== null && !isThenable(e)) retries.failed(f, e);
       }
     });
     if (thrown !== null && !isThenable(thrown) && d.nodeType === 9) {
@@ -5208,8 +5229,12 @@ function suspense(f: Fiber): void {
       }
       return;
     } catch (e) {
-      // Errors pass through to an error boundary; only promises suspend.
-      if (!isThenable(e)) throw e;
+      // Errors pass through to an error boundary, the boundary unfinished (a retry renders it
+      // again); only promises suspend.
+      if (!isThenable(e)) {
+        f.f |= DIRTY;
+        throw e;
+      }
       thrown = e;
     }
   }
@@ -5298,7 +5323,13 @@ function activity(f: Fiber): void {
     f.f |= HIDDEN;
     hiddenCount++;
   }
-  reconcile(inner, f.p.children);
+  try {
+    reconcile(inner, f.p.children);
+  } catch (e) {
+    // Unfinished, as a parent's reconcile leaves a child that threw: a retry renders it again.
+    f.f |= DIRTY;
+    throw e;
+  }
   if (hide === was) return;
   // Inside other hidden content, what is cleaned up or run waits for that content.
   const above = hiddenLevel(f);
@@ -5990,7 +6021,7 @@ const DRAFT: Any[] = [];
  * report as recoverable if that renders.
  */
 function failed(f: Fiber, e: Any): Any[] | null {
-  const render = e === lastError && inRender && !hydrating;
+  const render = e === lastError && inRender && (!hydrating || clientRendering > 0);
   lastError = null;
   if (retrying) {
     refailed = true;

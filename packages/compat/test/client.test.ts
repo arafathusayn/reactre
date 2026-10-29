@@ -732,6 +732,84 @@ describe("hydration mismatches", () => {
     expect(r.log[1]).toMatch(/^recoverable 418 HTML\n {4}at span \(<anonymous>\)\n {4}at Row \(/);
   });
 
+  test("a render error renders again on the client, at the root and in a boundary, and counts if it throws again", async () => {
+    // The root: React's retry renders the whole root on the client (#423); a component that throws
+    // there too goes to its error boundary. A Suspense boundary renders on the client in its own
+    // pass (#422); an error that pass throws has no retry. A mismatch in a boundary is #418's.
+    for (const where of ["root", "boundary"])
+      for (const mode of ["once", "always", where === "boundary" ? "mismatch" : "caught"]) {
+        let n = 0;
+        await recovers(
+          (L) => {
+            const h = L.createElement,
+              rest = [h("i", null, "s"), h("b", null, "x")];
+            return h("div", null, h("p", null, "a"), where === "root" ? rest : h(L.Suspense, { fallback: "…" }, rest));
+          },
+          (L, log) => {
+            const h = L.createElement;
+            n = 0;
+            class Boundary extends L.Component<Any, Any> {
+              state = { e: null };
+              static getDerivedStateFromError(e: Any) {
+                return { e };
+              }
+              render() {
+                log.push("render Boundary " + (this.state.e ? "caught" : "ok"));
+                return this.state.e ? h("b", null, "x") : this.props.children;
+              }
+            }
+            function A() {
+              log.push("render A");
+              L.useState(() => void log.push("init A"));
+              L.useLayoutEffect(() => void log.push("layout A"), []);
+              return h("p", null, "a");
+            }
+            function In() {
+              log.push("render In");
+              L.useLayoutEffect(() => void log.push("layout In"), []);
+              return h("i", null, "s");
+            }
+            function Flaky() {
+              log.push("render Flaky " + n);
+              if (mode === "mismatch") return h("u", null, "x");
+              if (mode !== "once" || n++ === 0) throw new Error("flaky");
+              return h("b", null, "x");
+            }
+            const rest = [
+              h(In, { key: 1 }),
+              mode === "caught" ? h(Boundary, { key: 2 }, h(Flaky)) : h(Flaky, { key: 2 }),
+            ];
+            return h("div", null, h(A), where === "root" ? rest : h(L.Suspense, { fallback: "…" }, rest));
+          },
+        );
+      }
+  });
+
+  test("a mismatch at the root renders the components again on the client", async () => {
+    // React also builds the stack of its one mismatch exception the first time a root meets one,
+    // calling the components on its path once more; an object keeps its first stack after that.
+    await recovers(
+      (L) => L.createElement("div", null, L.createElement("p", null, "a"), L.createElement("b", null, "x")),
+      (L, log) => {
+        const h = L.createElement;
+        function A() {
+          log.push("render A");
+          L.useState(() => void log.push("init A"));
+          return h("p", null, "a");
+        }
+        function Row() {
+          log.push("render Row");
+          return h("span", null, "a");
+        }
+        function After() {
+          log.push("render After");
+          return h("b", null, "x");
+        }
+        return h("div", null, h(A), h(Row), h(After));
+      },
+    );
+  });
+
   test("text: a text-only element's, a text node's, and a text where an element was", async () => {
     const h = (L: Lib) => L.createElement;
     await recovers(
@@ -2036,6 +2114,52 @@ describe("errors", () => {
     expect(compat).toEqual(react);
     return compat;
   }
+
+  test("root.render's retry renders again what threw, in a Suspense boundary, an Activity or a memo", async () => {
+    // A boundary or Activity a render error passes through is left unfinished, so the retry of the
+    // root's element (the same one) renders down to the component again: a second throw counts.
+    for (const where of ["root", "suspense", "activity", "memo", "boundary"])
+      for (const mode of ["always", "once"]) {
+        const log = await logsSame((L, log) => {
+          const h = L.createElement;
+          let n = 0;
+          function Flaky(props: Any) {
+            log.push("render Flaky");
+            if (props.bad && (mode === "always" || n++ === 0)) throw new Error("flaky");
+            return h("b", null, "x");
+          }
+          const M = L.memo(Flaky);
+          class Boundary extends L.Component<Any, Any> {
+            state = { e: null };
+            static getDerivedStateFromError(e: Any) {
+              return { e };
+            }
+            render() {
+              log.push("render Boundary");
+              return this.state.e ? "caught" : this.props.children;
+            }
+          }
+          const tree = (bad: boolean) => {
+            const flaky = where === "memo" ? h(M, { bad }) : h(Flaky, { bad });
+            return h(
+              "div",
+              null,
+              where === "root"
+                ? flaky
+                : where === "activity"
+                  ? h(L.Activity, { mode: "visible" }, flaky)
+                  : where === "boundary"
+                    ? h(Boundary, null, h(L.Suspense, { fallback: "…" }, flaky))
+                    : h(L.Suspense, { fallback: "…" }, flaky),
+            );
+          };
+          return [tree(false), tree(true)];
+        });
+        expect(log.at(-1)).toBe(
+          mode === "once" ? "dom <div><b>x</b></div>" : where === "boundary" ? "dom <div>caught</div>" : "dom ",
+        );
+      }
+  });
 
   test("a layout effect, ref or componentDidUpdate that updates on every commit (#185)", async () => {
     // React counts the commits in a row that leave an update to render, and its 52nd throws #185
