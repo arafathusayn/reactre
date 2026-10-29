@@ -46,11 +46,20 @@ else process.env["NODE_ENV"] = prevEnv;
  * each, so other files see the plain fake DOM.
  */
 function extend(target: object, props: Record<string, PropertyDescriptor>): void {
+  // What another file in the same process defined there first, put back after each test.
+  const found = new Map<string, PropertyDescriptor | undefined>();
   beforeEach(() => {
-    for (const k in props) Object.defineProperty(target, k, { configurable: true, ...props[k] });
+    for (const k in props) {
+      found.set(k, Object.getOwnPropertyDescriptor(target, k));
+      Object.defineProperty(target, k, { configurable: true, ...props[k] });
+    }
   });
   afterEach(() => {
-    for (const k in props) delete (target as Record<string, unknown>)[k];
+    for (const k in props) {
+      delete (target as Record<string, unknown>)[k];
+      const d = found.get(k);
+      if (d !== undefined) Object.defineProperty(target, k, d);
+    }
   });
 }
 
