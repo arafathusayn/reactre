@@ -45,6 +45,11 @@
       "bun": "./src/server.ts",
       "default": "./dist/server.js"
     },
+    "./api": {
+      "types": "./src/api.ts",
+      "bun": "./src/api.ts",
+      "default": "./dist/api.js"
+    },
     "./compiler": {
       "types": "./src/compiler.ts",
       "bun": "./src/compiler.ts",
@@ -56,7 +61,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/index.ts src/core.ts src/server.ts --outdir dist --target browser --format esm --splitting --packages external && bun build src/compiler.ts --outdir dist --target node --format esm --packages external"
+    "build": "rm -rf dist && bun build src/index.ts src/core.ts src/server.ts --outdir dist --target browser --format esm --splitting --packages external && bun build src/compiler.ts src/api.ts --outdir dist --target node --format esm --packages external"
   },
   "dependencies": {
     "@reactre/compiler": "workspace:*",

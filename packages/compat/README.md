@@ -54,8 +54,11 @@ The plugin has an entry for each: `@reactre/plugin/rollup`, `/rolldown`, `/esbui
 | `@reactre/compat/classes`  | `@reactre/compat` under its earlier name, for apps that resolve to it      |
 | `@reactre/compat/server`   | `react-dom/server`: React's server rendering, on compat's hooks            |
 | `@reactre/compat/compiler` | The compiler @reactre/plugin runs, and a Bun plugin of its own             |
+| `@reactre/compat/api`      | The keys that switch React's APIs on and off, and their rules              |
 
 `@reactre/compat` is all of React's client API. An app that renders no class component, itself or through a library, can use `@reactre/compat/core` (`compat: { classes: false }` in the plugin) and leave class support out; a class that renders there throws an error naming the fix. The compiler is optional; without it, everything still runs.
+
+An app can also switch off the React APIs it does not use, one by one, with the plugin's `compat.apis` and `compat.exclude`; see [the plugin's docs](https://www.npmjs.com/package/@reactre/plugin). Each combination keeps React's behaviour for every API it leaves on.
 
 Every change is checked against React 19 itself, scenario by scenario: the same app runs on both, and what each renders and logs must match line for line.
 
