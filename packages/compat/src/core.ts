@@ -7176,24 +7176,30 @@ function attempt(b: Batch, check: boolean): boolean {
   for (const r of rs) if (r.hydrate) watch = false;
   const sv: Any[] = [],
     hv: Any[] = [],
+    fv: Any[] = [],
     targets: Any[] = [];
-  let mo: MutationObserver | null = null;
+  let mo: MutationObserver | null = null,
+    ho: MutationObserver | null = null;
+  const head: Node | null | undefined = document.head;
   const at: Held = { q: [], bad: [], t: [], s: [] };
   if (watch) {
     for (const r of rs) {
       sv.push(r, r.mounted, r.tr, r.waits);
       targets.push(r.f.d);
-      save(r.f, sv, hv, targets);
+      save(r.f, sv, hv, fv, targets);
     }
     // The roots' containers and portals': what other code does elsewhere meanwhile is not undone.
     mo = new MutationObserver(noop);
     for (const t of targets) mo.observe(t, WATCH);
+    // <head>, where document metadata is hoisted: only compat's own nodes there are undone.
+    if (head != null) (ho = new MutationObserver(noop)).observe(head, WATCH);
     holding = at;
   }
   const undo: Any[] = [],
     hidden = hiddenCount,
     shownAt = fallbackShownAt;
-  let records: MutationRecord[] = [];
+  let records: MutationRecord[] = [],
+    headRecords: MutationRecord[] = [];
   laneRender = flushing = true;
   try {
     // A component whose state the updates leave as it was renders nothing new, as in React.
@@ -7219,13 +7225,24 @@ function attempt(b: Batch, check: boolean): boolean {
       records = mo.takeRecords();
       mo.disconnect();
     }
+    if (ho !== null) {
+      headRecords = ho.takeRecords();
+      ho.disconnect();
+    }
   }
   // React's check before a concurrent render commits: a store that moved renders it again.
   let moved = false;
   if (check) for (const box of at.s) if (!Object.is(box.g(), box.v)) moved = true;
   if (mo !== null) {
     if (at.bad.length || moved) {
-      undoDom(records);
+      undoDom(records, null);
+      undoDom(headRecords, head!);
+      // The properties the DOM does not reflect in attributes, as the fields had them.
+      for (let i = 0; i < fv.length; i += 3) {
+        const dom = fv[i];
+        if (dom.value !== fv[i + 1]) dom.value = fv[i + 1];
+        if (dom.checked !== fv[i + 2]) dom.checked = fv[i + 2];
+      }
       for (let i = 0; i < sv.length;) {
         const f = sv[i++];
         if (f instanceof RootImpl) {
@@ -7287,10 +7304,11 @@ function attempt(b: Batch, check: boolean): boolean {
 }
 
 /**
- * Save the fields of fiber `f` and its subtree into `sv`, their hooks' into `hv`, and the
- * containers of the portals in it into `targets`: all a render can change.
+ * Save the fields of fiber `f` and its subtree into `sv`, their hooks' into `hv`, the value and
+ * checkedness of the form fields in it into `fv`, and the containers of the portals in it into
+ * `targets`: all a render can change.
  */
-function save(f: Fiber, sv: Any[], hv: Any[], targets: Any[]): void {
+function save(f: Fiber, sv: Any[], hv: Any[], fv: Any[], targets: Any[]): void {
   const copy = (x: Any): Any => (Array.isArray(x) && x !== NO_FIBERS ? x.slice() : x);
   sv.push(f, f.p, f.e, copy(f.c), f.i, f.d, f.f, copy(f.h), f.n === PROVIDER && f.s !== null ? new Set(f.s) : f.s);
   sv.push(copy(f.q), copy(f.rx), f.tx, f.b, copy(f.bs), f.pk);
@@ -7298,7 +7316,8 @@ function save(f: Fiber, sv: Any[], hv: Any[], targets: Any[]): void {
   else sv.push(null);
   if (f.h !== null) for (const h of f.h) hv.push(h, h.k, h.v, h.d, h.c, h.x, h.s, h.r);
   if (f.n === PORTAL) targets.push(f.d);
-  for (let ix = 0, xs = f.c; ix < xs.length; ix++) save(xs[ix]!, sv, hv, targets);
+  else if (f.n === HOST && (f.t === "input" || f.t === "textarea")) fv.push(f.d, f.d.value, f.d.checked);
+  for (let ix = 0, xs = f.c; ix < xs.length; ix++) save(xs[ix]!, sv, hv, fv, targets);
 }
 
 /**
@@ -7328,18 +7347,34 @@ const WATCH: MutationObserverInit = {
   characterDataOldValue: true,
 };
 
-/** Undo the DOM changes `records` saw, last first. */
-function undoDom(records: MutationRecord[]): void {
+/**
+ * Undo the DOM changes `records` saw, last first. Under `head` (<head>), only those to compat's
+ * hoisted elements: what other code put there stays, as React leaves it.
+ */
+function undoDom(records: MutationRecord[], head: Node | null): void {
   for (let i = records.length - 1; i >= 0; i--) {
     const r = records[i]!,
       t: Any = r.target;
+    if (head !== null && t !== head && !ownNode(t, head)) continue;
     if (r.type === "childList") {
-      for (let j = r.addedNodes.length - 1; j >= 0; j--) t.removeChild(r.addedNodes[j]);
-      for (let j = 0; j < r.removedNodes.length; j++) t.insertBefore(r.removedNodes[j], r.nextSibling);
+      for (let j = r.addedNodes.length - 1; j >= 0; j--) {
+        const n: Any = r.addedNodes[j];
+        if (t !== head || n[FIBER] !== undefined) t.removeChild(n);
+      }
+      for (let j = 0; j < r.removedNodes.length; j++) {
+        const n: Any = r.removedNodes[j];
+        if (t !== head || n[FIBER] !== undefined) t.insertBefore(n, r.nextSibling);
+      }
     } else if (r.type === "attributes")
       r.oldValue === null ? t.removeAttribute(r.attributeName) : t.setAttribute(r.attributeName, r.oldValue);
     else t.data = r.oldValue;
   }
+}
+
+/** Whether node `n` under <head> is, or is inside, an element compat hoisted there. */
+function ownNode(n: Any, head: Node): boolean {
+  for (; n !== null && n !== head; n = n.parentNode) if (n[FIBER] !== undefined) return true;
+  return false;
 }
 
 /**

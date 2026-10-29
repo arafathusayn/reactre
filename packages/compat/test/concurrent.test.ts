@@ -510,6 +510,95 @@ describe("updates that suspend", () => {
       log.push("portal " + markup(out));
     }, false));
 
+  test("a transition undone puts back the document metadata it hoisted to <head>, and only that", async () => {
+    // A <head> for both libraries: React's (the fake nodes' document) and compat's (`document`).
+    const head = new FakeElement("HEAD");
+    const doc = document as Any;
+    Object.assign(fakeDoc, {
+      head,
+      querySelector: (sel: string) =>
+        sel === "head > title" ? (head.childNodes.find((n) => n.nodeName === "TITLE") ?? null) : null,
+    });
+    doc.head = head;
+    try {
+      await same(async ({ L, log, root, flushSync, task }) => {
+        head.textContent = "";
+        const d = data();
+        await d.ready("a");
+        let set: Any;
+        const Page = logs(L, log, "Page", ({ k }) => d.read(L, k));
+        // What other code puts in <head> as the transition renders (a CSS-in-JS library) stays.
+        const Styles = ({ k }: Any) => {
+          if (k === "b") {
+            const style =
+              head.childNodes.find((n) => n.nodeName === "STYLE") ?? head.appendChild(new FakeElement("STYLE"));
+            (style as FakeElement).setAttribute("data-k", k);
+          }
+          return null;
+        };
+        const App = () => {
+          const [k, s] = L.useState("a");
+          set = s;
+          return L.createElement(
+            "div",
+            null,
+            L.createElement(Styles, { k }),
+            L.createElement("title", null, "page " + k),
+            L.createElement("meta", { name: "page", content: k }),
+            k === "a" ? L.createElement("meta", { name: "only-a" }) : L.createElement("meta", { name: "only-b" }),
+            L.createElement(L.Suspense, { fallback: "loading" }, L.createElement(Page, { k })),
+          );
+        };
+        flushSync(() => root.render(L.createElement(App)));
+        log.push("head " + markup(head));
+        L.startTransition(() => set("b"));
+        await task();
+        log.push("waiting " + markup(head));
+        d.resolve("b");
+        await task();
+        log.push("resolved " + markup(head));
+      });
+    } finally {
+      delete fakeDoc.head;
+      delete fakeDoc.querySelector;
+      delete doc.head;
+    }
+  });
+
+  test("a transition undone puts back the form fields' values and checkedness it changed", () =>
+    same(async ({ L, log, root, flushSync, task, c }) => {
+      const d = data();
+      await d.ready("a");
+      let set: Any;
+      const fields = () => {
+        const all = nodes(c) as Any[];
+        const [text, box] = all.filter((n) => n.nodeName === "INPUT");
+        const area = all.find((n) => n.nodeName === "TEXTAREA");
+        log.push(`fields ${text.value} ${box.checked} ${area.value}`);
+      };
+      const Page = logs(L, log, "Page", ({ k }) => d.read(L, k));
+      const App = () => {
+        const [k, s] = L.useState("a");
+        set = s;
+        return L.createElement(
+          "form",
+          null,
+          L.createElement("input", { value: "text " + k, onChange() {} }),
+          L.createElement("input", { type: "checkbox", checked: k !== "a", onChange() {} }),
+          L.createElement("textarea", { value: "area " + k, onChange() {} }),
+          L.createElement(L.Suspense, { fallback: "loading" }, L.createElement(Page, { k })),
+        );
+      };
+      flushSync(() => root.render(L.createElement(App)));
+      fields();
+      L.startTransition(() => set("b"));
+      await task();
+      fields();
+      d.resolve("b");
+      await task();
+      fields();
+    }));
+
   test("an urgent update renders a transition that waits for data again, over it", () =>
     same(async ({ L, log, root, flushSync, snap, task }) => {
       const d = data();
