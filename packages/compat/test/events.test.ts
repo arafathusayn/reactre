@@ -55,6 +55,7 @@ class El extends FakeElement {
  * are, so React's value tracker can wrap them (it looks for them there).
  */
 class Field extends El {
+  type = "text";
   #value = "";
   #checked = false;
   get value(): string {
@@ -317,9 +318,8 @@ describe("onChange", () => {
   });
 
   // React fires onChangeCapture from the bubble phase, with onChange (one two-phase list after
-  // the other plugins' bubble handlers); compat fires it in the capture phase, before onInput's
-  // and onClick's bubble handlers.
-  test.todo("onChangeCapture runs after onInput's bubble handlers, as in React", () => {
+  // the other plugins' bubble handlers), not in the capture phase.
+  test("onChangeCapture runs after onInput's bubble handlers, as in React", () => {
     const log: string[] = [];
     render(h("input", { onInput: () => log.push("input"), onChangeCapture: () => log.push("change capture") }));
     const input = child(container);
@@ -328,13 +328,40 @@ describe("onChange", () => {
     expect(log).toEqual(["input", "change capture"]);
   });
 
-  // React fires onChange only for form fields (and custom elements); compat fires it for a change
-  // event on any element without a value tracker of its own.
-  test.todo("a change event on an element that is not a form field fires no onChange", () => {
+  // React fires onChange only for form fields and custom elements (ChangeEventPlugin).
+  test("a change event on an element that is not a form field fires no onChange", () => {
     const log: string[] = [];
     render(h("div", { onChange: () => log.push("change") }));
     fire(child(container), new Ev("change"));
     expect(log).toEqual([]);
+  });
+
+  test("a change event on a text field fires onChange when its value moved", () => {
+    const log: string[] = [];
+    render(h("input", { onChange: () => log.push("change") }));
+    const input = child(container);
+    userSets(input, "value", "a");
+    fire(input, new Ev("change"));
+    fire(input, new Ev("change"));
+    expect(log).toEqual(["change"]);
+  });
+
+  test("onChange fires for a custom element's change event, and never for a hidden input", () => {
+    const log: string[] = [];
+    render(
+      h(
+        "div",
+        null,
+        h("my-field", { onChange: () => log.push("custom") }),
+        h("input", { type: "hidden", onChange: () => log.push("hidden") }),
+      ),
+    );
+    const hidden = child(child(container), 1);
+    userSets(hidden, "value", "a");
+    fire(child(child(container)), new Ev("change"));
+    fire(hidden, new Ev("input"));
+    fire(hidden, new Ev("change"));
+    expect(log).toEqual(["custom"]);
   });
 });
 
@@ -427,20 +454,31 @@ describe("events that do not bubble", () => {
   });
 
   // React walks the fiber path for these (only scroll and scrollend stay on the target), so a
-  // <div onLoad> runs for an <img> inside it; compat calls the element's own handler only.
-  test.todo("onLoad on an ancestor runs for a descendant's load, as in React", () => {
+  // <div onLoad> runs for an <img> inside it.
+  test("onLoad on an ancestor runs for a descendant's load, as in React", () => {
     const log: string[] = [];
     render(h("div", { onLoad: () => log.push("div") }, h("img", { onLoad: () => log.push("img") })));
     fire(child(child(container)), new Ev("load", { bubbles: false }));
     expect(log).toEqual(["img", "div"]);
   });
-  // React's root listens to every non-delegated event in the capture phase; compat's own-element
-  // listener calls the bubble prop (onLoad) and never the capture one.
-  test.todo("onLoadCapture runs in the capture phase, outermost first, as in React", () => {
+  // React's root listens to every non-delegated event in the capture phase.
+  test("onLoadCapture runs in the capture phase, outermost first, as in React", () => {
     const log: string[] = [];
     render(h("div", { onLoadCapture: () => log.push("div") }, h("img", { onLoadCapture: () => log.push("img") })));
     fire(child(child(container)), new Ev("load", { bubbles: false }));
     expect(log).toEqual(["div", "img"]);
+  });
+
+  // React listens for load and error on every <img> it creates, whatever its props, but not on a
+  // <span>.
+  test("onLoad on an ancestor runs for an img with no onLoad of its own, and not for a span", () => {
+    const log: string[] = [];
+    render(h("div", { onLoad: () => log.push("div") }, h("img"), h("span")));
+    const div = child(container);
+    fire(child(div), new Ev("load", { bubbles: false }));
+    fire(child(div, 1), new Ev("load", { bubbles: false }));
+    fire(child(div), new Ev("load", { bubbles: false }));
+    expect(log).toEqual(["div", "div"]);
   });
 });
 
@@ -509,13 +547,26 @@ describe("enter and leave", () => {
     expect(log).toEqual([]);
   });
 
-  // React gives the end outside React's tree as the window; compat gives null.
-  test.todo("an enter or leave event's relatedTarget is the window when the pointer comes from outside", () => {
+  // React gives the end outside React's tree as the window.
+  test("an enter or leave event's relatedTarget is the window when the pointer comes from outside", () => {
     const seen: unknown[] = [];
-    render(h("b", { onMouseEnter: (e: { relatedTarget: unknown }) => seen.push(e.relatedTarget) }));
-    fire(child(container), new Ev("mouseover", { relatedTarget: null }));
-    expect(seen).toHaveLength(1);
-    expect(seen[0]).not.toBeNull();
+    const on = (e: { relatedTarget: unknown }) => seen.push(e.relatedTarget);
+    render(h("b", { onMouseEnter: on, onMouseLeave: on }));
+    const b = child(container);
+    // React's window is the target's document's defaultView.
+    const doc = b.ownerDocument as { defaultView?: unknown };
+    const had = "defaultView" in doc,
+      old = doc.defaultView,
+      win = {};
+    doc.defaultView = win;
+    try {
+      fire(b, new Ev("mouseover", { relatedTarget: null }));
+      fire(b, new Ev("mouseout", { relatedTarget: null }));
+      expect(seen).toEqual([win, win]);
+    } finally {
+      if (had) doc.defaultView = old;
+      else delete doc.defaultView;
+    }
   });
 });
 
@@ -618,9 +669,8 @@ describe("synthetic events", () => {
   });
 
   // React's isDefaultPrevented() is true after preventDefault() even when the native event is not
-  // cancelable (an input event, say); compat reads the native event's defaultPrevented, which
-  // stays false then.
-  test.todo("isDefaultPrevented is true after preventDefault on an event that cannot be canceled", () => {
+  // cancelable (an input event, say).
+  test("isDefaultPrevented is true after preventDefault on an event that cannot be canceled", () => {
     const seen: boolean[] = [];
     render(
       h("input", {

@@ -26,6 +26,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Fixed: a `<title>` rendered anywhere goes into `<head>` before the titles already there, as React places it, so the newest one sets the document's title (react-helmet-async's nested titles).
 - Fixed: a new `<img>` gets `srcSet` and `src` after its other props, as React sets them, so attributes such as `sizes` and `loading` apply before the image is requested (react-image-crop's markup).
 - Fixed: class components: `setState` in `componentWillMount` applies before the first render with no second render after it, and a class with a `getSnapshotBeforeUpdate` method gets no `componentWillMount` call, as in React.
+- Fixed: events follow react-dom's rules:
+  - `onChangeCapture` runs in the bubble phase with `onChange`, after the other bubble handlers.
+  - `onChange` fires only for text fields (React's list of input types), checkboxes, radios, selects, file inputs and custom elements. A `change` event on a text field fires it when the value moved.
+  - A non-bubbling event such as `load` runs the handlers of every element up the tree, and its capture handlers run in the capture phase. Elements React listens on, such as an `<img>`, need no handler of their own for that.
+  - The far end of an enter or leave event from outside the root is the window.
+  - `isDefaultPrevented()` is true after `preventDefault()`, even for an event that cannot be canceled.
 - Fixed: the resource hints follow react-dom's rules:
   - `preconnect` keys on `crossOrigin` too.
   - `preload` needs an `as`, always fetches fonts with CORS, and passes `integrity`, `nonce`, `referrerPolicy`, `imageSrcSet`, `imageSizes` and `media` on.

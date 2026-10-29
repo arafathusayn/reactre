@@ -4440,11 +4440,10 @@ function listenFor(dom: Any, name: string): void {
   const type = eventType(base);
   if (!PROP_OF.has(type)) PROP_OF.set(type, base);
   if (DIRECT.has(type)) {
-    const set: Set<string> = (dom[LISTENS] ??= new Set<string>());
-    if (!set.has(type)) {
-      set.add(type);
-      dom.addEventListener(type, direct);
-    }
+    // The capture phase is the root's; the bubble handlers run from the target's own listener,
+    // and an element under this one that fires the event gets one when it first does.
+    if (!capture) listenOwn(dom, type);
+    if (capture || (type !== "scroll" && type !== "scrollend")) ensure(type, true);
     return;
   }
   ensure(type, capture);
@@ -4509,14 +4508,15 @@ const SEEN_C = Symbol("seen capture");
 
 // #region Change tracking
 
-// Inputs whose onChange follows `input` events; checkboxes and radios follow
-// `click` (when their checked state changed), selects and files `change`.
+// Text fields, whose onChange follows `input` and `change` events (React's isTextInputElement):
+// textareas and these input types. Checkboxes and radios follow `click` (when their checked state
+// changed), selects, files and custom elements `change`, and other inputs fire no onChange.
+const TEXT_TYPES = new Set(
+  "color date datetime datetime-local email month number password range search tel text time url week".split(" "),
+);
 function textLike(el: Any): boolean {
   const tag = el.nodeName;
-  if (tag === "TEXTAREA") return true;
-  if (tag !== "INPUT") return false;
-  const t = el.type;
-  return t !== "checkbox" && t !== "radio" && t !== "file";
+  return tag === "TEXTAREA" || (tag === "INPUT" && TEXT_TYPES.has(el.type));
 }
 
 // React's value tracker: an input or textarea records the value last set
@@ -4544,13 +4544,12 @@ function track(dom: Any): void {
   });
 }
 
-// Whether the field's value moved since the tracker last saw it; records it
-// unless `peek` (the capture phase looks without taking the change).
-function changed(el: Any, peek: boolean): boolean {
+// Whether the field's value moved since the tracker last saw it; records it.
+function changed(el: Any): boolean {
   if (el[TRACKED] === undefined) return true;
   const v = checkable(el) ? (el.checked ? "true" : "false") : "" + el.value;
   if (v === el[TRACKED]) return false;
-  if (!peek) el[TRACKED] = v;
+  el[TRACKED] = v;
   return true;
 }
 
@@ -4573,11 +4572,19 @@ const ON_INPUT = ["onInput"],
 // The React props native event `type` fires on `target`, or null for none.
 // `f` is the target's fiber: only a host <input> can be a checkbox (blocks
 // never hold inputs), so a click elsewhere reads nothing from the DOM.
+// onChange comes in the bubble phase only, capture handlers and all, as React's ChangeEventPlugin
+// runs after the bubble phase's own handlers.
 function propsFor(type: string, target: Any, capture: boolean, f: Fiber): string[] | null {
-  if (type === "input") return textLike(target) && changed(target, capture) ? ON_INPUT_CHANGE : ON_INPUT;
-  if (type === "change") return textLike(target) || checkable(target) ? null : ON_CHANGE;
+  if (type === "input") return !capture && textLike(target) && changed(target) ? ON_INPUT_CHANGE : ON_INPUT;
+  if (type === "change") {
+    if (capture) return null;
+    const tag = target.nodeName;
+    if (tag === "SELECT" || (tag === "INPUT" && target.type === "file")) return ON_CHANGE;
+    if (textLike(target)) return changed(target) ? ON_CHANGE : null;
+    return tag !== "INPUT" && isCustom(tag.toLowerCase()) ? ON_CHANGE : null;
+  }
   const name = PROP_OF.get(type);
-  if (type === "click" && f.n === HOST && f.t === "input" && checkable(target) && changed(target, capture)) {
+  if (type === "click" && !capture && f.n === HOST && f.t === "input" && checkable(target) && changed(target)) {
     return name === undefined ? ON_CHANGE : [name, "onChange"];
   }
   if (name === undefined) return null;
@@ -4606,6 +4613,9 @@ function dispatch(e: Any, root: RootImpl, capture: boolean): void {
   if (node == null) return;
   const target: Fiber = node[FIBER];
   const type: string = e.type;
+  // An event that does not bubble reaches its target's own listener, which React adds to the
+  // elements that fire it whatever their props: added here, on the way down, when first needed.
+  if (capture && node === e.target && DIRECT.has(type) && LISTENS_FOR[node.nodeName]?.has(type)) listenOwn(node, type);
   const names = propsFor(type, node, capture, target);
   const over = !capture && OVER_OUT.has(type);
   if (names === null && !over && type !== "submit") return;
@@ -4617,19 +4627,13 @@ function dispatch(e: Any, root: RootImpl, capture: boolean): void {
     if (names !== null)
       for (let ix = 0, xs = names; ix < xs.length; ix++) {
         const name = xs[ix]!;
-        const prop = capture ? name + "Capture" : name;
-        // Element and handler pairs, innermost first: host fibers, and the
-        // elements of blocks on the way (entered at the event's target, or
-        // at a slot's parent element).
         const path: Any[] = [];
-        let from: Any = e.target;
-        for (let f: Fiber | null = target; f !== null; f = f.r) {
-          if (f.f & DEAD) continue;
-          if (f.n === HOST) {
-            if (typeof f.p[prop] === "function") path.push(f.d, f.p[prop]);
-          } else if (f.b !== null) blockHandlers(f, prop, from, path);
-          else if (f.n === SLOT) from = f.d;
+        // onChange's capture handlers run first, outermost first, in the bubble phase.
+        if (!capture && name === "onChange") {
+          handlersOn(target, "onChangeCapture", e.target, path);
+          reversePairs(path);
         }
+        handlersOn(target, capture ? name + "Capture" : name, e.target, path);
         if (path.length === 0) continue;
         // One synthetic event per prop, made only when some handler will see it.
         const syn = synthetic(e, name);
@@ -4649,6 +4653,33 @@ function dispatch(e: Any, root: RootImpl, capture: boolean): void {
   }
 }
 
+/**
+ * Push the element and handler pairs for `prop` on the fiber path from `target` up, innermost
+ * first: host fibers, and the elements of blocks on the way (entered at the event's target
+ * `from`, or at a slot's parent element).
+ */
+function handlersOn(target: Fiber, prop: string, from: Any, path: Any[]): void {
+  for (let f: Fiber | null = target; f !== null; f = f.r) {
+    if (f.f & DEAD) continue;
+    if (f.n === HOST) {
+      if (typeof f.p[prop] === "function") path.push(f.d, f.p[prop]);
+    } else if (f.b !== null) blockHandlers(f, prop, from, path);
+    else if (f.n === SLOT) from = f.d;
+  }
+}
+
+/** Reverse a path's element and handler pairs in place. */
+function reversePairs(path: Any[]): void {
+  for (let i = 0, j = path.length - 2; i < j; i += 2, j -= 2) {
+    const d = path[i],
+      fn = path[i + 1];
+    path[i] = path[j];
+    path[i + 1] = path[j + 1];
+    path[j] = d;
+    path[j + 1] = fn;
+  }
+}
+
 // #endregion
 
 // #region Enter and leave
@@ -4656,6 +4687,13 @@ function dispatch(e: Any, root: RootImpl, capture: boolean): void {
 // Props derived from over and out events, and the native types they come from.
 const ENTER_LEAVE = new Set(["onMouseEnter", "onMouseLeave", "onPointerEnter", "onPointerLeave"]);
 const OVER_OUT = new Set(["mouseover", "mouseout", "pointerover", "pointerout"]);
+
+/** The window of an event's target, as React finds it. */
+function windowOf(t: Any): Any {
+  if (t.window === t) return t;
+  const doc = t.ownerDocument;
+  return doc ? doc.defaultView : typeof window === "undefined" ? null : window;
+}
 
 /** The fiber of the nearest element at or above `node` that `root` rendered, or null. */
 function fiberAt(node: Any, root: RootImpl): Fiber | null {
@@ -4694,9 +4732,10 @@ function enterLeave(e: Any, root: RootImpl, type: string, target: Fiber): void {
   const left = a.filter((f) => !common.has(f));
   const shared = new Set(a);
   const entered = b.filter((f) => !shared.has(f)).reverse();
-  // An end's element: a fiber's node, or inside a block the element itself.
+  // An end's element: a fiber's node, or inside a block the element itself; outside the root, the
+  // window, as React gives it.
   const node = (f: Fiber | null, native: Any): Any =>
-    f === null ? null : f.b !== null ? (native.nodeType === 1 ? native : native.parentNode) : f.d;
+    f === null ? windowOf(e.target) : f.b !== null ? (native.nodeType === 1 ? native : native.parentNode) : f.d;
   const fromNode = node(from, from === target ? e.target : related),
     toNode = node(to, to === target ? e.target : related);
   const fire = (list: Fiber[], name: string, tgt: Any, rel: Any): void => {
@@ -4747,23 +4786,56 @@ function isControlled(f: Fiber): boolean {
 }
 
 /**
- * The listener for a non-bubbling event on its own element: call that element's handler only,
- * as React does for these events. One shared function, so adding it allocates nothing.
+ * The listener for a non-bubbling event on its own element: call the handlers on its fiber path,
+ * innermost first, as React does (only scroll and scrollend stay on the target). One shared
+ * function, so adding it allocates nothing.
  */
 function direct(this: Any, e: Any): void {
   const f: Fiber | undefined = this[FIBER];
   const name = PROP_OF.get(e.type);
   if (f === undefined || name === undefined || f.f & DEAD) return;
-  const fn = f.p[name];
-  if (typeof fn !== "function") return;
+  const path: Any[] = [];
+  if (e.type === "scroll" || e.type === "scrollend") {
+    if (typeof f.p[name] === "function") path.push(this, f.p[name]);
+  } else handlersOn(f, name, e.target, path);
+  if (path.length === 0) return;
   batch++;
   try {
     const syn = synthetic(e, name);
-    syn.currentTarget = this;
-    fn(syn);
+    for (let q = 0; q < path.length; q += 2) {
+      if (syn._stopped) break;
+      syn.currentTarget = path[q];
+      path[q + 1](syn);
+    }
+    syn.currentTarget = null;
   } finally {
     if (--batch === 0) afterEvent(undefined);
   }
+}
+
+/** Listen for non-bubbling event `type` on `dom` itself, once. */
+function listenOwn(dom: Any, type: string): void {
+  const set: Set<string> = (dom[LISTENS] ??= new Set<string>());
+  if (set.has(type)) return;
+  set.add(type);
+  dom.addEventListener(type, direct);
+}
+
+// The non-bubbling events React listens for on each element it creates, by tag.
+const MEDIA =
+  "abort canplay canplaythrough durationchange emptied encrypted ended error loadeddata loadedmetadata loadstart " +
+  "pause play playing progress ratechange resize seeked seeking stalled suspend timeupdate volumechange waiting";
+const LISTENS_FOR: Record<string, Set<string>> = {};
+for (const [tags, types] of [
+  ["IMG image EMBED SOURCE LINK", "error load"],
+  ["IFRAME OBJECT", "load"],
+  ["VIDEO AUDIO", MEDIA],
+  ["DIALOG", "beforetoggle toggle cancel close"],
+  ["DETAILS", "toggle"],
+  ["INPUT SELECT TEXTAREA", "invalid"],
+] as const) {
+  const set = new Set(types.split(" "));
+  for (const t of tags.split(" ")) LISTENS_FOR[t] = set;
 }
 
 // #endregion
@@ -4779,13 +4851,15 @@ const SYN_BASE: Any = {
   preventDefault(this: Any): void {
     this.nativeEvent.preventDefault();
     this.defaultPrevented = true;
+    this._prevented = true;
   },
   stopPropagation(this: Any): void {
     this.nativeEvent.stopPropagation();
     this._stopped = true;
   },
+  // True once preventDefault was called, though the native event cannot be canceled.
   isDefaultPrevented(this: Any): boolean {
-    return this.nativeEvent.defaultPrevented;
+    return this._prevented;
   },
   isPropagationStopped(this: Any): boolean {
     return this._stopped;
@@ -4948,6 +5022,8 @@ function synthetic(e: Any, name: string): Any {
   s.nativeEvent = e;
   s.currentTarget = null;
   s._stopped = false;
+  const dp = e.defaultPrevented;
+  s._prevented = dp != null ? !!dp : e.returnValue === false;
   s.type = SYN_TYPE[name] ?? e.type;
   return s;
 }
