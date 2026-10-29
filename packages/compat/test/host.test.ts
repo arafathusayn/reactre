@@ -916,18 +916,24 @@ describe("selects", () => {
 });
 
 describe("hydration", () => {
-  test("a server element is claimed, and its unclaimed children are removed", () => {
+  test("a server element is claimed; children it has that the client does not render are a mismatch", () => {
     const p = make("p"),
-      span = make("span"),
-      extra = make("em");
+      span = make("span");
     p.appendChild(span);
-    p.appendChild(extra);
     container.appendChild(p);
     hydrateRoot(container as unknown as Element, h("p", { title: "t" }, h("span")));
     expect(first()).toBe(p);
     expect(first(0)).toBe(span);
-    expect(html()).toBe("<p><span></span></p>");
     expect(p.getAttribute("title")).toBe("t");
+    // An extra child: the root renders on the client, with new nodes.
+    p.appendChild(make("em"));
+    const errors: unknown[] = [];
+    const c2 = make("div");
+    c2.appendChild(p);
+    hydrateRoot(c2 as unknown as Element, h("p", null, h("span")), { onRecoverableError: (e) => void errors.push(e) });
+    expect(c2.firstChild).not.toBe(p);
+    expect(html(c2)).toBe("<p><span></span></p>");
+    expect(errors).toHaveLength(1);
   });
 
   test("a claimed element keeps its server text node", () => {

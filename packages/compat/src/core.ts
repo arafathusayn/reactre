@@ -36,8 +36,8 @@
 //
 // What differs from React: rendering is synchronous (no time slicing, so a transition renders at
 // once and a suspended update shows its boundary's fallback, with the old content kept hidden
-// and its state intact), and hydration claims matching nodes in order and patches mismatches in
-// place instead of re-rendering on the client. The server renderer is @reactre/compat/server; the
+// and its state intact), and hydration runs in one pass, Suspense content included, writing the
+// client's attributes to the server's elements. The server renderer is @reactre/compat/server; the
 // hooks here serve it too (see "Server rendering" in the hooks region).
 //
 // The file reads top down, in folding regions: elements, children utilities, fibers, child
@@ -588,10 +588,9 @@ let cur: Fiber | null = null; // the function or class component rendering
 let hi = 0; // its next hook index
 let curHost: Fiber = null as Any; // the host that places nodes created now
 let curNs = HTML_NS; // the namespace new host elements are created in
-// Claiming server-rendered nodes instead of creating them: then the list mount that records each
-// child's place for useId (forkRun, which hydrateRoot hands its root, so apps that never hydrate
-// leave it out), else false.
-let hydrating: typeof forkRun | false = false;
+// Claiming server-rendered nodes instead of creating them: then what hydration does (HYDRATION,
+// which hydrateRoot hands its root, so apps that never hydrate leave it out), else false.
+let hydrating: Hydration | false = false;
 
 /** Whether `v` is a promise or any object with a `then` method, as React tests for one. */
 const isThenable = (v: Any): boolean => v !== null && typeof v === "object" && typeof v.then === "function";
@@ -1014,7 +1013,7 @@ function reconcile(p: Fiber, children: Any): void {
     } else if (i <= ne)
       // Only new children in the middle (an insertion, or a mount), created in order. A hydrating
       // mount also records where each one sits, for useId's tree ids.
-      moved = hydrating ? hydrating(p, items, children, i, ne, nc) : middle(p, items, i, ne, null, nc);
+      moved = hydrating ? hydrating.fork(p, items, children, i, ne, nc) : middle(p, items, i, ne, null, nc);
     patchRun(items, ne + 1, n - 1, old, tail, nc);
   } catch (e) {
     // Keep every live fiber tracked, so the boundary that catches this can
@@ -1406,7 +1405,7 @@ function create(it: Any, p: Fiber, key: Key): Fiber {
   if (typeof it !== "object") {
     f = new Fiber(TEXT, null, key, p, p.o);
     f.p = "" + it;
-    f.d = (hydrating && claimText(f.p)) || document.createTextNode(f.p);
+    f.d = (hydrating && hydrating.text(f)) || document.createTextNode(f.p);
     f.d[OWN] = curHost;
     if (curHost.f & FRAGREF) fragmentRefs!.hosts(f, true);
     return f;
@@ -1748,7 +1747,7 @@ function runHost(f: Fiber, old: Props | null, mount: boolean): void {
   if (mount) {
     const type: string = f.t;
     f.ns = type === "svg" ? SVG_NS : type === "math" ? MATH_NS : curNs;
-    dom = hydrating ? claimElement(f, type) : null;
+    dom = hydrating ? hydrating.element(f, type) : null;
     if (dom === null) {
       // `is` must be given at creation: a customized built-in cannot be upgraded later.
       dom =
@@ -1787,9 +1786,9 @@ function runHost(f: Fiber, old: Props | null, mount: boolean): void {
     curNs = pn;
   }
   if (f.f & CLAIMED) {
-    // Hydration: nodes the server rendered that nothing claimed go.
+    // Hydration: server nodes nothing claimed are a mismatch.
     f.f &= ~CLAIMED;
-    if (f.tx === null && p.dangerouslySetInnerHTML == null) removeUnclaimed(dom, f);
+    if (f.tx === null && p.dangerouslySetInnerHTML == null) (hydrating as Hydration).done(f);
   }
   if (f.f & STRUCT) place(f);
   // After the children: the options must exist before the value can select one.
@@ -1826,8 +1825,8 @@ function hostChildren(f: Fiber, dom: Any, p: Any, old: Props | null): void {
     if (f.c.length) removeAll(f);
     const s = html.__html ?? "";
     if (old === null || old["dangerouslySetInnerHTML"]?.__html !== s || f.tx !== null) {
-      // Server HTML that already matches is left alone, so its nodes keep their identity.
-      if (!(hydrating && dom.innerHTML === s)) dom.innerHTML = s;
+      // A claimed element keeps the server's HTML, as React's production client keeps it.
+      if (!(f.f & CLAIMED)) dom.innerHTML = s;
     }
     f.tx = null;
     return;
@@ -2857,65 +2856,250 @@ function blockHandlers(f: Fiber, prop: string, from: Any, out: Any[]): void {
 
 // #region Hydration
 
-// Hydration walks the server's nodes alongside the first render: each host (and the root)
-// keeps a cursor (Fiber.hc) at its next unclaimed child. A matching element or text is claimed
-// and patched; a mismatch is left for removeUnclaimed and a new node is created in its place.
+// Hydration walks the server's nodes alongside the first render, as React's client does: each
+// host (and the root) keeps a cursor (Fiber.hc) at its next unclaimed child, and a host claimed
+// from the server is marked CLAIMED while its children render. A node that does not match is a
+// mismatch: React's error is queued for onRecoverableError and MISMATCH is thrown up to the
+// nearest Suspense boundary the server rendered, or the root, which renders on the client
+// instead. All of it is in HYDRATION, which only hydrateRoot reaches.
 
-// The next server node in the host being hydrated, skipping comments.
-// Comments (React's text separators and Suspense markers) and doctypes are never claimed.
-function cursor(h: Fiber): Any {
-  let x = h.hc;
-  while (x !== null && (x.nodeType === 8 || x.nodeType === 10)) x = x.nextSibling;
+/** What a mismatch throws, up to the boundary or root that recovers from it. */
+const MISMATCH = { hydration: "mismatch" };
+
+// The errors hydration found, each with its component stack, until the root reports them.
+let hydrationErrors: Any[] | null = null;
+
+/** Queue React's error for a mismatch at `f` and throw MISMATCH. */
+function mismatch(f: Fiber, text: boolean): never {
+  const e = new Error(
+    `Hydration failed because the server rendered ${text ? "text" : "HTML"} didn't match the client. As a result this tree will be regenerated on the client. This can happen if a SSR-ed Client Component used:\n\n- A server/client branch \`if (typeof window !== 'undefined')\`.\n- Variable input such as \`Date.now()\` or \`Math.random()\` which changes each time it's called.\n- Date formatting in a user's locale which doesn't match the server.\n- External changing data without sending a snapshot of it along with the HTML.\n- Invalid HTML tag nesting.\n\nIt can also happen if the client has a browser extension installed which messes with the HTML before React loaded.\n\nhttps://react.dev/link/hydration-mismatch`,
+  );
+  (hydrationErrors ??= []).push(e, stackOf(e, f));
+  // A host that claimed nothing has no node for the unmount that follows to remove.
+  f.d ??= { parentNode: null };
+  throw MISMATCH;
+}
+
+/**
+ * The first node from `x` on that hydration reads, as React's getNextHydratable finds it:
+ * elements, texts and Suspense boundaries' start markers. Other comments (text separators, form
+ * state markers, Activity's) and doctypes are passed over; a boundary's end marker ends its
+ * content, so null.
+ */
+function hydratable(x: Any): Any {
+  for (; x !== null; x = x.nextSibling) {
+    const t = x.nodeType;
+    if (t === 1 || t === 3) return x;
+    if (t === 8) {
+      const d = x.data;
+      if (d === "$" || d === "$!" || d === "$?" || d === "$~") return x;
+      if (d === "/$") return null;
+    }
+  }
+  return null;
+}
+
+/** Whether host `h` passes over server nodes that do not match, as React's root and singletons do. */
+const passes = (h: Fiber): boolean => h.n === ROOT || h.t === "html" || h.t === "head" || h.t === "body";
+
+/** Whether server node `x` is an `<input type="hidden">`, which React passes over anywhere. */
+const hiddenInput = (x: Any): boolean => x.nodeName === "INPUT" && x.getAttribute("type") === "hidden";
+
+// React's normalizeMarkupForTextOrAttribute: line breaks as \n, no NUL or U+FFFD.
+const normalize = (s: string): string => s.replace(/\r\n?/g, "\n").replace(/\u0000|\uFFFD/g, "");
+
+/** Whether server text `server` stands for `client`, as React's checkForUnmatchedText compares. */
+const sameText = (server: string, client: string): boolean =>
+  server === client || normalize(server) === normalize(client);
+
+/**
+ * The server's element for host fiber `f`, as React's canHydrateInstance finds it: the next one,
+ * or in the root and the document's singletons the next with `f`'s tag. A host that is not the
+ * server's (a portal's) claims nothing, nor does metadata that goes to <head>. A claimed element
+ * whose content is one text checks it, and keeps the server's text, as React does.
+ */
+function claimElement(f: Fiber, type: string): Any {
+  const h = curHost;
+  if (!(h.f & CLAIMED) || hoistable(f, f.p)) return null;
+  const p = f.p,
+    pass = passes(h),
+    tag = type.toLowerCase();
+  for (let x = hydratable(h.hc); x !== null && x.nodeType === 1; x = hydratable(x.nextSibling)) {
+    const hidden = hiddenInput(x);
+    if (x.nodeName.toLowerCase() !== tag) {
+      if (!pass && !hidden) break;
+    } else if (
+      pass ||
+      !hidden ||
+      (p.type === "hidden" && x.getAttribute("name") === (p.name == null ? null : "" + p.name))
+    ) {
+      h.hc = x.nextSibling;
+      f.hc = x.firstChild;
+      const ch = p.children,
+        t = typeof ch;
+      if (
+        (t === "string" || t === "number" || t === "bigint") &&
+        type !== "textarea" &&
+        p.dangerouslySetInnerHTML == null
+      ) {
+        if (p.suppressHydrationWarning !== true && !sameText(x.textContent, "" + ch)) mismatch(f, true);
+        f.tx = "" + ch;
+      }
+      return x;
+    }
+  }
+  return mismatch(f, false);
+}
+
+/**
+ * The server's text node for text fiber `f`, as React's canHydrateTextInstance finds it. Its text
+ * must match (or the parent suppress the warning); the server's stays. An empty text is not the
+ * server's: it writes none.
+ */
+function claimText(f: Fiber): Any {
+  const h = curHost,
+    s: string = f.p;
+  if (!(h.f & CLAIMED) || s === "") return null;
+  const pass = passes(h);
+  let x = hydratable(h.hc);
+  while (x !== null && x.nodeType !== 3) x = pass || hiddenInput(x) ? hydratable(x.nextSibling) : null;
+  if (x === null) mismatch(f, false);
+  if (!(h.n === HOST && h.p.suppressHydrationWarning === true) && !sameText(x.data, s)) mismatch(f, true);
+  h.hc = x.nextSibling;
   return x;
 }
 
 /**
- * The server's element for host fiber `f` if the cursor is on one with its tag, else null (and
- * `f` creates its own). A claimed element's own children get a cursor of their own.
+ * After a claimed host's children: a server node left over is a mismatch, except where React
+ * does not look (<form>, <button>, text content, and the document's singletons).
  */
-function claimElement(f: Fiber, type: string): Any {
-  const h = curHost;
-  if (h.hc === null) return null;
-  const x = cursor(h);
-  // HTML tags compare in lower case (the parser lower-cases them); SVG keeps camelCase tags.
-  if (x === null || x.nodeType !== 1 || x.localName !== (f.ns === HTML_NS ? type.toLowerCase() : type)) {
-    // A mismatch does not advance the cursor: a later sibling may still claim this node.
-    h.hc = x;
-    return null;
-  }
-  h.hc = x.nextSibling;
-  f.hc = x.firstChild;
+function hostDone(f: Fiber): void {
+  const t = f.t;
+  if (t !== "form" && t !== "button" && t !== "textarea" && t !== "noscript" && !passes(f) && hydratable(f.hc) !== null)
+    mismatch(f, false);
+  f.hc = null;
+}
+
+/** The end marker of the server's Suspense boundary that starts at `start`, or null. */
+function boundaryEnd(start: Any): Any {
+  let depth = 0,
+    x = start.nextSibling;
+  for (; x !== null; x = x.nextSibling)
+    if (x.nodeType === 8) {
+      const d = x.data;
+      if (d === "/$") {
+        if (depth === 0) break;
+        depth--;
+      } else if (d[0] === "$") depth++;
+    }
   return x;
 }
 
-/** The server's text node for text `s` if the cursor is on one (patched to `s`), else null. */
-function claimText(s: string): Any {
-  const h = curHost;
-  if (h.hc === null) return null;
-  const x = cursor(h);
-  if (x === null || x.nodeType !== 3) {
-    h.hc = x;
-    return null;
+/**
+ * Mount Suspense boundary `f` while hydrating, as React does: it claims the boundary the server
+ * rendered (else a mismatch) and hydrates its content. When that content does not match, the
+ * server could not finish it (`<!--$!-->`, or `<!--$?-->` still pending), or it suspends, the
+ * boundary drops the server's nodes, markers and all, and renders on the client.
+ */
+function hydrateSuspense(f: Fiber): void {
+  const h = curHost,
+    hy = hydrating,
+    start = hydratable(h.hc);
+  if (start === null || start.nodeType !== 8) return mismatch(f, false);
+  const end = boundaryEnd(start);
+  if (start.data === "$!" || start.data === "$?") {
+    // React's error for a boundary the server could not finish, with the server's digest.
+    const t = start.nextSibling,
+      digest = t !== null && t.nodeType === 1 ? (t.getAttribute("data-dgst") ?? undefined) : undefined;
+    if (digest !== "") {
+      const e: Any = new Error(
+        "The server could not finish this Suspense boundary, likely due to an error during server rendering. Switched to client rendering.",
+      );
+      e.stack = "";
+      e.digest = digest;
+      (hydrationErrors ??= []).push(e, null);
+    }
+  } else
+    try {
+      h.hc = start.nextSibling;
+      suspense(f);
+      // Server nodes the content did not claim: a mismatch at the boundary.
+      if (hydratable(h.hc) !== null) mismatch(f, false);
+      h.hc = end === null ? null : end.nextSibling;
+      return;
+    } catch (e) {
+      if (e !== MISMATCH && !isThenable(e)) throw e;
+      // Suspended: the fallback shows, and the content renders when the promise settles.
+      if (e !== MISMATCH) f.x = e;
+      if (f.s !== null) {
+        unmount(f.s, true);
+        f.s = null;
+        f.c = NO_FIBERS;
+      }
+    }
+  h.hc = end === null ? null : end.nextSibling;
+  for (let x = start; x !== null;) {
+    const next = x.nextSibling;
+    x.parentNode.removeChild(x);
+    x = x === end ? null : next;
   }
-  if (x.data !== s) {
-    // Adjacent texts (`{a}{b}`) arrive from the server as one node: split off this one's part,
-    // and the rest is left for the next text to claim.
-    if (s !== "" && x.data.startsWith(s)) x.splitText(s.length);
-    else x.data = s;
+  hydrating = false;
+  try {
+    suspense(f);
+  } finally {
+    hydrating = hy;
   }
-  h.hc = x.nextSibling;
-  return x;
 }
 
-/** After hydrating host `h`: remove the server's children nothing claimed (comments stay). */
-function removeUnclaimed(dom: Any, h: Fiber): void {
-  for (let x = dom.firstChild; x !== null;) {
-    const nx = x.nextSibling;
-    if (x[OWN] !== h && x.nodeType !== 8) dom.removeChild(x);
-    x = nx;
+/**
+ * After a hydrating root's first render (or its throw): a mismatch renders the root on the
+ * client, as React does, and so does a suspension or an error, the server's nodes going first.
+ * Then the errors hydration found go to onRecoverableError with the layout effects, unless the
+ * root failed. Returns what the root still has to handle.
+ */
+function hydrateDone(f: Fiber, thrown: Any): Any {
+  f.f &= ~CLAIMED;
+  f.hc = null;
+  if (thrown !== null) {
+    removeAll(f);
+    // A whole document keeps its doctype and the nodes of others (a browser extension's).
+    if (f.d.nodeType !== 9) f.d.textContent = "";
+    if (thrown === MISMATCH) {
+      hydrating = false;
+      thrown = null;
+      try {
+        reconcile(f, f.p);
+      } catch (e) {
+        thrown = e;
+      }
+    }
   }
-  h.hc = null;
+  const errors = hydrationErrors;
+  hydrationErrors = null;
+  // A root that fails for good reports its error alone, as React's does.
+  if (errors !== null && (thrown === null || isThenable(thrown)))
+    later(f, () => {
+      const report = f.o.opts.onRecoverableError;
+      for (let i = 0; i < errors.length; i += 2) {
+        if (report) callReport(report, errors[i], { componentStack: errors[i + 1] });
+        else if (typeof reportError === "function") reportError(errors[i]);
+        else console.error(errors[i]);
+      }
+    });
+  return thrown;
 }
+
+/** What hydration does, which hydrateRoot hands its root (see `hydrating`). */
+const HYDRATION = {
+  fork: forkRun,
+  element: claimElement,
+  text: claimText,
+  done: hostDone,
+  suspense: hydrateSuspense,
+  root: hydrateDone,
+  id: treeId,
+};
+type Hydration = typeof HYDRATION;
 
 // #endregion
 
@@ -2932,8 +3116,8 @@ export interface Root {
 /**
  * Options for createRoot and hydrateRoot. `identifierPrefix` prefixes useId's ids,
  * `onUncaughtError` receives an error no boundary caught, and `onCaughtError` one an error
- * boundary caught (class support reports it). `onRecoverableError` is accepted and never called:
- * hydration patches mismatches instead of recovering from them.
+ * boundary caught (class support reports it). `onRecoverableError` gets what hydration recovered from,
+ * as React's does: a mismatch, or a boundary the server could not finish.
  */
 export interface RootOptions {
   identifierPrefix?: string;
@@ -2949,8 +3133,8 @@ class RootImpl implements Root {
   /** identifierPrefix, for useId. */
   readonly prefix: string;
   readonly opts: RootOptions;
-  /** Whether the first render hydrates the container's server HTML: its list mount if so. */
-  hydrate: typeof forkRun | false = false;
+  /** Whether the first render hydrates the container's server HTML: what hydration does if so. */
+  hydrate: Hydration | false = false;
   /** Whether the first render has started (it clears or hydrates the container once). */
   mounted = false;
   /** The event listener on each element this root listens on: its container and portals'. */
@@ -3005,15 +3189,16 @@ export function createRoot(container: Element | DocumentFragment, options: RootO
 }
 
 /**
- * A root that adopts the server-rendered HTML in `container`: the first
- * render claims matching nodes in order, patches text and attributes that
- * differ, and replaces nodes that do not match. Unlike React, the first render runs before
- * hydrateRoot returns.
+ * A root that adopts the server-rendered HTML in `container`: the first render claims the
+ * server's nodes in order, as React's client does. Where they do not match, the nearest Suspense
+ * boundary the server rendered (else the root) renders on the client instead, and
+ * onRecoverableError hears of it. Unlike React, the first render runs before hydrateRoot returns,
+ * Suspense content included.
  */
 export function hydrateRoot(container: Element | Document, children: Any, options: RootOptions = {}): Root {
   const r = new RootImpl(container, options);
   roots.add(r);
-  r.hydrate = forkRun;
+  r.hydrate = HYDRATION;
   r.render(children);
   // Hydrate now, so the server's nodes are claimed before code after this call can change them.
   flushWork(true);
@@ -3039,6 +3224,7 @@ function runRoot(f: Fiber): void {
     if (r.hydrate) {
       hydrating = r.hydrate;
       f.hc = f.d.firstChild;
+      f.f |= CLAIMED;
     } else f.d.textContent = "";
   }
   try {
@@ -3050,10 +3236,8 @@ function runRoot(f: Fiber): void {
       }
     }
     if (hydrating) {
+      thrown = hydrating.root(f, thrown);
       hydrating = ph2;
-      // A whole document keeps its unclaimed nodes: browser extensions and third-party scripts
-      // add nodes to it that must stay.
-      if (f.d.nodeType !== 9) removeUnclaimed(f.d, f);
     }
     if (thrown !== null) {
       if (isThenable(thrown)) thrown.then(retry(f), retry(f));
@@ -3260,6 +3444,8 @@ export interface ClassCore {
   readonly RERENDER: number;
   readonly DEAD: number;
   readonly NO_CONTEXT: object;
+  /** What a hydration mismatch throws: it goes past error boundaries to the boundary or root that recovers. */
+  readonly MISMATCH: object;
   reconcile(f: Any, children: Any): void;
   removeAll(f: Any): void;
   readContext(f: Any, ctx: Any): Any;
@@ -3307,6 +3493,7 @@ export function __installClasses(make: (core: ClassCore) => ClassSupport): void 
     RERENDER,
     DEAD,
     NO_CONTEXT,
+    MISMATCH,
     reconcile,
     removeAll: (f) => removeAll(f),
     readContext,
@@ -3966,6 +4153,11 @@ function frag(p: Fiber, k: Key): Fiber {
  * in f.x) shows the fallback until it settles, then the boundary renders again.
  */
 function runSuspense(f: Fiber): void {
+  if (hydrating && f.s === null) hydrating.suspense(f);
+  else suspense(f);
+}
+
+function suspense(f: Fiber): void {
   let thrown = f.x;
   f.x = null;
   let primary: Fiber | null = f.s;
@@ -3999,8 +4191,9 @@ function runSuspense(f: Fiber): void {
       }
       return;
     } catch (e) {
-      // Errors pass through to an error boundary; only promises suspend.
-      if (!isThenable(e)) throw e;
+      // Errors pass through to an error boundary; only promises suspend. While hydrating, what
+      // the boundary does next is hydrateSuspense's to decide.
+      if (!isThenable(e) || hydrating) throw e;
       thrown = e;
     }
   }
@@ -4980,7 +5173,7 @@ export function useId(): string {
       server !== null
         ? server.id()
         : hydrating
-          ? treeId(h)
+          ? hydrating.id(h)
           : "_" + h.f.o.prefix + "r_" + (clientIds++).toString(32) + "_";
   }
   return h.v;

@@ -709,32 +709,72 @@ describe("hydration", () => {
     expect(div.childNodes).toEqual([span!, i!]);
   });
 
-  test("texts the server merged into one node are split between them", () => {
+  // Mismatches are compared with React's own client in client.test.ts.
+  test("texts the server merged into one node do not match: the root renders on the client", () => {
     container.innerHTML = "<p>helloworld</p>";
-    const text = container.firstChild!.firstChild as FakeText;
-    hydrate(h("p", null, "hello", "world"));
-    expect(container.firstChild!.firstChild).toBe(text);
+    const p = container.firstChild;
+    const seen: string[] = [];
+    hydrateRoot(container as unknown as Element, h("p", null, "hello", "world"), {
+      onRecoverableError: (e, info) => void seen.push((e as Error).message.slice(0, 56), info.componentStack!),
+    });
+    expect(container.firstChild).not.toBe(p);
     expect(container.firstChild!.childNodes.map((n) => (n as FakeText).data)).toEqual(["hello", "world"]);
+    // The component stack is checked against React's in ./client.test.ts.
+    expect(seen[0]).toBe("Hydration failed because the server rendered text didn't");
   });
 
-  test("a text that differs is patched; a node that does not match is replaced", () => {
-    container.innerHTML = "<p>server<i>2</i></p><span>extra</span>";
-    const p = container.firstChild as FakeElement;
-    const [text, i] = p.childNodes;
-    hydrate(h("p", null, "client", h("b", null, "1"), h("i", null, "2"), "tail"));
-    expect(html()).toBe("<p>client<b>1</b><i>2</i>tail</p>");
-    expect(container.firstChild).toBe(p);
-    expect(p.firstChild).toBe(text!);
-    // The <i> the <b> did not match is still claimed by the <i> after it.
-    expect(p.childNodes[2]).toBe(i!);
+  test("without onRecoverableError, a mismatch goes to reportError, else to console.error", () => {
+    const seen: unknown[] = [];
+    const real = globalThis.reportError,
+      log = console.error;
+    try {
+      globalThis.reportError = (e) => void seen.push("reportError", (e as Error).message.slice(0, 17));
+      container.innerHTML = "<p>a</p>";
+      hydrateRoot(container as unknown as Element, h("b", null, "a"));
+      (globalThis as { reportError?: unknown }).reportError = undefined;
+      console.error = (e: Error) => void seen.push("console.error", e.message.slice(0, 17));
+      container.innerHTML = "<p>a</p>";
+      hydrateRoot(container as unknown as Element, h("b", null, "a"));
+    } finally {
+      globalThis.reportError = real;
+      console.error = log;
+    }
+    expect(seen).toEqual(["reportError", "Hydration failed ", "console.error", "Hydration failed "]);
+    expect(html()).toBe("<b>a</b>");
   });
 
-  test("a text where the server has an element is created, and the element still claimed", () => {
+  // React keeps the server's HTML of a boundary that suspends while hydrating and hydrates it once
+  // the promise settles; compat drops it, shows the fallback, then renders the content.
+  test("a boundary that suspends while hydrating shows its fallback, then its content", async () => {
+    container.innerHTML = "<main><!--$--><p>a</p><!--/$--><b>b</b></main>";
+    const b = container.firstChild!.childNodes[3];
+    let done = false,
+      resolve!: () => void;
+    const p = new Promise<void>((r) => (resolve = r));
+    function Wait() {
+      if (!done) throw p;
+      return h("p", null, "a");
+    }
+    hydrate(h("main", null, h(Suspense, { fallback: h("i", null, "…") }, h(Wait)), h("b", null, "b")));
+    expect(html()).toBe("<main><i>…</i><b>b</b></main>");
+    expect(container.firstChild!.childNodes[1]).toBe(b!);
+    done = true;
+    resolve();
+    await new Promise((r) => setTimeout(r, 350));
+    flushSync();
+    expect(html()).toBe("<main><p>a</p><b>b</b></main>");
+  });
+
+  test("a text where the server has an element does not match", () => {
     container.innerHTML = "<p><b>x</b></p>";
     const b = container.firstChild!.firstChild;
-    hydrate(h("p", null, "t", h("b", null, "x")));
+    const errors: unknown[] = [];
+    hydrateRoot(container as unknown as Element, h("p", null, "t", h("b", null, "x")), {
+      onRecoverableError: (e) => void errors.push(e),
+    });
     expect(html()).toBe("<p>t<b>x</b></p>");
-    expect(container.firstChild!.childNodes[1]).toBe(b!);
+    expect(container.firstChild!.childNodes[1]).not.toBe(b!);
+    expect(errors).toHaveLength(1);
   });
 
   test("SVG tags are matched with their case", () => {

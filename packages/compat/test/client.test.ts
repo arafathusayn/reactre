@@ -7,7 +7,7 @@
 // ids useId gives while hydrating server HTML, the rows and their state when keys repeat, and the
 // component stacks errors are reported with.
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { FakeElement, FakeNode, FakeText, HTML_NS, installFakeDocument } from "@reactre/testdom";
 
@@ -24,8 +24,14 @@ const prevEnv = process.env["NODE_ENV"];
 process.env["NODE_ENV"] = "production";
 const React: Lib = await load("react");
 const ReactDOM: Any = await load("react-dom");
-const ReactClient: Any = await load("react-dom/client");
 const ReactServer: Any = await load("react-dom/server.browser");
+// React's client installs its own handlers for preload, preconnect and the rest, which React's
+// server builds a later file loads hand what they cannot place to: the ones before it go back
+// after this file.
+const internals = ReactDOM.__DOM_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE;
+const dispatcher = internals.d;
+afterAll(() => void (internals.d = dispatcher));
+const ReactClient: Any = await load("react-dom/client");
 if (prevEnv === undefined) delete process.env["NODE_ENV"];
 else process.env["NODE_ENV"] = prevEnv;
 
@@ -44,12 +50,21 @@ function extend(target: object, props: Record<string, PropertyDescriptor>): void
   });
 }
 
-// What hydration reads: an element's localName and a text's splitText. What React's client reads
+// What hydration reads: an element's localName and type, and a text's splitText. What React's client reads
 // of the document: its window (for the focused element and the selection) and its listeners.
 extend(FakeElement.prototype, {
   localName: {
     get(this: FakeElement) {
       return this.namespaceURI === HTML_NS ? this.tagName.toLowerCase() : this.tagName;
+    },
+  },
+  // An input's type, which hydration reads to pass over a hidden one.
+  type: {
+    get(this: FakeElement) {
+      return this.getAttribute("type") ?? "";
+    },
+    set(this: FakeElement, v: string) {
+      this.setAttribute("type", v);
     },
   },
 });
@@ -568,6 +583,286 @@ describe("component stacks", () => {
       const Row = () => (L === Compat ? Compat.__block(T, null, [h(Boom)]) : h("div", null, h("span", null, h(Boom))));
       return h("section", null, h(Row));
     });
+  });
+});
+
+// #endregion
+
+// #region Hydration mismatches
+
+describe("hydration mismatches", () => {
+  /** An error's code: React's are minified (#418 and its argument), compat's carry the text. */
+  const code = (e: Any): string => {
+    const m = /^Minified React error #(\d+);[^?]*(?:\?args\[\]=(\w+))?/.exec(e.message);
+    if (m) return m[1] + (m[2] ? " " + m[2] : "");
+    if (e.message.startsWith("Hydration failed because the server rendered text didn't match")) return "418 text";
+    if (e.message.startsWith("Hydration failed because the server rendered HTML didn't match")) return "418 HTML";
+    if (e.message.startsWith("The server could not finish this Suspense boundary")) return "419";
+    return e.message;
+  };
+
+  /**
+   * Renders `server(React)` on React's server, hydrates that HTML with `client(L, log)` on React's
+   * client and on compat's, and expects the same: the markup after, which of the server's nodes
+   * stayed (Y) or were replaced (n), and the log: what onRecoverableError got, component stack
+   * included, in order with the effects and anything else the tree logs.
+   */
+  async function recovers(
+    server: (L: Lib) => Any,
+    client: (L: Lib, log: string[]) => Any,
+    options: Record<string, Any> = {},
+  ): Promise<{ dom: string; kept: string; log: string[] }> {
+    const html = ReactServer.renderToString(server(React), options);
+    const run = async (L: Lib, hydrate: (c: Any, el: Any, o: Any) => void) => {
+      const c = box();
+      c.innerHTML = html;
+      const before = nodes(c);
+      const log: string[] = [];
+      hydrate(c, client(L, log), {
+        onRecoverableError: (e: Any, info: Any) =>
+          void log.push(`recoverable ${code(e)}${e.digest === undefined ? "" : " " + e.digest}${info.componentStack}`),
+        onCaughtError: (e: Any) => void log.push("caught " + code(e)),
+        onUncaughtError: (e: Any) => void log.push("uncaught " + code(e)),
+      });
+      await tasks();
+      return {
+        dom: markup(c),
+        kept: nodes(c)
+          .map((n) => (before.includes(n) ? "Y" : "n"))
+          .join(""),
+        log,
+      };
+    };
+    const react = await run(React, (c, el, o) => ReactDOM.flushSync(() => ReactClient.hydrateRoot(c, el, o)));
+    const compat = await run(Compat, (c, el, o) => Compat.hydrateRoot(c, el, o));
+    expect(compat).toEqual(react);
+    return compat;
+  }
+
+  /** A component that logs its layout and passive effects. */
+  const Effects = (L: Lib) =>
+    function Effects(props: Any) {
+      L.useLayoutEffect(() => void props.log.push("layout " + props.n), []);
+      L.useEffect(() => void props.log.push("passive " + props.n), []);
+      return props.children ?? null;
+    };
+
+  test("an element that does not match renders the root on the client, reported after layout effects", async () => {
+    const r = await recovers(
+      (L) => L.createElement("div", null, L.createElement("p", null, "a"), L.createElement("b", null, "x")),
+      (L, log) => {
+        const h = L.createElement,
+          E = Effects(L);
+        // An error boundary does not catch a mismatch.
+        class Boundary extends L.Component<Any> {
+          static getDerivedStateFromError() {
+            return {};
+          }
+          render() {
+            return this.props.children;
+          }
+        }
+        function Row() {
+          return h("span", null, "a");
+        }
+        return h(Boundary, null, h("div", null, h(E, { log, n: 1 }), h(Row), h("b", null, "x")));
+      },
+    );
+    expect(r.kept).toBe("nnnnn");
+    expect(r.log[1]).toMatch(/^recoverable 418 HTML\n {4}at span \(<anonymous>\)\n {4}at Row \(/);
+  });
+
+  test("text: a text-only element's, a text node's, and a text where an element was", async () => {
+    const h = (L: Lib) => L.createElement;
+    await recovers(
+      (L) => h(L)("div", null, h(L)("p", null, "a")),
+      (L) => h(L)("div", null, h(L)("p", null, "b")),
+    );
+    await recovers(
+      (L) => h(L)("div", null, h(L)("p", null, "a", h(L)("i"))),
+      (L) => h(L)("div", null, h(L)("p", null, "b", h(L)("i"))),
+    );
+    await recovers(
+      (L) => h(L)("div", null, "t"),
+      (L) => h(L)("div", null, h(L)("b")),
+    );
+    await recovers(
+      (L) => h(L)("div", null, h(L)("b")),
+      (L) => h(L)("div", null, "t", h(L)("b")),
+    );
+    // Line breaks and U+FFFD the server normalized match; suppressHydrationWarning keeps the
+    // server's text without an error.
+    await recovers(
+      (L) => h(L)("div", null, h(L)("p", null, "a\nb"), "x", h(L)("i")),
+      (L) => h(L)("div", null, h(L)("p", null, "a\r\nb"), "x�", h(L)("i")),
+    );
+    const kept = await recovers(
+      (L) =>
+        h(L)(
+          "div",
+          { suppressHydrationWarning: true },
+          h(L)("p", { suppressHydrationWarning: true }, "a"),
+          "x",
+          h(L)("i"),
+        ),
+      (L) =>
+        h(L)(
+          "div",
+          { suppressHydrationWarning: true },
+          h(L)("p", { suppressHydrationWarning: true }, "b"),
+          "y",
+          h(L)("i"),
+        ),
+    );
+    expect(kept).toEqual({ dom: "<div><p>a</p>x<i></i></div>", kept: "YYYYY", log: [] });
+  });
+
+  test("children the server has and the client does not, and the other way round", async () => {
+    const h = (L: Lib) => L.createElement;
+    await recovers(
+      (L) => h(L)("div", null, h(L)("p", null, "a"), h(L)("b")),
+      (L) => h(L)("div", null, h(L)("p", null, "a")),
+    );
+    await recovers(
+      (L) => h(L)("div", null, h(L)("p", null, "a")),
+      (L) => h(L)("div", null, h(L)("p", null, "a"), h(L)("b")),
+    );
+    // Not a mismatch: in the root, nodes that do not match are passed over and stay; in a form,
+    // a hidden input; and an element whose HTML is set keeps the server's.
+    const passed = await recovers(
+      (L) => [h(L)("aside", { key: 1 }), h(L)("p", { key: 2 }, "a"), h(L)("b", { key: 3 })],
+      (L) => h(L)("p", null, "a"),
+    );
+    expect(passed).toEqual({ dom: "<aside></aside><p>a</p><b></b>", kept: "YYYY", log: [] });
+    // A hidden input the client renders too is claimed, by its name.
+    await recovers(
+      (L) =>
+        h(L)("form", null, h(L)("input", { type: "hidden", name: "a" }), h(L)("input", { type: "hidden", name: "b" })),
+      (L) => h(L)("form", null, h(L)("input", { type: "hidden", name: "b" })),
+    );
+    await recovers(
+      (L) =>
+        h(L)(
+          "form",
+          null,
+          h(L)("input", { type: "hidden", name: "x", value: "1" }),
+          h(L)("button", null, "go"),
+          h(L)("i"),
+          h(L)("div", { dangerouslySetInnerHTML: { __html: "<b>server</b>" } }),
+        ),
+      (L) =>
+        h(L)(
+          "form",
+          null,
+          h(L)("button", null, "go"),
+          h(L)("i"),
+          h(L)("div", { dangerouslySetInnerHTML: { __html: "<b>client</b>" } }),
+        ),
+    );
+  });
+
+  test("in a Suspense boundary, only the boundary renders on the client", async () => {
+    const h = (L: Lib) => L.createElement;
+    const r = await recovers(
+      (L) =>
+        h(L)(
+          "main",
+          null,
+          h(L)("b", null, "1"),
+          h(L)(L.Suspense, { fallback: "…" }, h(L)("p", null, "a"), h(L)("i")),
+          h(L)("u", null, "2"),
+        ),
+      (L) =>
+        h(L)(
+          "main",
+          null,
+          h(L)("b", null, "1"),
+          h(L)(L.Suspense, { fallback: "…" }, h(L)("span", null, "a"), h(L)("i")),
+          h(L)("u", null, "2"),
+        ),
+    );
+    expect(r.kept).toBe("YYYnnnYY");
+    // Two boundaries, two errors; content the server has beyond the client's is the boundary's.
+    await recovers(
+      (L) =>
+        h(L)(
+          "main",
+          null,
+          h(L)(L.Suspense, { fallback: "." }, h(L)("p", null, "a")),
+          h(L)(L.Suspense, { fallback: "." }, h(L)("p", null, "b"), h(L)("p", null, "c")),
+        ),
+      (L) =>
+        h(L)(
+          "main",
+          null,
+          h(L)(L.Suspense, { fallback: "." }, h(L)("i", null, "a")),
+          h(L)(L.Suspense, { fallback: "." }, h(L)("p", null, "b")),
+        ),
+    );
+    // The outer of two nested boundaries: it drops the inner one's nodes with its own.
+    await recovers(
+      (L) =>
+        h(L)(
+          "main",
+          null,
+          h(L)(
+            L.Suspense,
+            { fallback: "." },
+            h(L)("p", null, "a"),
+            h(L)(L.Suspense, { fallback: "," }, h(L)("i", null, "in")),
+          ),
+          h(L)("u"),
+        ),
+      (L) =>
+        h(L)(
+          "main",
+          null,
+          h(L)(
+            L.Suspense,
+            { fallback: "." },
+            h(L)("s", null, "a"),
+            h(L)(L.Suspense, { fallback: "," }, h(L)("i", null, "in")),
+          ),
+          h(L)("u"),
+        ),
+    );
+    // A boundary the server rendered where the client renders none, and the other way round.
+    await recovers(
+      (L) => h(L)("main", null, h(L)(L.Suspense, { fallback: "." }, h(L)("p", null, "a"))),
+      (L) => h(L)("main", null, h(L)("p", null, "a")),
+    );
+    await recovers(
+      (L) => h(L)("main", null, h(L)("p", null, "a")),
+      (L) => h(L)("main", null, h(L)(L.Suspense, { fallback: "." }, h(L)("p", null, "a"))),
+    );
+  });
+
+  test("an error the root's client render throws is uncaught, and the mismatch goes unreported", async () => {
+    const r = await recovers(
+      (L) => L.createElement("p", null, "a"),
+      (L) => {
+        let renders = 0;
+        function Flaky() {
+          if (renders++ > 0) throw new Error("second render");
+          return null;
+        }
+        return [L.createElement(Flaky, { key: 1 }), L.createElement("b", { key: 2 }, "a")];
+      },
+    );
+    expect(r.log).toEqual(["uncaught second render"]);
+  });
+
+  test("a boundary the server could not finish renders on the client, reported as React reports it", async () => {
+    const h = (L: Lib) => L.createElement;
+    function Fails(): never {
+      throw new Error("server only");
+    }
+    const r = await recovers(
+      (L) => h(L)("main", null, h(L)(L.Suspense, { fallback: h(L)("i", null, "…") }, h(L)("p", null, h(L)(Fails)))),
+      (L) => h(L)("main", null, h(L)(L.Suspense, { fallback: h(L)("i", null, "…") }, h(L)("p", null, "ok"))),
+    );
+    // No component stack: React reports this one with null. (renderToString writes no digest.)
+    expect(r).toEqual({ dom: "<main><p>ok</p></main>", kept: "Ynn", log: ["recoverable 419null"] });
   });
 });
 
