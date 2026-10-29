@@ -1674,6 +1674,8 @@ function move(parent: Node, node: Node, ref: Node | null): void {
 // Nodes h does not own (another root's, a portal's, a library's) are left alone.
 function place(h: Fiber): void {
   h.f &= ~STRUCT;
+  // Child nodes placed in a void element (one that mounts with them throws in runHost first).
+  if (VOID.has(h.t)) throw new Error(prodMessage(137, h.t));
   const parent = h.d as Node;
   const want: Node[] = [];
   for (let ix = 0, xs = h.c; ix < xs.length; ix++) {
@@ -1823,11 +1825,7 @@ function runHost(f: Fiber, old: Props | null, mount: boolean): void {
     f.f &= ~CLAIMED;
     if (f.tx === null && p.dangerouslySetInnerHTML?.__html == null) (hydrating as Hydration).done(f);
   }
-  if (f.f & STRUCT) {
-    // Child nodes placed in a void element mounted without them.
-    if (!mount && VOID.has(f.t)) throw new Error(prodMessage(137, f.t));
-    place(f);
-  }
+  if (f.f & STRUCT) place(f);
   // After the children: the options must exist before the value can select one.
   if (f.t === "select") setSelect(dom, p, old ?? NO_PROPS, mount);
   // Refs attach with layout effects (after the whole render), detach at once.
