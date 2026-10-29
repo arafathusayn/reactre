@@ -249,6 +249,18 @@ async function same(scene: (k: Kit) => Promise<void>): Promise<string[]> {
     await scene(k);
     await k.settle();
     snap("end");
+    // React keeps a cancelled root's flag (rootViewTransitionNameCanceled) until a view transition
+    // whose root is not cancelled, and reads the document's <html> on later transitions while it is
+    // set: two more, the second resizing a boundary (which keeps the root's transition), clear it
+    // for the next scene and file.
+    const endAt = log.length;
+    k.api();
+    for (const h of [20, 40]) {
+      const box = L.createElement("p", { "data-h": h }, "reset");
+      L.startTransition(() => root.render(L.createElement(L.ViewTransition, { name: "reset" }, box)));
+      await k.settle();
+    }
+    log.length = endAt;
     // Unmounted without the API: what React does with it there is not this test's.
     delete fakeDoc.startViewTransition;
     root.unmount();
