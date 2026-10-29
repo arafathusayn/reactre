@@ -26,6 +26,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Fixed: a `<title>` rendered anywhere goes into `<head>` before the titles already there, as React places it, so the newest one sets the document's title (react-helmet-async's nested titles).
 - Fixed: a new `<img>` gets `srcSet` and `src` after its other props, as React sets them, so attributes such as `sizes` and `loading` apply before the image is requested (react-image-crop's markup).
 - Fixed: class components: `setState` in `componentWillMount` applies before the first render with no second render after it, and a class with a `getSnapshotBeforeUpdate` method gets no `componentWillMount` call, as in React.
+- Fixed: the resource hints follow react-dom's rules:
+  - `preconnect` keys on `crossOrigin` too.
+  - `preload` needs an `as`, always fetches fonts with CORS, and passes `integrity`, `nonce`, `referrerPolicy`, `imageSrcSet`, `imageSizes` and `media` on.
+  - `preinit` needs `as: "style"` or `as: "script"`. A stylesheet gets `data-precedence` and goes after the last one of its precedence.
+  - `preinitModule`'s script is async.
+  - A stylesheet or script takes what it lacks from an earlier preload of it.
+  - Without a document, every hint does nothing.
 - Fixed: element props follow React 19's rules:
   - Boolean attributes use React's list by prop name, `credentialless` included, and are present for any truthy value.
   - `muted`, `multiple` and an `<option>`'s `selected` are set as properties only.

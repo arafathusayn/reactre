@@ -5006,58 +5006,209 @@ function submitAction(e: Any, target: Fiber): void {
 
 // #region Resource hints (react-dom)
 
-/**
- * Add `<link rel={rel} href={href}>` to <head> once per rel and href, with the options React's
- * resource APIs take. Does nothing without a document (a server import).
- */
-function hint(rel: string, href: string, opts: Any = {}): void {
-  if (typeof document === "undefined" || !href) return;
-  const sel = `link[rel="${rel}"][href="${CSS.escape(href)}"]`;
-  // Deduplicated, as React's are: calling these during every render is the normal use.
-  if (document.head.querySelector(sel)) return;
-  const l = document.createElement("link");
-  l.rel = rel;
-  l.href = href;
-  if (opts.as) l.setAttribute("as", opts.as);
-  if (opts.crossOrigin != null) l.crossOrigin = opts.crossOrigin === "use-credentials" ? "use-credentials" : "";
-  if (opts.type) l.type = opts.type;
-  if (opts.fetchPriority) l.setAttribute("fetchpriority", opts.fetchPriority);
-  document.head.appendChild(l);
+// React's resource hints: the public functions check their options as react-dom's do, and the
+// rest follows its client dispatcher (preconnectAs, preload, preloadModule, preinitStyle,
+// preinitScript, preinitModuleScript). Each URL is hinted once per document; React keeps that per
+// module, for the one document it serves. Without a document (a server import) nothing happens.
+
+/** What a document was given: preconnects, stylesheets and scripts by key, preloads' props. */
+interface Hinted {
+  keys: Set<string>;
+  preloads: Map<string, Any>;
+}
+const hinted = new WeakMap<object, Hinted>();
+function hintsOf(d: Any): Hinted {
+  let h = hinted.get(d);
+  if (h === undefined) hinted.set(d, (h = { keys: new Set(), preloads: new Map() }));
+  return h;
+}
+const doc = (): Any => (typeof document === "undefined" ? null : document);
+// React's escape for a value inside a double-quoted attribute selector.
+const escAttr = (v: string): string => v.replace(/[\n"\\]/g, (c) => "\\" + c.charCodeAt(0).toString(16) + " ");
+const styleKey = (href: string): string => `href="${escAttr(href)}"`;
+const styleSel = (key: string): string => `link[rel="stylesheet"][${key}]`;
+const scriptKey = (src: string): string => `[src="${escAttr(src)}"]`;
+const scriptSel = (key: string): string => "script[async]" + key;
+const str = (v: Any): string | undefined => (typeof v === "string" ? v : undefined);
+// A font is always fetched with CORS; any other crossOrigin string but "use-credentials" is "".
+const crossOriginAs = (as: Any, v: Any): string | undefined =>
+  as === "font" ? "" : typeof v === "string" ? (v === "use-credentials" ? v : "") : undefined;
+// The module preloads that are keyed as scripts.
+const SCRIPT_LIKE = new Set(["audioworklet", "paintworklet", "serviceworker", "sharedworker", "worker", "script"]);
+
+/** A new element with its props set as React sets an element's (missing ones skipped). */
+function hintElement(d: Any, tag: string, props: Any): Any {
+  const el = d.createElement(tag);
+  const info = { ns: HTML_NS, t: tag } as Any;
+  for (const k in props) if (props[k] != null) setAttr(info, el, k, props[k], undefined);
+  return el;
 }
 
-/** Adds `<link rel="preconnect">`. */
+function preconnectAs(rel: string, href: string, crossOrigin: string | null | undefined): void {
+  const d = doc();
+  if (d === null || !href) return;
+  let sel = `link[rel="${rel}"][href="${escAttr(href)}"]`;
+  if (typeof crossOrigin === "string") sel += `[crossorigin="${crossOrigin}"]`;
+  const h = hintsOf(d);
+  if (h.keys.has(sel)) return;
+  h.keys.add(sel);
+  if (d.querySelector(sel) === null) d.head.appendChild(hintElement(d, "link", { rel, crossOrigin, href }));
+}
+
+/** Adds `<link rel="preconnect">`, once per URL and crossOrigin. */
 export function preconnect(href: string, opts?: Any): void {
-  hint("preconnect", href, opts);
+  if (typeof href !== "string") return;
+  const c = opts ? opts.crossOrigin : undefined;
+  preconnectAs(
+    "preconnect",
+    href,
+    opts ? (typeof c === "string" ? (c === "use-credentials" ? c : "") : undefined) : null,
+  );
 }
-/** Adds `<link rel="dns-prefetch">`. */
+/** Adds `<link rel="dns-prefetch">`, once per URL. */
 export function prefetchDNS(href: string): void {
-  hint("dns-prefetch", href);
+  if (typeof href === "string") preconnectAs("dns-prefetch", href, null);
 }
-/** Adds `<link rel="preload">`. */
+/** Adds `<link rel="preload">` for a resource of type `opts.as`, once per resource. */
 export function preload(href: string, opts?: Any): void {
-  hint("preload", href, opts);
+  if (typeof href !== "string" || typeof opts !== "object" || opts === null || typeof opts.as !== "string") return;
+  const as: string = opts.as;
+  const o = {
+    crossOrigin: crossOriginAs(as, opts.crossOrigin),
+    integrity: str(opts.integrity),
+    nonce: str(opts.nonce),
+    type: str(opts.type),
+    fetchPriority: str(opts.fetchPriority),
+    referrerPolicy: str(opts.referrerPolicy),
+    imageSrcSet: str(opts.imageSrcSet),
+    imageSizes: str(opts.imageSizes),
+    media: str(opts.media),
+  };
+  const d = doc();
+  if (d === null || !href || !as) return;
+  // An image with a srcset is known by it, not by its href.
+  const bySet = as === "image" && !!o.imageSrcSet;
+  let sel = `link[rel="preload"][as="${escAttr(as)}"]`;
+  if (bySet) {
+    sel += `[imagesrcset="${escAttr(o.imageSrcSet!)}"]`;
+    if (o.imageSizes !== undefined) sel += `[imagesizes="${escAttr(o.imageSizes)}"]`;
+  } else sel += `[href="${escAttr(href)}"]`;
+  const key = as === "style" ? styleKey(href) : as === "script" ? scriptKey(href) : sel;
+  const h = hintsOf(d);
+  if (h.preloads.has(key)) return;
+  const props = { rel: "preload", href: bySet ? undefined : href, as, ...o };
+  h.preloads.set(key, props);
+  if (
+    d.querySelector(sel) !== null ||
+    (as === "style" && d.querySelector(styleSel(key)) !== null) ||
+    (as === "script" && d.querySelector(scriptSel(key)) !== null)
+  )
+    return;
+  d.head.appendChild(hintElement(d, "link", props));
 }
-/** Adds `<link rel="modulepreload">`. */
+/** Adds `<link rel="modulepreload">`, once per module. */
 export function preloadModule(href: string, opts?: Any): void {
-  hint("modulepreload", href, opts);
+  if (typeof href !== "string") return;
+  const o = opts
+    ? {
+        as: typeof opts.as === "string" && opts.as !== "script" ? (opts.as as string) : undefined,
+        crossOrigin: crossOriginAs(opts.as, opts.crossOrigin),
+        integrity: str(opts.integrity),
+        nonce: str(opts.nonce),
+        fetchPriority: str(opts.fetchPriority),
+      }
+    : undefined;
+  const d = doc();
+  if (d === null || !href) return;
+  const as = o?.as ?? "script";
+  const sel = `link[rel="modulepreload"][as="${escAttr(as)}"][href="${escAttr(href)}"]`;
+  const scriptLike = SCRIPT_LIKE.has(as);
+  const key = scriptLike ? scriptKey(href) : sel;
+  const h = hintsOf(d);
+  if (h.preloads.has(key)) return;
+  const props = { rel: "modulepreload", href, ...o };
+  h.preloads.set(key, props);
+  if (d.querySelector(sel) !== null || (scriptLike && d.querySelector(scriptSel(key)) !== null)) return;
+  d.head.appendChild(hintElement(d, "link", props));
 }
-/** Loads a stylesheet or script now (`opts.as`), once per URL. Stylesheet precedence is not ordered. */
-export function preinit(href: string, opts: Any = {}): void {
-  if (opts.as === "script") {
-    if (document.querySelector(`script[src="${CSS.escape(href)}"]`)) return;
-    const s = document.createElement("script");
-    s.src = href;
-    s.async = true;
-    document.head.appendChild(s);
-  } else hint("stylesheet", href, opts);
+/** Loads a stylesheet (`as: "style"`, ordered by `precedence`) or a script now, once per URL. */
+export function preinit(href: string, opts?: Any): void {
+  if (typeof href !== "string" || !opts || typeof opts.as !== "string") return;
+  const as = opts.as,
+    crossOrigin = crossOriginAs(as, opts.crossOrigin),
+    integrity = str(opts.integrity),
+    fetchPriority = str(opts.fetchPriority);
+  if (as === "style") preinitStyle(href, str(opts.precedence), { crossOrigin, integrity, fetchPriority });
+  else if (as === "script")
+    preinitScript(href, { crossOrigin, integrity, fetchPriority, nonce: str(opts.nonce) }, false);
 }
 /** Loads a module script now, once per URL. */
-export function preinitModule(href: string): void {
-  if (document.querySelector(`script[src="${CSS.escape(href)}"]`)) return;
-  const s = document.createElement("script");
-  s.type = "module";
-  s.src = href;
-  document.head.appendChild(s);
+export function preinitModule(href: string, opts?: Any): void {
+  if (typeof href !== "string") return;
+  if (typeof opts === "object" && opts !== null) {
+    if (opts.as == null || opts.as === "script")
+      preinitScript(
+        href,
+        {
+          crossOrigin: crossOriginAs(opts.as, opts.crossOrigin),
+          integrity: str(opts.integrity),
+          nonce: str(opts.nonce),
+          fetchPriority: str(opts.fetchPriority),
+        },
+        true,
+      );
+  } else if (opts == null) preinitScript(href, undefined, true);
+}
+
+function preinitStyle(href: string, precedence: string | undefined, o: Any): void {
+  const d = doc();
+  if (d === null || !href) return;
+  const key = styleKey(href),
+    h = hintsOf(d);
+  if (h.keys.has("style" + key)) return;
+  h.keys.add("style" + key);
+  if (d.querySelector(styleSel(key)) !== null) return;
+  const prec = precedence || "default";
+  const props: Any = { rel: "stylesheet", href, "data-precedence": prec, ...o };
+  // A preload of the same stylesheet lends what this call did not give.
+  const pre = h.preloads.get(key);
+  if (pre !== undefined) {
+    props.crossOrigin ??= pre.crossOrigin;
+    props.referrerPolicy ??= pre.referrerPolicy;
+    props.title ??= pre.title;
+  }
+  insertStylesheet(d, hintElement(d, "link", props), prec);
+}
+
+function preinitScript(src: string, o: Any, module: boolean): void {
+  const d = doc();
+  if (d === null || !src) return;
+  const key = scriptKey(src),
+    h = hintsOf(d);
+  if (h.keys.has("script" + key)) return;
+  h.keys.add("script" + key);
+  if (d.querySelector(scriptSel(key)) !== null) return;
+  const props: Any = module ? { src, async: true, type: "module", ...o } : { src, async: true, ...o };
+  const pre = h.preloads.get(key);
+  if (pre !== undefined) {
+    props.crossOrigin ??= pre.crossOrigin;
+    props.referrerPolicy ??= pre.referrerPolicy;
+    props.integrity ??= pre.integrity;
+  }
+  d.head.appendChild(hintElement(d, "script", props));
+}
+
+/** After the last stylesheet of the same precedence, else after all of them, else first in <head>. */
+function insertStylesheet(d: Any, el: Any, prec: string): void {
+  const nodes = d.querySelectorAll('link[rel="stylesheet"][data-precedence],style[data-precedence]');
+  const last = nodes.length ? nodes[nodes.length - 1] : null;
+  let prior = last;
+  for (let i = 0; i < nodes.length; i++) {
+    if (nodes[i].getAttribute("data-precedence") === prec) prior = nodes[i];
+    else if (prior !== last) break;
+  }
+  if (prior !== null) prior.parentNode.insertBefore(el, prior.nextSibling);
+  else d.head.insertBefore(el, d.head.firstChild);
 }
 
 // #endregion

@@ -638,25 +638,44 @@ describe("synthetic events", () => {
 describe("resource hints", () => {
   // A document with a <head>: elements reflect rel, href, src, type, crossOrigin and async to
   // attributes, as the DOM's do, and querySelector matches the `tag[attr="value"]` selectors the
-  // hints use. CSS.escape, which Bun lacks, is stubbed: it escapes every non-word character.
+  // hints use, with React's escapes (a hex code and a space) in the values. CSS.escape, which Bun
+  // lacks, is stubbed: it escapes every non-word character.
   let head: FakeElement;
   let hadCSS: boolean;
   let css: unknown;
   const g = globalThis as unknown as { CSS?: unknown; document?: unknown };
 
-  function select(from: FakeNode, sel: string): FakeElement | null {
-    const m = /^([a-z]+)(.*)$/.exec(sel)!;
-    const attrs = [...m[2]!.matchAll(/\[([a-z-]+)="((?:[^"\\]|\\.)*)"\]/g)].map(
-      (a) => [a[1]!, a[2]!.replace(/\\(.)/g, "$1")] as const,
-    );
+  /** Every element below `from` matching one of the comma-separated `tag[attr]` selectors. */
+  function selectAll(from: FakeNode, sel: string, out: FakeElement[] = []): FakeElement[] {
+    const parts = sel.split(",").map((one) => {
+      const m = /^([a-z]+)(.*)$/.exec(one)!;
+      const attrs = [...m[2]!.matchAll(/\[([a-z-]+)(?:="((?:[^"\\]|\\.)*)")?\]/g)].map(
+        (a) =>
+          [
+            a[1]!,
+            a[2]?.replace(/\\([0-9a-f]{1,6}) ?|\\(.)/g, (_, hex, ch) =>
+              hex ? String.fromCharCode(parseInt(hex, 16)) : ch,
+            ),
+          ] as const,
+      );
+      return { tag: m[1]!.toUpperCase(), attrs };
+    });
     for (let c = from.firstChild; c !== null; c = c.nextSibling) {
       if (!(c instanceof FakeElement)) continue;
-      if (c.tagName === m[1]!.toUpperCase() && attrs.every(([k, v]) => c.getAttribute(k) === v)) return c;
-      const deep = select(c, sel);
-      if (deep !== null) return deep;
+      const el = c;
+      if (
+        parts.some(
+          (p) =>
+            el.tagName === p.tag &&
+            p.attrs.every(([k, v]) => (v === undefined ? el.hasAttribute(k) : el.getAttribute(k) === v)),
+        )
+      )
+        out.push(el);
+      selectAll(el, sel, out);
     }
-    return null;
+    return out;
   }
+  const select = (from: FakeNode, sel: string): FakeElement | null => selectAll(from, sel)[0] ?? null;
 
   beforeEach(() => {
     const reflect = (attr: string): PropertyDescriptor => ({
@@ -692,6 +711,8 @@ describe("resource hints", () => {
       head,
       createElement: (tag: string) => new Html(tag.toUpperCase()),
       querySelector: (sel: string) => select(html, sel),
+      querySelectorAll: (sel: string) => selectAll(html, sel),
+      nodeType: 9,
     };
     hadCSS = "CSS" in globalThis;
     css = g.CSS;
@@ -702,11 +723,11 @@ describe("resource hints", () => {
     else delete g.CSS;
   });
 
-  /** <head>'s elements, each with its attributes sorted by name. */
+  /** <head>'s elements, each with its attributes sorted by name (lower case, as HTML's are). */
   const tags = (): string[] =>
     head.childNodes.map((n) => {
       const el = n as FakeElement;
-      const attrs = el.attributes.map((a) => `${a.name}=${a.value}`).sort();
+      const attrs = el.attributes.map((a) => `${a.name.toLowerCase()}=${a.value}`).sort();
       return [el.tagName.toLowerCase(), ...attrs].join(" ");
     });
 
@@ -787,33 +808,60 @@ describe("resource hints", () => {
     expect(tags()).toEqual([]);
   });
 
-  // Mismatches with React, left out until compat follows it:
+  // React's rules, from its dispatcher (react-dom-client's preconnectAs, preload, preinitStyle,
+  // preinitScript and preinitModuleScript):
   // - preconnect keys on crossOrigin too: the same URL with and without it gets two links.
-  test.todo("preconnect adds a second link for the same URL with another crossOrigin", () => {
+  test("preconnect adds a second link for the same URL with another crossOrigin", () => {
     preconnect("https://a.test");
     preconnect("https://a.test", { crossOrigin: "anonymous" });
     expect(head.childNodes).toHaveLength(2);
   });
   // - preinit of a stylesheet sets data-precedence ("default" when not given).
-  test.todo("preinit marks a stylesheet with data-precedence", () => {
+  test("preinit marks a stylesheet with data-precedence", () => {
     preinit("/s.css", { as: "style" });
     expect((head.firstChild as FakeElement).getAttribute("data-precedence")).toBe("default");
   });
   // - preinitModule's script is async, as React's is.
-  test.todo("preinitModule's script is async", () => {
+  test("preinitModule's script is async", () => {
     preinitModule("/m.js");
     expect((head.firstChild as FakeElement).getAttribute("async")).toBe("");
   });
   // - preload without `as` does nothing; a font preload is always crossorigin; integrity, nonce,
   //   referrerPolicy, imageSrcSet, imageSizes and media reach the link.
-  test.todo("preload follows React's rules for as, fonts and its other options", () => {
+  test("preload follows React's rules for as, fonts and its other options", () => {
     preload("/no-as.js", {});
     preload("/f.woff2", { as: "font", integrity: "sha384-x", media: "print" });
     expect(tags()).toEqual(["link as=font crossorigin= href=/f.woff2 integrity=sha384-x media=print rel=preload"]);
   });
+  // - a stylesheet goes after the last one of its precedence, or after all of them.
+  test("preinit places a stylesheet after the last one of its precedence", () => {
+    preinit("/a.css", { as: "style", precedence: "low" });
+    preinit("/b.css", { as: "style", precedence: "high" });
+    preinit("/c.css", { as: "style", precedence: "low" });
+    preinit("/d.css", { as: "style" });
+    expect(head.childNodes.map((n) => (n as FakeElement).getAttribute("href"))).toEqual([
+      "/a.css",
+      "/c.css",
+      "/b.css",
+      "/d.css",
+    ]);
+  });
+  // - a stylesheet or script takes crossOrigin, referrerPolicy (and a script integrity) from its
+  //   preload when it has none of its own.
+  test("preinit takes crossOrigin and referrerPolicy from an earlier preload", () => {
+    preload("/p.css", { as: "style", crossOrigin: "use-credentials", referrerPolicy: "no-referrer" });
+    preinit("/p.css", { as: "style" });
+    preload("/p.js", { as: "script", integrity: "sha384-y" });
+    preinit("/p.js", { as: "script" });
+    // The stylesheet goes first in <head>, before the preloads, as no other stylesheet is there.
+    expect(tags().filter((t) => !t.includes("rel=preload"))).toEqual([
+      "link crossorigin=use-credentials data-precedence=default href=/p.css referrerpolicy=no-referrer rel=stylesheet",
+      "script async= integrity=sha384-y src=/p.js",
+    ]);
+  });
   // - preinit without `as: "style"` or `as: "script"` does nothing, and preinit of a script and
   //   preinitModule do nothing without a document (compat throws a ReferenceError).
-  test.todo("preinit and preinitModule do nothing without a known as or without a document", () => {
+  test("preinit and preinitModule do nothing without a known as or without a document", () => {
     preinit("/x.css");
     expect(head.childNodes).toHaveLength(0);
     const doc = g.document;
