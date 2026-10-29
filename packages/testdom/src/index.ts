@@ -16,6 +16,8 @@
 //     elements, fragments empty on insertion, character references decode.
 //   - The parser is a regular expression over tags, comments and text: enough
 //     for the templates under test, not a full HTML parser.
+//   - A MutationObserver records child list, attribute and text changes under
+//     what it observes, for takeRecords(); its callback is never called.
 
 // #region Operation counters
 
@@ -108,6 +110,7 @@ export class FakeNode {
     }
     if (n.parentNode) {
       ops.moves++;
+      notify(n.parentNode, { removedNodes: [n], previousSibling: n.previousSibling, nextSibling: n.nextSibling });
       n.parentNode.unlink(n);
     } else ops.inserts++;
     n.parentNode = this;
@@ -125,6 +128,7 @@ export class FakeNode {
       else this.firstChild = n;
       ref.previousSibling = n;
     }
+    notify(this, { addedNodes: [n], previousSibling: n.previousSibling, nextSibling: n.nextSibling });
     return n;
   }
   appendChild(n: FakeNode): FakeNode {
@@ -133,12 +137,14 @@ export class FakeNode {
   removeChild(n: FakeNode): FakeNode {
     if (n.parentNode !== this) throw new Error("not a child");
     ops.removes++;
+    notify(this, { removedNodes: [n], previousSibling: n.previousSibling, nextSibling: n.nextSibling });
     this.unlink(n);
     return n;
   }
   /** Put `n` where `old` was. Counts the insertion of `n`; the removal of `old` is not counted. */
   replaceChild(n: FakeNode, old: FakeNode): FakeNode {
     this.insertBefore(n, old);
+    notify(this, { removedNodes: [old], previousSibling: n, nextSibling: old.nextSibling });
     this.unlink(old);
     return old;
   }
@@ -177,6 +183,7 @@ export class FakeNode {
   }
   /** Replaces every child with one text node (none for ""). Each child dropped counts as a remove. */
   set textContent(v: string) {
+    const removed = this.childNodes;
     for (let c = this.firstChild; c;) {
       const next: FakeNode | null = c.nextSibling;
       ops.removes++;
@@ -184,6 +191,7 @@ export class FakeNode {
       c = next;
     }
     this.firstChild = this.lastChild = null;
+    notify(this, { removedNodes: removed });
     if (v !== "") this.appendChild(new FakeText(v));
   }
   cloneNode(_deep?: boolean): FakeNode {
@@ -211,10 +219,17 @@ const FAKE_DOC = {
 
 /** A text node. Writes through nodeValue count as text writes; writes to `data` are not counted. */
 export class FakeText extends FakeNode {
-  data: string;
+  private text: string;
   constructor(data: string) {
     super(3);
-    this.data = data;
+    this.text = data;
+  }
+  get data(): string {
+    return this.text;
+  }
+  set data(v: string) {
+    notify(this, { type: "characterData", oldValue: this.text });
+    this.text = v;
   }
   override get nodeName(): string {
     return "#text";
@@ -339,6 +354,7 @@ export class FakeElement extends FakeNode {
     if (this.namespaceURI === SVG_NS)
       throw new TypeError("Cannot set property className of SVGElement, which has only a getter");
     ops.classWrites++;
+    this.changed("class");
     this.cls = v;
   }
   // Created on the first attribute: most elements under test have none.
@@ -439,6 +455,7 @@ export class FakeElement extends FakeNode {
     return true;
   }
   setAttribute(k: string, v: string): void {
+    this.changed(k);
     if (k === "class") {
       ops.classWrites++;
       this.cls = v;
@@ -451,6 +468,7 @@ export class FakeElement extends FakeNode {
     return k === "class" ? this.className || null : (this.attrs?.get(k) ?? null);
   }
   removeAttribute(k: string): void {
+    this.changed(k);
     if (k === "class") {
       ops.classWrites++;
       this.cls = "";
@@ -458,6 +476,10 @@ export class FakeElement extends FakeNode {
       ops.attrWrites++;
       this.attrs?.delete(k);
     }
+  }
+  /** Tells observers attribute `k` changes, with the value it had. */
+  private changed(k: string): void {
+    notify(this, { type: "attributes", attributeName: k, oldValue: this.getAttribute(k) });
   }
   /** Copies tag, namespace, class and attributes (and children when deep); properties are not copied, as in the DOM. */
   override cloneNode(deep?: boolean): FakeElement {
@@ -483,6 +505,68 @@ export class FakeElement extends FakeNode {
   /** A `<template>`'s content: here the element itself holds the parsed children. */
   get content(): FakeElement {
     return this;
+  }
+}
+
+// #endregion
+
+// #region Mutation observers
+
+/** What a MutationObserver records of one change, as the DOM's MutationRecord. */
+export interface FakeRecord {
+  type: "childList" | "attributes" | "characterData";
+  target: FakeNode;
+  addedNodes: FakeNode[];
+  removedNodes: FakeNode[];
+  previousSibling: FakeNode | null;
+  nextSibling: FakeNode | null;
+  attributeName: string | null;
+  attributeNamespace: null;
+  oldValue: string | null;
+}
+
+/** What each observer observes: a node, and whether its subtree too. */
+const watching: { o: FakeMutationObserver; target: FakeNode; subtree: boolean }[] = [];
+
+/** Record `change` of `target` for each observer that observes it, once each, as the DOM does. */
+function notify(target: FakeNode, change: Partial<FakeRecord>): void {
+  if (watching.length === 0) return;
+  const told = new Set<FakeMutationObserver>();
+  for (const w of watching)
+    for (let n: FakeNode | null = target; n !== null && !told.has(w.o); n = w.subtree ? n.parentNode : null)
+      if (n === w.target) {
+        told.add(w.o);
+        w.o.records.push({
+          type: "childList",
+          target,
+          addedNodes: [],
+          removedNodes: [],
+          previousSibling: null,
+          nextSibling: null,
+          attributeName: null,
+          attributeNamespace: null,
+          oldValue: null,
+          ...change,
+        });
+      }
+}
+
+/**
+ * A MutationObserver that records every kind of change (whatever the options ask, but `subtree`)
+ * for takeRecords(). Its callback is never called: what it records waits to be taken.
+ */
+export class FakeMutationObserver {
+  records: FakeRecord[] = [];
+  constructor(_callback: unknown) {}
+  observe(target: FakeNode, options?: { subtree?: boolean }): void {
+    watching.push({ o: this, target, subtree: options?.subtree === true });
+  }
+  takeRecords(): FakeRecord[] {
+    return this.records.splice(0);
+  }
+  disconnect(): void {
+    for (let i = watching.length - 1; i >= 0; i--) if (watching[i]!.o === this) watching.splice(i, 1);
+    this.records = [];
   }
 }
 
@@ -571,16 +655,18 @@ function parse(src: string, root: FakeElement): void {
 // #region Installation
 
 /**
- * Installs a global `document` and `Node` with what the library and h() call.
+ * Installs a global `document`, `Node` and `MutationObserver` with what the library and h() call.
  * Each call makes a new `document` object; nodes made before keep working.
  */
 export function installFakeDocument(): void {
-  const g = globalThis as unknown as { document: unknown; Node: unknown };
+  const g = globalThis as unknown as { document: unknown; Node: unknown; MutationObserver: unknown };
   g.document = {
     createElement: (tag: string) => new FakeElement(tag.toUpperCase()),
     createTextNode: (data: string) => new FakeText(data),
   };
   g.Node = FakeNode;
+  g.MutationObserver = FakeMutationObserver;
+  watching.length = 0;
 }
 
 /** Casts a fake node to the DOM type the library's signatures expect. */
