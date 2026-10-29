@@ -34,9 +34,11 @@
 //      field names, loops split into small functions the engine optimizes early, and no
 //      allocation per row where it can be avoided. Comments at each such spot say which.
 //
-// What differs from React: rendering is synchronous (no time slicing, so a transition renders at
-// once and a suspended update shows its boundary's fallback, with the old content kept hidden
-// and its state intact). The server renderer is @reactre/compat/server; the hooks here serve it
+// What differs from React: rendering is synchronous, with no time slicing. A suspended update shows
+// its boundary's fallback, with the old content kept hidden and its state intact. Transitions
+// render at once, unless ./features/concurrent.ts installs React's lanes (see "Transition lanes"):
+// then they render in a task after urgent updates, in place but where they can be undone, so one
+// that suspends where content shows keeps the screen as React does. The server renderer is @reactre/compat/server; the hooks here serve it
 // too (see "Server rendering" in the hooks region).
 //
 // The file reads top down, in folding regions: elements, children utilities, fibers, child
@@ -7183,7 +7185,7 @@ function attempt(b: Batch, check: boolean): boolean {
   laneRender = flushing = true;
   try {
     // A component whose state the updates leave as it was renders nothing new, as in React.
-    for (const h of b.h) if (rebase(h, b, undo)) schedule(h.f);
+    for (const h of b.h) if (rebase(h, undo)) schedule(h.f);
     for (let i = 0; i < b.k.length; i += 2) if (!(b.k[i].f & DEAD)) b.k[i + 1]();
     for (const f of b.f) schedule(f);
     while (queue.length) {
@@ -7212,7 +7214,7 @@ function attempt(b: Batch, check: boolean): boolean {
   if (mo !== null) {
     if (at.bad.length || moved) {
       undoDom(records);
-      for (let i = 0; i < sv.length; ) {
+      for (let i = 0; i < sv.length;) {
         const f = sv[i++];
         if (f instanceof RootImpl) {
           f.mounted = sv[i++];
@@ -7257,7 +7259,7 @@ function attempt(b: Batch, check: boolean): boolean {
       if (moved) return attempt(b, false);
       // It renders again once any of what it waits for settles (React's ping).
       b.w = true;
-          for (const t of at.bad) t.then(unhold, unhold);
+      for (const t of at.bad) t.then(unhold, unhold);
       return false;
     }
   }
@@ -7288,32 +7290,17 @@ function save(f: Fiber, sv: Any[], hv: Any[], targets: Any[]): void {
 }
 
 /**
- * Apply batch `b`'s updates to state hook `h`: every update in order from the state before them,
- * those of other batches skipped, which wait with every update after them (React's
- * processUpdateQueue). What it replaced goes in `undo`. Returns whether the state changed.
+ * Apply the updates of state hook `h`, its batch's and the urgent ones made since, in order from
+ * the state before them (React's rebase). A hook's updates are all one batch's: another batch's
+ * would have been entangled with it. What it replaced goes in `undo`. Returns whether the state
+ * changed.
  */
-function rebase(h: Hook, b: Batch, undo: Any[]): boolean {
+function rebase(h: Hook, undo: Any[]): boolean {
   const p = pend.get(h)!;
   undo.push(h, p.b, p.u);
-  let s = p.b,
-    base = s,
-    rest: Any[] | null = null;
-  for (let i = 0; i < p.u.length; i += 2) {
-    const a = p.u[i],
-      l = p.u[i + 1];
-    if (l === null || l === b) {
-      s = h.r(s, a);
-      if (rest !== null) rest.push(a, null);
-    } else {
-      if (rest === null) {
-        rest = [];
-        base = s;
-      }
-      rest.push(a, l);
-    }
-  }
-  if (rest === null) pend.delete(h);
-  else pend.set(h, { b: base, u: rest });
+  pend.delete(h);
+  let s = p.b;
+  for (let i = 0; i < p.u.length; i += 2) s = h.r(s, p.u[i]);
   const changed = !Object.is(s, h.v);
   h.v = s;
   return changed;

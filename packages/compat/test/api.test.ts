@@ -41,7 +41,14 @@ describe("API manifest", () => {
       ]),
     );
     expect(enabledApis(["hydrateRoot", "useFormState"], ["useState", "repeatedKeys"])).toEqual(
-      new Set(["hydrateRoot", "useFormState", "useActionState", "componentStack", "renderRetry", "concurrentRendering"]),
+      new Set([
+        "hydrateRoot",
+        "useFormState",
+        "useActionState",
+        "componentStack",
+        "renderRetry",
+        "concurrentRendering",
+      ]),
     );
   });
 

@@ -35,11 +35,11 @@ await load("react-dom/server.browser");
 const internals = ReactDOM.__DOM_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE;
 const before = internals.d;
 const ReactClient: Any = await load("react-dom/client");
-// The client installs them once, as the first file that loads it does: each file that renders
-// with it keeps both, from the first, in a global.
-const dispatchers = ((globalThis as Any).__reactDispatchers ??= { before, client: internals.d });
-beforeAll(() => void (internals.d = dispatchers.client));
-afterAll(() => void (internals.d = dispatchers.before));
+// The client installs its handlers once, as the first file that loads it does, which keeps them in
+// a global for the others; each file puts back the ones it found.
+const client = ((globalThis as Any).__reactClientDispatcher ??= internals.d);
+beforeAll(() => void (internals.d = client));
+afterAll(() => void (internals.d = before));
 if (prevEnv === undefined) delete process.env["NODE_ENV"];
 else process.env["NODE_ENV"] = prevEnv;
 
@@ -511,35 +511,32 @@ describe("updates that suspend", () => {
     }, false));
 
   test("an urgent update renders a transition that waits for data again, over it", () =>
-    same(
-      async ({ L, log, root, flushSync, snap, task }) => {
-        const d = data();
-        await d.ready("a");
-        await d.ready("c");
-        let set: Any;
-        const Page = logs(L, log, "Page", ({ k }) => d.read(L, k));
-        const App = logs(L, log, "App", () => {
-          const [k, s] = L.useState("a");
-          set = s;
-          return L.createElement(
-            "div",
-            null,
-            L.createElement("h1", null, k),
-            L.createElement(L.Suspense, { fallback: "loading" }, L.createElement(Page, { k })),
-          );
-        });
-        flushSync(() => root.render(L.createElement(App)));
-        L.startTransition(() => set((k: string) => k + "b"));
-        await task();
-        snap("waiting");
-        // Replayed over this, the transition's state is "c" too: its data is there.
-        flushSync(() => set("c"));
-        snap("urgent");
-        await task();
-        snap("task");
-      },
-      false,
-    ));
+    same(async ({ L, log, root, flushSync, snap, task }) => {
+      const d = data();
+      await d.ready("a");
+      await d.ready("c");
+      let set: Any;
+      const Page = logs(L, log, "Page", ({ k }) => d.read(L, k));
+      const App = logs(L, log, "App", () => {
+        const [k, s] = L.useState("a");
+        set = s;
+        return L.createElement(
+          "div",
+          null,
+          L.createElement("h1", null, k),
+          L.createElement(L.Suspense, { fallback: "loading" }, L.createElement(Page, { k })),
+        );
+      });
+      flushSync(() => root.render(L.createElement(App)));
+      L.startTransition(() => set((k: string) => k + "b"));
+      await task();
+      snap("waiting");
+      // Replayed over this, the transition's state is "c" too: its data is there.
+      flushSync(() => set("c"));
+      snap("urgent");
+      await task();
+      snap("task");
+    }, false));
 
   test("what a transition renders around content that suspends in a shown boundary", () =>
     same(async ({ L, log, root, flushSync, snap, task }) => {
@@ -587,12 +584,16 @@ describe("updates that suspend", () => {
         setO = s;
         return "o" + o;
       });
+      let setN: Any;
       const App = logs(L, log, "App", () => {
         const [k, s] = L.useState("a");
+        const [n, sn] = L.useState(0);
         set = s;
+        setN = sn;
         return L.createElement(
           "div",
           null,
+          "n" + n,
           L.createElement(L.Suspense, { fallback: "loading" }, L.createElement(Page, { k })),
           L.createElement(Other),
         );
@@ -600,7 +601,11 @@ describe("updates that suspend", () => {
       flushSync(() => root.render(L.createElement(App)));
       L.startTransition(() => set("b"));
       await micro();
-      L.startTransition(() => set((k: string) => k + "x"));
+      // Its other update waits with the first transition too.
+      L.startTransition(() => {
+        setN(1);
+        set((k: string) => k + "x");
+      });
       await task();
       snap("waiting");
       L.startTransition(() => setO(1));
@@ -783,7 +788,12 @@ describe("timing", () => {
       const App = logs(L, log, "App", () => {
         const [p, s] = L.useState(0);
         set = s;
-        return L.createElement("div", null, "v" + L.useSyncExternalStore(subscribe, get), L.createElement(Moves, { p }));
+        return L.createElement(
+          "div",
+          null,
+          "v" + L.useSyncExternalStore(subscribe, get),
+          L.createElement(Moves, { p }),
+        );
       });
       flushSync(() => root.render(L.createElement(App)));
       L.startTransition(() => set(1));

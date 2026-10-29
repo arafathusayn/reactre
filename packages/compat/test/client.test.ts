@@ -31,11 +31,11 @@ const ReactServer: Any = await load("react-dom/server.browser");
 const internals = ReactDOM.__DOM_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE;
 const before = internals.d;
 const ReactClient: Any = await load("react-dom/client");
-// The client installs them once, as the first file that loads it does: each file that renders
-// with it keeps both, from the first, in a global.
-const dispatchers = ((globalThis as Any).__reactDispatchers ??= { before, client: internals.d });
-beforeAll(() => void (internals.d = dispatchers.client));
-afterAll(() => void (internals.d = dispatchers.before));
+// The client installs its handlers once, as the first file that loads it does, which keeps them in
+// a global for the others; each file puts back the ones it found.
+const client = ((globalThis as Any).__reactClientDispatcher ??= internals.d);
+beforeAll(() => void (internals.d = client));
+afterAll(() => void (internals.d = before));
 if (prevEnv === undefined) delete process.env["NODE_ENV"];
 else process.env["NODE_ENV"] = prevEnv;
 
