@@ -1558,7 +1558,7 @@ function runHost(f: Fiber, old: Props | null, mount: boolean): void {
   }
   if (f.f & STRUCT) place(f);
   // After the children: the options must exist before the value can select one.
-  if (f.t === "select") setSelect(dom, p, mount);
+  if (f.t === "select") setSelect(dom, p, old ?? NO_PROPS, mount);
   // Refs attach with layout effects (after the whole render), detach at once.
   const ref = p.ref,
     oref = old === null ? undefined : old["ref"];
@@ -1634,12 +1634,13 @@ function hostChildren(f: Fiber, dom: Any, p: Any, old: Props | null): void {
 
 // #region Prop tables and setProps
 
-// Attributes that are present or absent (true sets "", false removes), lower case.
+// Props that are present or absent: a truthy value (not a function or symbol) sets "", anything
+// else removes the attribute. React's list, by prop name.
 const BOOL_ATTRS = new Set(
   (
-    "allowfullscreen async autofocus autoplay controls default defer disabled disablepictureinpicture " +
-    "disableremoteplayback formnovalidate hidden inert loop nomodule novalidate open playsinline readonly " +
-    "required reversed scoped seamless itemscope capture download multiple muted selected"
+    "inert allowFullScreen async autoPlay controls credentialless default defer disabled " +
+    "disablePictureInPicture disableRemotePlayback formNoValidate hidden loop noModule noValidate open " +
+    "playsInline readOnly required reversed scoped seamless itemScope"
   ).split(" "),
 );
 // Props whose attribute takes the strings "true" and "false", so a boolean is written as text.
@@ -1693,6 +1694,8 @@ const RESERVED = new Set([
   "autoFocus",
   "defaultValue",
   "defaultChecked",
+  "innerText",
+  "textContent",
 ]);
 // The `action` React writes for a function action: submitting the form any way but through
 // the submit event throws this error instead of navigating. The message is React's.
@@ -1700,8 +1703,26 @@ const ACTION_URL =
   "javascript:throw new Error('A React form was unexpectedly submitted. If you called form.submit() manually, consider using form.requestSubmit() instead. If you\\'re trying to use event.stopPropagation() in a submit event handler, consider also calling event.preventDefault().')";
 const XLINK = "http://www.w3.org/1999/xlink";
 const XML = "http://www.w3.org/XML/1998/namespace";
-// Style properties that take plain numbers (Preact's test, which covers React's unitless list).
-const UNITLESS = /acit|ex(?:s|g|n|p|$)|rph|grid|ows|mnc|ntw|ine[ch]|zoo|^ord|itera/i;
+// Style properties that take plain numbers: React's list.
+const UNITLESS = new Set(
+  (
+    "animationIterationCount aspectRatio borderImageOutset borderImageSlice borderImageWidth boxFlex " +
+    "boxFlexGroup boxOrdinalGroup columnCount columns flex flexGrow flexPositive flexShrink flexNegative " +
+    "flexOrder gridArea gridRow gridRowEnd gridRowSpan gridRowStart gridColumn gridColumnEnd gridColumnSpan " +
+    "gridColumnStart fontWeight lineClamp lineHeight opacity order orphans scale tabSize widows zIndex zoom " +
+    "fillOpacity floodOpacity stopOpacity strokeDasharray strokeDashoffset strokeMiterlimit strokeOpacity " +
+    "strokeWidth MozAnimationIterationCount MozBoxFlex MozBoxFlexGroup MozLineClamp " +
+    "msAnimationIterationCount msFlex msZoom msFlexGrow msFlexNegative msFlexOrder msFlexPositive " +
+    "msFlexShrink msGridColumn msGridColumnSpan msGridRow msGridRowSpan WebkitAnimationIterationCount " +
+    "WebkitBoxFlex WebKitBoxFlexGroup WebkitBoxOrdinalGroup WebkitColumnCount WebkitColumns WebkitFlex " +
+    "WebkitFlexGrow WebkitFlexPositive WebkitFlexShrink WebkitLineClamp"
+  ).split(" "),
+);
+// React's test for a javascript: URL, which it replaces with one that throws (sanitizeURL).
+const JS_URL =
+  /^[\u0000-\u001F ]*j[\r\n\t]*a[\r\n\t]*v[\r\n\t]*a[\r\n\t]*s[\r\n\t]*c[\r\n\t]*r[\r\n\t]*i[\r\n\t]*p[\r\n\t]*t[\r\n\t]*:/i;
+const BLOCKED_URL = "javascript:throw new Error('React has blocked a javascript: URL as a security precaution.')";
+const sanitize = (v: Any): string => (JS_URL.test("" + v) ? BLOCKED_URL : "" + v);
 
 /**
  * Write the difference between old props `o` and new props `p` to `dom`: removed props first,
@@ -1721,7 +1742,7 @@ function setProps(f: Fiber, dom: Any, o: Props, p: Any, mount: boolean): void {
           ? SRC_LAST
           : null;
   for (const k in o) {
-    if (!(k in p) && !RESERVED.has(k) && (skip === null || !skip.has(k))) setAttr(f, dom, k, null, o[k]);
+    if (!(k in p) && !RESERVED.has(k) && (skip === null || !skip.has(k))) setAttr(f, dom, k, undefined, o[k]);
   }
   for (const k in p) {
     const v = p[k];
@@ -1736,20 +1757,24 @@ function setProps(f: Fiber, dom: Any, o: Props, p: Any, mount: boolean): void {
   // Tracked after the initial value is written, so the tracker starts from it.
   if (mount && (tag === "input" || tag === "textarea")) track(dom);
   if (tag === "textarea") {
-    // A controlled textarea also keeps defaultValue in step (unless one is given), as React
-    // does, so a form reset returns to the last rendered value.
-    const v = p.value;
-    if (v != null) {
-      const s = toStr(v);
-      if (mount) dom.defaultValue = s;
-      else {
-        if (dom.value !== s) dom.value = s;
-        if (p.defaultValue == null && dom.defaultValue !== s) dom.defaultValue = s;
-      }
-    } else if (mount) {
+    // React's initTextarea and updateTextarea: a controlled textarea also keeps defaultValue in
+    // step (unless one is given), so a form reset returns to the last rendered value.
+    const v = p.value,
+      dv = p.defaultValue;
+    if (mount) {
       // React accepts the initial text as children too (a one-item array included).
-      const d = p.defaultValue ?? p.children;
+      const d = v ?? dv ?? p.children;
       if (d != null) dom.defaultValue = toStr(Array.isArray(d) ? d[0] : d);
+    } else {
+      if (v != null) {
+        const s = toStr(v);
+        if (dom.value !== s) dom.value = s;
+        if (dv == null) {
+          if (dom.defaultValue !== s) dom.defaultValue = s;
+          return;
+        }
+      }
+      dom.defaultValue = dv != null ? toStr(dv) : "";
     }
   }
 }
@@ -1816,34 +1841,47 @@ function setInput(dom: Any, p: Any, o: Props, mount: boolean): void {
   }
 }
 
-/** A field value as React stringifies it: functions, symbols and booleans become "". */
-const toStr = (v: Any): string =>
-  typeof v === "function" || typeof v === "symbol" || typeof v === "boolean" ? "" : "" + v;
+/** A field value as React's getToStringValue gives it: functions and symbols become "". */
+const toStr = (v: Any): string => (typeof v === "function" || typeof v === "symbol" ? "" : "" + v);
 
 /**
- * Select the options matching a select's value (an array for `multiple`), or its defaultValue on
- * mount. With no match, a single select falls back to its first option, as React's does.
+ * A select's selection by React's rules (ReactDOMSelect): the value selects its options (an array
+ * for `multiple`); on mount a defaultValue does, setting their defaultSelected too, and so does a
+ * change of `multiple` with no value (or the selection is cleared). `o` is null when only the
+ * value is restored after an event.
  */
-function setSelect(dom: Any, p: Any, mount: boolean): void {
-  const v = p.value != null ? p.value : mount ? p.defaultValue : undefined;
-  if (v == null) return;
+function setSelect(dom: Any, p: Any, o: Props | null, mount: boolean): void {
+  const multiple = !!p.multiple;
+  if (p.value != null) return selectOptions(dom, multiple, p.value, false);
+  if (o === null || (!mount && multiple === !!o["multiple"])) return;
+  if (p.defaultValue != null) selectOptions(dom, multiple, p.defaultValue, true);
+  else if (!mount) selectOptions(dom, multiple, multiple ? [] : "", false);
+}
+
+/** React's updateOptions. With no match, a single select falls back to its first enabled option. */
+function selectOptions(dom: Any, multiple: boolean, v: Any, setDefault: boolean): void {
   const opts = dom.options;
-  if (p.multiple) {
-    const want = new Set((v as Any[]).map(toStr));
+  if (multiple) {
+    const want = new Set<string>();
+    for (let i = 0; i < v.length; i++) want.add("" + v[i]);
     for (let i = 0; i < opts.length; i++) {
       const sel = want.has(opts[i].value);
       if (opts[i].selected !== sel) opts[i].selected = sel;
+      if (sel && setDefault) opts[i].defaultSelected = true;
     }
     return;
   }
   const s = toStr(v);
+  let first = null;
   for (let i = 0; i < opts.length; i++) {
     if (opts[i].value === s) {
-      if (!opts[i].selected) opts[i].selected = true;
+      opts[i].selected = true;
+      if (setDefault) opts[i].defaultSelected = true;
       return;
     }
+    if (first === null && !opts[i].disabled) first = opts[i];
   }
-  if (opts.length) opts[0].selected = true;
+  if (first !== null) first.selected = true;
 }
 
 // #endregion
@@ -1851,56 +1889,191 @@ function setSelect(dom: Any, p: Any, mount: boolean): void {
 // #region Attributes and styles
 
 /**
- * Set one prop on an element by React's rules: event props register listeners, `style` goes to
- * setStyle, custom elements get properties, and everything else becomes an attribute (aliased,
- * namespaced in SVG, booleans and nulls handled). `f` only needs `ns` and `t`, so blocks pass a
- * small info object in its place.
+ * Set one prop on an element by React's rules (setProp and setPropOnCustomElement): event props
+ * register listeners, `style` goes to setStyle, custom elements get properties, and everything
+ * else becomes an attribute (aliased, namespaced, booleans and nulls handled). `f` only needs
+ * `ns` and `t`, so blocks pass a small info object in its place.
  */
 function setAttr(f: Fiber, dom: Any, name: string, v: Any, old: Any): void {
-  // "on" followed by an upper-case letter, by char codes: this runs for every prop of every
-  // element, and the test allocates nothing.
-  if (name.length > 2 && name.charCodeAt(0) === 111 && name.charCodeAt(1) === 110 && name.charCodeAt(2) < 91) {
-    // onX: events read the fiber's props when they fire; only listening is set up here.
-    if (v != null) listenFor(dom, name);
-    return;
+  const tag: string = f.t;
+  // "on" in any case, by char codes: this runs for every prop of every element, and the test
+  // allocates nothing. React never writes such a prop as an attribute of a built-in element.
+  if (name.length > 2 && (name.charCodeAt(0) | 32) === 111 && (name.charCodeAt(1) | 32) === 110) {
+    const custom = isCustom(tag);
+    if (!custom || REACT_EVENTS.has(name)) {
+      // onX: events read the fiber's props when they fire; only listening is set up here.
+      if (v != null && name.charCodeAt(0) === 111 && name.charCodeAt(2) < 91) listenFor(dom, name);
+      return;
+    }
+    if (name.charCodeAt(1) === 110 && nativeListener(dom, name, v, old)) return;
   }
   if (name === "style") return setStyle(dom, v, old);
-  if ((name === "action" || name === "formAction") && typeof v === "function") {
-    // Submitting runs the function (see submitAction); the URL React puts here
-    // stops a submission that bypasses the submit event.
-    ensure("submit", false);
-    dom.setAttribute(name.toLowerCase(), ACTION_URL);
+  if (isCustom(tag)) {
+    // React 19's custom element rule: any value goes to a property the element defines, so
+    // objects, arrays and functions reach it intact; otherwise true is presence.
+    if (name in dom) dom[name] = v;
+    else if (v === true) dom.setAttribute(name, "");
+    else setValue(dom, name, v);
     return;
   }
-  // React 19's custom element rule: a non-string value goes to a property the element defines,
-  // so objects, arrays and functions reach it intact.
-  if (f.ns === HTML_NS && f.t.includes("-") && name in dom && typeof v !== "string" && v != null) {
-    dom[name] = v; // custom element property
+  switch (name) {
+    case "action":
+    case "formAction":
+      if (typeof v === "function") {
+        // Submitting runs the function (see submitAction); the URL React puts here
+        // stops a submission that bypasses the submit event.
+        ensure("submit", false);
+        dom.setAttribute(name.toLowerCase(), ACTION_URL);
+        return;
+      }
+      return setURL(dom, null, name.toLowerCase(), v);
+    case "data":
+    case "src":
+    case "href":
+      // Data is a URL only on an <object>.
+      if (name === "data" && tag !== "object") break;
+      // An empty URL would load the page itself, so it is left out (an <a>'s href excepted).
+      if (v === "" && (tag !== "a" || name !== "href")) return dom.removeAttribute(name);
+      return setURL(dom, null, name, v);
+    case "xlinkHref":
+      return setURL(dom, XLINK, "xlink:href", v);
+    case "multiple":
+    case "muted":
+      // Properties only: the attributes set just the initial state.
+      dom[name] = truthy(v);
+      return;
+    case "selected":
+      if (tag !== "option") break;
+      dom.selected = truthy(v);
+      return;
+    case "capture":
+    case "download":
+      if (v === true) dom.setAttribute(name, "");
+      else if (v === false || !plainish(v)) dom.removeAttribute(name);
+      else dom.setAttribute(name, "" + v);
+      return;
+    case "cols":
+    case "rows":
+    case "size":
+    case "span":
+      if (plainish(v) && !isNaN(v) && v >= 1) dom.setAttribute(name, "" + v);
+      else dom.removeAttribute(name);
+      return;
+    case "rowSpan":
+    case "start":
+      if (plainish(v) && !isNaN(v)) dom.setAttribute(name, "" + v);
+      else dom.removeAttribute(name);
+      return;
+  }
+  if (BOOL_ATTRS.has(name)) {
+    if (truthy(v)) dom.setAttribute(name, "");
+    else dom.removeAttribute(name);
     return;
   }
-  let attr = ALIASES[name] ?? name;
-  let ns: string | null = null;
-  // xlinkHref and xmlLang style props live in the XLink and XML namespaces.
-  if (f.ns === SVG_NS) {
-    if (name.startsWith("xlink") && name.length > 5) ((ns = XLINK), (attr = "xlink:" + name.slice(5).toLowerCase()));
-    else if (name.startsWith("xml") && name.length > 3 && name.charCodeAt(3) < 91 && name !== "xmlnsXlink")
-      ((ns = XML), (attr = "xml:" + name.slice(3).toLowerCase()));
+  const q = NS_ATTRS[name];
+  if (q !== undefined) {
+    const ns = q.charCodeAt(1) === 108 ? XLINK : XML; // "xlink:" or "xml:"
+    if (!plainish(v) || typeof v === "boolean") removeAttr(dom, ns, q);
+    else dom.setAttributeNS(ns, q, "" + v);
+    return;
   }
-  if (v == null || typeof v === "function" || typeof v === "symbol") return removeAttr(dom, ns, attr);
-  // Booleans: written as text for data-, aria- and booleanish props, as presence for boolean
-  // attributes, and dropped elsewhere (React warns and omits them).
-  if (typeof v === "boolean") {
-    if (name.startsWith("data-") || name.startsWith("aria-") || BOOLEANISH.has(name)) v = "" + v;
-    else if (BOOL_ATTRS.has(attr.toLowerCase())) {
-      if (!v) return removeAttr(dom, ns, attr);
-      v = "";
-    } else return removeAttr(dom, ns, attr);
+  if (BOOLEANISH.has(name)) {
+    if (plainish(v)) dom.setAttribute(name, "" + v);
+    else dom.removeAttribute(name);
+    return;
   }
-  // The muted attribute only sets the initial state; the property mutes a playing video.
-  if (attr === "muted" && f.t === "video") dom.muted = !!v;
-  if (ns !== null) dom.setAttributeNS(ns, attr, "" + v);
-  else dom.setAttribute(attr, "" + v);
+  setValue(dom, ALIASES[name] ?? name, v);
 }
+
+/**
+ * A custom element's own on* prop (React's setPropOnCustomElement): a function is a native
+ * listener for the event named after "on", case kept, with a Capture suffix meaning capture.
+ * Returns false for any other value, which is then set as a property or attribute.
+ */
+function nativeListener(dom: Any, name: string, v: Any, old: Any): boolean {
+  const capture = name.endsWith("Capture");
+  const type = name.slice(2, capture ? -7 : undefined);
+  if (typeof old === "function") dom.removeEventListener(type, old, capture);
+  if (typeof v !== "function") return false;
+  if (typeof old !== "function" && old !== null) {
+    if (name in dom) dom[name] = null;
+    else if (dom.hasAttribute(name)) dom.removeAttribute(name);
+  }
+  dom.addEventListener(type, v, capture);
+  return true;
+}
+
+// React's event props, bubble and capture: on a custom element these stay synthetic, and any
+// other on* prop is the element's own (onScrollEnd React listens for itself).
+const REACT_EVENTS = new Set<string>();
+for (const e of (
+  "abort auxClick beforeToggle cancel canPlay canPlayThrough click close contextMenu copy cut drag dragEnd " +
+  "dragEnter dragExit dragLeave dragOver dragStart drop durationChange emptied encrypted ended error " +
+  "fullscreenChange fullscreenError gotPointerCapture input invalid keyDown keyPress keyUp load loadedData " +
+  "loadedMetadata loadStart lostPointerCapture mouseDown mouseMove mouseOut mouseOver mouseUp paste pause play " +
+  "playing pointerCancel pointerDown pointerMove pointerOut pointerOver pointerUp progress rateChange reset " +
+  "resize seeked seeking stalled submit suspend timeUpdate touchCancel touchEnd touchStart volumeChange scroll " +
+  "toggle touchMove waiting wheel animationEnd animationIteration animationStart doubleClick focus blur " +
+  "transitionRun transitionStart transitionCancel transitionEnd change select beforeInput compositionEnd " +
+  "compositionStart compositionUpdate"
+).split(" ")) {
+  const n = "on" + e[0]!.toUpperCase() + e.slice(1);
+  REACT_EVENTS.add(n).add(n + "Capture");
+}
+for (const n of "onMouseEnter onMouseLeave onPointerEnter onPointerLeave onScrollEnd".split(" ")) REACT_EVENTS.add(n);
+
+/** React's setValueForAttribute: booleans are kept as text only by data- and aria- attributes. */
+function setValue(dom: Any, attr: string, v: Any): void {
+  if (!plainish(v)) return dom.removeAttribute(attr);
+  if (typeof v === "boolean") {
+    const pre = attr.slice(0, 5).toLowerCase();
+    if (pre !== "data-" && pre !== "aria-") return dom.removeAttribute(attr);
+  }
+  dom.setAttribute(attr, "" + v);
+}
+
+/** A URL attribute: booleans and the rest of what is not text are left out; javascript: blocked. */
+function setURL(dom: Any, ns: string | null, attr: string, v: Any): void {
+  if (!plainish(v) || typeof v === "boolean") removeAttr(dom, ns, attr);
+  else if (ns !== null) dom.setAttributeNS(ns, attr, sanitize(v));
+  else dom.setAttribute(attr, sanitize(v));
+}
+
+/**
+ * Hold a block hole's attribute in the template, so its value later lands in prop order. Props
+ * that are properties, not attributes, hold nothing.
+ */
+function reserveAttr(info: Any, el: Any, name: string): void {
+  const tag: string = info.t;
+  if (
+    isCustom(tag) ||
+    name === "multiple" ||
+    name === "muted" ||
+    name === "style" ||
+    (name === "selected" && tag === "option")
+  )
+    return;
+  if (name === "xlinkHref") return el.setAttributeNS(XLINK, "xlink:href", "");
+  const q = NS_ATTRS[name];
+  if (q !== undefined) el.setAttributeNS(q.charCodeAt(1) === 108 ? XLINK : XML, q, "");
+  else el.setAttribute(name === "action" || name === "formAction" ? name.toLowerCase() : (ALIASES[name] ?? name), "");
+}
+
+// Not null, undefined, a function or a symbol.
+const plainish = (v: Any): boolean => v != null && typeof v !== "function" && typeof v !== "symbol";
+// Truthy, and not a function or symbol: how React reads boolean attributes and properties.
+const truthy = (v: Any): boolean => !!v && typeof v !== "function" && typeof v !== "symbol";
+// Custom elements by React's test: a hyphen in the tag, except SVG and MathML's hyphenated names.
+const NOT_CUSTOM = new Set(
+  "annotation-xml color-profile font-face font-face-src font-face-uri font-face-format font-face-name missing-glyph".split(
+    " ",
+  ),
+);
+const isCustom = (tag: string): boolean => tag.includes("-") && !NOT_CUSTOM.has(tag);
+// The xlink and xml props React sets in their namespaces, on any element.
+const NS_ATTRS: Record<string, string> = {};
+for (const n of "Actuate Arcrole Role Show Title Type".split(" ")) NS_ATTRS["xlink" + n] = "xlink:" + n.toLowerCase();
+for (const n of "Base Lang Space".split(" ")) NS_ATTRS["xml" + n] = "xml:" + n.toLowerCase();
 
 /** Remove an attribute; a namespaced one is removed by its local name (after the prefix). */
 function removeAttr(dom: Any, ns: string | null, attr: string): void {
@@ -1909,37 +2082,33 @@ function removeAttr(dom: Any, ns: string | null, attr: string): void {
 }
 
 /**
- * Apply a style prop: a string as cssText, an object property by property, touching only the
- * properties that changed from `old`.
+ * Apply a style prop, an object, property by property, touching only the properties that changed
+ * from `old`. Anything else throws, as React's setValueForStyles does.
  */
 function setStyle(dom: Any, v: Any, old: Any): void {
+  if (v != null && typeof v !== "object")
+    throw new Error(
+      "The `style` prop expects a mapping from style properties to values, not a string. For example, style={{marginRight: spacing + 'em'}} when using JSX.",
+    );
   const s = dom.style;
-  if (typeof v === "string") {
-    s.cssText = v;
-    return;
-  }
-  // From a string to an object: start clean, since the string's properties are not known by name.
-  if (typeof old === "string") {
-    s.cssText = "";
-    old = null;
-  }
-  if (old != null) for (const k in old) if (v == null || !(k in v)) styleProp(s, k, null);
+  if (old != null && typeof old === "object") for (const k in old) if (v == null || !(k in v)) styleProp(s, k, null);
   if (v != null) for (const k in v) if (old == null || v[k] !== old[k]) styleProp(s, k, v[k]);
 }
 
 /**
- * Set one style property. Numbers get "px" unless the property is unitless or the number is 0;
- * custom properties (`--x`, char code 45 is '-') take any value through setProperty.
+ * Set one style property, as React's setValueForStyle: numbers get "px" unless the property is
+ * unitless or the number is 0, strings are trimmed; custom properties (`--x`, char code 45 is
+ * '-') take any value through setProperty.
  */
 function styleProp(s: Any, k: string, v: Any): void {
-  const val =
-    v == null || typeof v === "boolean" || v === ""
-      ? ""
-      : typeof v === "number" && v !== 0 && k.charCodeAt(0) !== 45 && !UNITLESS.test(k)
-        ? v + "px"
-        : "" + v;
-  if (k.charCodeAt(0) === 45) s.setProperty(k, val);
-  else s[k === "float" ? "cssFloat" : k] = val;
+  const custom = k.charCodeAt(0) === 45 && k.charCodeAt(1) === 45;
+  if (v == null || typeof v === "boolean" || v === "") {
+    if (custom) s.setProperty(k, "");
+    else s[k === "float" ? "cssFloat" : k] = "";
+  } else if (custom) s.setProperty(k, "" + v);
+  else if (typeof v === "number" && v !== 0 && !UNITLESS.has(k)) s[k] = v + "px";
+  else if (k === "float") s.cssFloat = v;
+  else s[k] = ("" + v).trim();
 }
 
 // #endregion
@@ -2089,7 +2258,7 @@ class Template {
             if (/^on[A-Z]/.test(k)) listenFor(el, k);
             // Not style: the browser writes its attribute when it is first
             // serialized, after the others, as React's output has it.
-            else if (k !== "style") setAttr(info as Any, el, k, "", undefined);
+            else reserveAttr(info, el, k);
           }
         }
       }
@@ -4794,7 +4963,7 @@ function restoreControlled(f: Fiber): void {
   if (t !== "input" && t !== "textarea" && t !== "select") return;
   const dom = f.d,
     p = f.p;
-  if (t === "select") return setSelect(dom, p, false);
+  if (t === "select") return setSelect(dom, p, null, false);
   if (p.value != null && dom.value !== toStr(p.value)) dom.value = toStr(p.value);
   if (p.checked != null) {
     dom.checked = !!p.checked;

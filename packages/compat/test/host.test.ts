@@ -186,6 +186,9 @@ class Option extends El {
   get value(): string {
     return this.getAttribute("value") ?? this.textContent;
   }
+  get disabled(): boolean {
+    return this.hasAttribute("disabled");
+  }
 }
 
 /** A <form>: its method and how often it was reset. */
@@ -200,6 +203,15 @@ class Form extends El {
 /** A custom element that defines an `items` property. */
 class Widget extends El {
   items: unknown = undefined;
+  /** Native listeners added and removed, with their capture flag. */
+  readonly listens: unknown[][] = [];
+  override addEventListener(type: string, fn: Parameters<FakeElement["addEventListener"]>[1], capture?: unknown): void {
+    this.listens.push(["add", type, fn, capture]);
+    super.addEventListener(type, fn);
+  }
+  removeEventListener(type: string, fn: unknown, capture?: unknown): void {
+    this.listens.push(["remove", type, fn, capture]);
+  }
 }
 
 const KINDS: Record<string, typeof El> = {
@@ -470,12 +482,109 @@ describe("attributes", () => {
     expect(first(0).getAttribute("formaction")).toBe(first().getAttribute("action"));
   });
 
-  test.todo("a falsy non-boolean on a boolean attribute leaves it out (React: disabled={0} and hidden='' are absent)");
-  test.todo("credentialless is a boolean attribute (React: credentialless={true} writes '')");
-  test.todo("muted={true} on a <video> sets its muted property to true (compat writes !!'' = false)");
-  test.todo("muted is only a property (React writes no muted attribute, and sets audio.muted too)");
-  test.todo("a custom element takes a string through a property it defines (React: `key in el` sets el[key])");
-  test.todo("xmlLang and xlinkHref are namespaced on HTML elements too (React's setProp does it for every tag)");
+  test("a boolean attribute is present for any truthy value and absent for a falsy one", () => {
+    render(h("input", { disabled: 0, hidden: "", readOnly: "false", required: 1 }));
+    expect(attrs(first())).toEqual(["readonly=", "required="]);
+    render(h("iframe", { credentialless: true }));
+    expect(attrs(first())).toEqual(["credentialless="]);
+  });
+
+  test("muted, multiple and an option's selected are properties only, on any element", () => {
+    render(h("div", null, h("video", { muted: true }), h("audio", { muted: 1 }), h("p", { muted: noop })));
+    expect([first(0)["muted"], first(1)["muted"], first(2)["muted"]]).toEqual([true, true, false]);
+    expect([0, 1, 2].map((i) => attrs(first(i)))).toEqual([[], [], []]);
+    render(h("select", { multiple: true }, h("option", { selected: true }, "a")));
+    expect(first<Select>().multiple).toBe(true);
+    expect(first<Option>(0).selected).toBe(true);
+    expect(attrs(first(0))).toEqual([]);
+  });
+
+  test("an empty src, or an href off an <a>, is left out; a boolean URL too", () => {
+    render(
+      h("div", null, h("img", { src: "" }), h("a", { href: "" }), h("area", { href: "" }), h("img", { src: true })),
+    );
+    expect([0, 1, 2, 3].map((i) => attrs(first(i)))).toEqual([[], ["href="], [], []]);
+    render(h("div", null, h("object", { data: "" }), h("p", { data: "" })));
+    expect([attrs(first(0)), attrs(first(1))]).toEqual([[], ["data="]]);
+  });
+
+  test("cols, rows, size and span need a number of at least 1; rowSpan and start a number", () => {
+    render(h("textarea", { cols: 0, rows: "x", size: 2, span: 1 }));
+    expect(attrs(first())).toEqual(["size=2", "span=1"]);
+    render(h("td", { rowSpan: "x", start: 3 }));
+    expect(attrs(first())).toEqual(["start=3"]);
+  });
+
+  test("innerText and textContent props are ignored", () => {
+    render(h("p", { innerText: "a", textContent: "b", title: "t" }));
+    expect(attrs(first())).toEqual(["title=t"]);
+  });
+
+  test("a custom element takes a value through any property it defines, strings and undefined included", () => {
+    render(h("my-widget", { items: "s", flag: true, label: "x" }));
+    const w = first<Widget>();
+    expect(w.items).toBe("s");
+    expect(attrs(w)).toEqual(["flag=", "label=x"]);
+    render(h("my-widget", { label: "x" }));
+    expect(w.items).toBeUndefined();
+    expect(attrs(w)).toEqual(["label=x"]);
+  });
+
+  test("a custom element's own on* function props are native listeners; React's events stay synthetic", () => {
+    const a = () => {},
+      b = () => {},
+      c = () => {};
+    render(h("my-widget", { onMyEvent: a, onThingCapture: b, onClick: noop, onKeyDownCapture: noop }));
+    const w = first<Widget>();
+    expect(w.listens).toEqual([
+      ["add", "MyEvent", a, false],
+      ["add", "Thing", b, true],
+    ]);
+    w.listens.length = 0;
+    render(h("my-widget", { onMyEvent: c, onClick: noop, onKeyDownCapture: noop }));
+    expect(w.listens).toEqual([
+      ["remove", "Thing", b, true],
+      ["remove", "MyEvent", a, false],
+      ["add", "MyEvent", c, false],
+    ]);
+    // A value that is not a function is an attribute, after the old listener goes.
+    w.listens.length = 0;
+    render(h("my-widget", { onMyEvent: "x" }));
+    expect(w.listens).toEqual([["remove", "MyEvent", c, false]]);
+    expect(attrs(w)).toEqual(["onmyevent=x"]);
+  });
+
+  test("a prop starting with on, in any case, is never an attribute of a built-in element", () => {
+    render(h("div", { onclick: "x", one: "1", ONx: "y", on: "z" }));
+    expect(attrs(first())).toEqual(["on=z"]);
+  });
+
+  test("xlink and xml props are namespaced on HTML elements too", () => {
+    render(h("p", { xmlLang: "en", xlinkHref: "#a" }));
+    expect([...first().attrNs]).toEqual([
+      ["xml:lang", XML_NS],
+      ["xlink:href", XLINK_NS],
+    ]);
+  });
+
+  test("a javascript: URL in src, href, action or xlinkHref is replaced by one that throws", () => {
+    const blocked = "javascript:throw new Error('React has blocked a javascript: URL as a security precaution.')";
+    render(
+      h(
+        "div",
+        null,
+        h("a", { href: "javascript:alert(1)" }),
+        h("iframe", { src: " \tjava\nscript:x" }),
+        h("form", { action: "JavaScript:void 0" }),
+        h("a", { href: "/javascript:x" }),
+      ),
+    );
+    expect([0, 1].map((i) => attrs(first(i)))).toEqual([[`href=${blocked}`], [`src=${blocked}`]]);
+    expect(first(2).getAttribute("action")).toBe(blocked);
+    expect(first(3).getAttribute("href")).toBe("/javascript:x");
+    render(h("svg", null, h("use", { xlinkHref: "javascript:x" })));
+    expect(first(0).getAttribute("xlink:href")).toBe(blocked);
+  });
 });
 
 describe("styles", () => {
@@ -528,10 +637,38 @@ describe("styles", () => {
     expect(style().log).toEqual(["color=", "top="]);
   });
 
-  test.todo("a string style throws, as React's does (compat writes it as cssText)");
-  test.todo(
-    "aspectRatio, scale, tabSize, columns and strokeWidth take plain numbers, and gridGap gets px, by React's list",
-  );
+  test("a string style throws, as React's does", () => {
+    expect(() => render(h("div", { style: "color: red" }))).toThrow(
+      "The `style` prop expects a mapping from style properties to values, not a string.",
+    );
+  });
+
+  test("React's unitless list decides which numbers get px; strings are trimmed", () => {
+    render(
+      h("div", {
+        style: {
+          aspectRatio: 2,
+          scale: 2,
+          tabSize: 4,
+          columns: 2,
+          strokeWidth: 3,
+          gridGap: 10,
+          gridRowGap: 1,
+          top: " 1px ",
+        },
+      }),
+    );
+    expect(style().log).toEqual([
+      "aspectRatio=2",
+      "scale=2",
+      "tabSize=4",
+      "columns=2",
+      "strokeWidth=3",
+      "gridGap=10px",
+      "gridRowGap=1px",
+      "top=1px",
+    ]);
+  });
 });
 
 describe("inputs", () => {
@@ -582,7 +719,10 @@ describe("inputs", () => {
     expect(first<Input>(1).defaultValue).toBe("");
   });
 
-  test.todo("a boolean value is written as text (React's getToStringValue keeps booleans: value={true} is 'true')");
+  test("a boolean value is written as text, as React's getToStringValue keeps it", () => {
+    render(h("input", { value: true, onChange: noop }));
+    expect([first<Input>().value, first<Input>().defaultValue]).toEqual(["true", "true"]);
+  });
 
   test("a changed type is set, and a removed one removed", () => {
     render(h("input", { type: "text" }));
@@ -665,8 +805,19 @@ describe("textareas", () => {
     expect([ta.value, ta.defaultValue]).toEqual(["b", "b"]);
   });
 
-  test.todo("an uncontrolled textarea's defaultValue updates its default (React's updateTextarea)");
-  test.todo("a controlled textarea with a defaultValue keeps that as its default (React's updateTextarea)");
+  test("an uncontrolled textarea's defaultValue updates its default, and goes empty when removed", () => {
+    render(h("textarea", { defaultValue: "a" }));
+    render(h("textarea", { defaultValue: "b" }));
+    expect(first<TextArea>().defaultValue).toBe("b");
+    render(h("textarea", null));
+    expect(first<TextArea>().defaultValue).toBe("");
+  });
+
+  test("a controlled textarea with a defaultValue keeps that as its default", () => {
+    render(h("textarea", { value: "a", defaultValue: "d", onChange: noop }));
+    render(h("textarea", { value: "b", defaultValue: "d", onChange: noop }));
+    expect([first<TextArea>().value, first<TextArea>().defaultValue]).toEqual(["b", "d"]);
+  });
 });
 
 describe("selects", () => {
@@ -708,8 +859,27 @@ describe("selects", () => {
     expect(selected()).toEqual([false, true, false]);
   });
 
-  test.todo("with no match, the first enabled option is selected (React skips disabled ones)");
-  test.todo("defaultValue also sets the matching option's defaultSelected, so a form reset keeps it (React)");
+  test("with no match, the first enabled option is selected", () => {
+    render(
+      h("select", { value: "z", onChange: noop }, h("option", { value: "a", disabled: true }, "A"), opts("b", "c")),
+    );
+    expect(selected()).toEqual([false, true, false]);
+  });
+
+  test("defaultValue also sets the matching options' defaultSelected, so a form reset keeps them", () => {
+    render(h("select", { defaultValue: "b" }, opts("a", "b")));
+    expect(first<Select>().options.map((o) => o["defaultSelected"] === true)).toEqual([false, true]);
+    render(h("div", null, h("select", { multiple: true, defaultValue: ["a"] }, opts("a", "b"))));
+    expect(first<Select>(0).options.map((o) => o["defaultSelected"] === true)).toEqual([true, false]);
+  });
+
+  test("switching multiple with no value applies the defaultValue again, or clears the selection", () => {
+    render(h("select", { defaultValue: "b" }, opts("a", "b")));
+    render(h("select", { multiple: true, defaultValue: ["a"] }, opts("a", "b")));
+    expect(selected()).toEqual([true, false]);
+    render(h("select", { multiple: false }, opts("a", "b")));
+    expect(selected()).toEqual([true, false]);
+  });
 });
 
 describe("hydration", () => {

@@ -26,6 +26,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Fixed: a `<title>` rendered anywhere goes into `<head>` before the titles already there, as React places it, so the newest one sets the document's title (react-helmet-async's nested titles).
 - Fixed: a new `<img>` gets `srcSet` and `src` after its other props, as React sets them, so attributes such as `sizes` and `loading` apply before the image is requested (react-image-crop's markup).
 - Fixed: class components: `setState` in `componentWillMount` applies before the first render with no second render after it, and a class with a `getSnapshotBeforeUpdate` method gets no `componentWillMount` call, as in React.
+- Fixed: element props follow React 19's rules:
+  - Boolean attributes use React's list by prop name, `credentialless` included, and are present for any truthy value.
+  - `muted`, `multiple` and an `<option>`'s `selected` are set as properties only.
+  - An empty `src`, or an empty `href` off an `<a>`, is left out.
+  - `cols`, `rows`, `size` and `span` need a number of at least 1, and `rowSpan` and `start` need a number.
+  - `innerText` and `textContent` props are ignored.
+  - `xlink*` and `xml*` props are namespaced on every element.
+  - A `javascript:` URL in `src`, `href`, `action`, `formAction` or `xlinkHref` is replaced by one that throws, as React blocks it.
+  - A custom element takes any value through a property it defines, strings and `undefined` included.
+  - A custom element's own `on*` function props, such as `onMyEvent`, are native listeners for the event named after "on"; React's event props stay synthetic.
+  - A prop starting with "on", in any case, is never an attribute of a built-in element.
+- Fixed: styles follow React 19's rules: a string `style` throws, React's own list decides which numbers get `px`, and string values are trimmed.
+- Fixed: form fields follow React 19's rules:
+  - A boolean `value` is written as text.
+  - An uncontrolled `<textarea>`'s `defaultValue` updates its default.
+  - A controlled `<textarea>` with a `defaultValue` keeps it as its default.
+  - A `<select>` with no matching option selects its first enabled one.
+  - A `<select>`'s `defaultValue` also sets its options' `defaultSelected`.
+  - A change of `multiple` with no `value` applies the `defaultValue` again or clears the selection.
 - Changed: an update made outside React's event handlers renders as React's lanes order it: in a microtask during a discrete event such as a click or a key, and otherwise (timers, promises, continuous events such as mouseover) in a task of its own, so updates from timers that fire one after another render together (react-tooltip moving between anchors).
 - Added: an ES module build of `@reactre/compat/compiler` in `dist/`, so Node can load `compileJs`.
 - Docs: setting up Vite, with @reactre/plugin or an alias.
