@@ -26,6 +26,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Fixed: a `<title>` rendered anywhere goes into `<head>` before the titles already there, as React places it, so the newest one sets the document's title (react-helmet-async's nested titles).
 - Fixed: a new `<img>` gets `srcSet` and `src` after its other props, as React sets them, so attributes such as `sizes` and `loading` apply before the image is requested (react-image-crop's markup).
 - Fixed: class components: `setState` in `componentWillMount` applies before the first render with no second render after it, and a class with a `getSnapshotBeforeUpdate` method gets no `componentWillMount` call, as in React.
+- Fixed: hidden content follows React's Offscreen rules:
+  - A hidden `<Activity>` commits no effects, refs or class lifecycles, from its first render to the render that shows it.
+  - Hiding runs every layout cleanup, ref detach and `componentWillUnmount`, parent first, then every passive cleanup.
+  - Showing runs each effect once, children first, and attaches the refs and calls `componentDidMount` again.
+  - An Activity inside hidden content waits for that content.
+  - Shown content that suspends again has its layout effects and refs cleaned up until it is revealed, and its passive effects stay connected.
 - Fixed: `unstable_batchedUpdates` is `fn(a)`, as React 19's is: updates outside an event render when the scheduler runs them.
 - Fixed: a transition callback that throws synchronously sends the error to the component's error boundary (`useTransition`), or reports it (`startTransition`), instead of throwing to the caller.
 - Fixed: a class's ref is detached before its `componentWillUnmount` runs, and either can throw without stopping the other. A callback ref to a class instance may return a cleanup, which runs instead of a call with `null`.

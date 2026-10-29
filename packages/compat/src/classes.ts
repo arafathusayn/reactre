@@ -95,8 +95,8 @@ function support(core: ClassCore): ClassSupport {
     const ref = f.p.ref,
       oref = old === null ? undefined : old["ref"];
     if (ref === oref) return;
-    if (oref != null) core.detachRef(f, oref);
-    if (ref != null) core.later(f, () => core.attachRef(f, ref, inst));
+    if (oref != null && core.hiddenLevel(f) === 0) core.detachRef(f, oref);
+    if (ref != null) core.laterShown(f, () => core.attachRef(f, ref, inst));
   }
 
   // setState callbacks, with layout effects.
@@ -198,9 +198,9 @@ function support(core: ClassCore): ClassSupport {
         render(f, inst);
         // Did-mount and did-update run after the commit, with layout effects.
         if (mount) {
-          if (typeof inst.componentDidMount === "function") core.later(f, () => inst.componentDidMount());
+          if (typeof inst.componentDidMount === "function") core.laterShown(f, () => inst.componentDidMount());
         } else if (typeof inst.componentDidUpdate === "function") {
-          core.later(f, () => inst.componentDidUpdate(prevProps, prevState, snapshot));
+          core.laterShown(f, () => inst.componentDidUpdate(prevProps, prevState, snapshot));
         }
         classRef(f, old, inst);
         callbacks(f);

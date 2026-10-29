@@ -591,10 +591,40 @@ describe("suspense", () => {
     expect(container.firstChild).toBe(i);
   });
 
-  // React cleans up the layout effects of shown content that suspends again (it disappears the
-  // hidden tree's layout effects, and re-runs them on reveal); compat's runSuspense only hides
-  // the nodes.
-  test.todo("shown content that suspends again has its layout effects cleaned up until it shows");
+  // React cleans up the layout effects and refs of shown content that suspends again, and runs
+  // them again on reveal; its passive effects stay connected.
+  test("shown content that suspends again has its layout effects cleaned up until it shows", async () => {
+    const log: string[] = [];
+    let ready = false;
+    let resolve!: () => void;
+    const settled = new Promise<void>((r) => (resolve = r)).then(() => void (ready = true));
+    let set!: (v: string) => void;
+    function Effects() {
+      useLayoutEffect(() => {
+        log.push("layout");
+        return () => void log.push("layout cleanup");
+      }, []);
+      useEffect(() => {
+        log.push("passive");
+        return () => void log.push("passive cleanup");
+      }, []);
+      return h("i", { ref: (v: unknown) => void log.push(v === null ? "ref null" : "ref") });
+    }
+    function Data() {
+      const [v, setV] = useState("a");
+      set = setV;
+      if (v === "b" && !ready) throw settled;
+      return h("b", null, v);
+    }
+    render(h(Suspense, { fallback: "wait" }, h(Effects), h(Data)));
+    expect(log.splice(0)).toEqual(["ref", "layout", "passive"]);
+    flushSync(() => set("b"));
+    expect(log.splice(0)).toEqual(["layout cleanup", "ref null"]);
+    resolve();
+    await settled;
+    await until(() => html() === "<i></i><b>b</b>");
+    expect(log.splice(0)).toEqual(["ref", "layout"]);
+  });
 });
 
 describe("activity", () => {
@@ -652,17 +682,99 @@ describe("activity", () => {
     expect(log).toEqual(["inner layout", "outer layout", "inner passive", "outer passive"]);
   });
 
-  // React does not mount the effects of content that starts hidden; compat's runActivity
-  // reconciles first, so the effects it queues run before the subtree is disconnected.
-  test.todo("an Activity that mounts hidden runs no effects until it is shown");
-  // React disconnects a hidden subtree's effects and runs none until it shows; compat commits
-  // the effects of a hidden component's render (an effect with no deps runs again on hide), and
-  // on show runs such an effect twice (once from the render, once from reconnect), losing the
-  // first cleanup.
-  test.todo("a hidden Activity's re-render runs no effects, and showing it runs each effect once");
-  // React cleans up every layout effect of the hidden tree, then every passive one (both parent
-  // first); compat's disconnect does both per component.
-  test.todo("hiding cleans up all layout effects before any passive effect");
+  // React does not mount the effects of content that starts hidden.
+  test("an Activity that mounts hidden runs no effects until it is shown", () => {
+    const log: string[] = [];
+    const view = (mode: string) => h(Activity, { mode }, h(Panel, { log }));
+    render(view("hidden"));
+    expect(log.splice(0)).toEqual([]);
+    render(view("visible"));
+    expect(log.splice(0)).toEqual(["layout", "passive"]);
+  });
+
+  // React runs no effects in a hidden subtree; showing it runs each effect once, and its
+  // cleanups follow.
+  test("a hidden Activity's re-render runs no effects, and showing it runs each effect once", () => {
+    const log: string[] = [];
+    function Every({ n }: { n: number }) {
+      useLayoutEffect(() => {
+        log.push("layout " + n);
+        return () => void log.push("layout cleanup " + n);
+      });
+      useEffect(() => {
+        log.push("passive " + n);
+        return () => void log.push("passive cleanup " + n);
+      });
+      return h("i", null, n);
+    }
+    const view = (mode: string, n: number) => h(Activity, { mode }, h(Every, { n }));
+    render(view("visible", 1));
+    render(view("hidden", 1));
+    expect(log.splice(0)).toEqual(["layout 1", "passive 1", "layout cleanup 1", "passive cleanup 1"]);
+    render(view("hidden", 2));
+    expect(log.splice(0)).toEqual([]);
+    render(view("visible", 3));
+    expect(log.splice(0)).toEqual(["layout 3", "passive 3"]);
+    render(view("visible", 4));
+    expect(log.splice(0)).toEqual(["layout cleanup 3", "layout 4", "passive cleanup 3", "passive 4"]);
+  });
+
+  // React cleans up every layout effect of the hidden tree, then every passive one, both parent
+  // first (disappearLayoutEffects, then disconnectPassiveEffect).
+  test("hiding cleans up all layout effects before any passive effect", () => {
+    const log: string[] = [];
+    function Effects({ name, children }: { name: string; children?: unknown }) {
+      useLayoutEffect(() => () => void log.push(name + " layout cleanup"), []);
+      useEffect(() => () => void log.push(name + " passive cleanup"), []);
+      return children ?? null;
+    }
+    const view = (mode: string) => h(Activity, { mode }, h(Effects, { name: "outer" }, h(Effects, { name: "inner" })));
+    render(view("visible"));
+    render(view("hidden"));
+    expect(log).toEqual([
+      "outer layout cleanup",
+      "inner layout cleanup",
+      "outer passive cleanup",
+      "inner passive cleanup",
+    ]);
+  });
+
+  // React detaches the refs and unmounts the classes of a hidden tree (componentWillUnmount),
+  // and attaches and mounts them again when it shows; a hidden mount attaches nothing.
+  test("hiding detaches refs and unmounts classes; showing attaches and mounts them again", () => {
+    const log: string[] = [];
+    class Cls extends Component {
+      override componentDidMount() {
+        log.push("did mount");
+      }
+      override componentWillUnmount() {
+        log.push("will unmount");
+      }
+      override render() {
+        return h("u", { ref: (v: unknown) => void log.push(v === null ? "u null" : "u ref") });
+      }
+    }
+    const view = (mode: string) =>
+      h(Activity, { mode }, h(Cls, { ref: (v: unknown) => void log.push(v === null ? "cls null" : "cls ref") }));
+    render(view("hidden"));
+    expect(log.splice(0)).toEqual([]);
+    render(view("visible"));
+    expect(log.splice(0)).toEqual(["u ref", "did mount", "cls ref"]);
+    render(view("hidden"));
+    expect(log.splice(0)).toEqual(["cls null", "will unmount", "u null"]);
+  });
+
+  // A shown Activity inside a hidden one runs nothing until the outer one shows.
+  test("an Activity shown inside a hidden one waits for the outer one", () => {
+    const log: string[] = [];
+    const view = (outer: string, inner: string) =>
+      h(Activity, { mode: outer }, h(Activity, { mode: inner }, h(Panel, { log })));
+    render(view("hidden", "hidden"));
+    render(view("hidden", "visible"));
+    expect(log.splice(0)).toEqual([]);
+    render(view("visible", "visible"));
+    expect(log.splice(0)).toEqual(["layout", "passive"]);
+  });
 });
 
 describe("unmounting", () => {

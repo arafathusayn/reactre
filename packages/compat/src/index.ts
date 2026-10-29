@@ -1631,10 +1631,11 @@ function runHost(f: Fiber, old: Props | null, mount: boolean): void {
   const ref = p.ref,
     oref = old === null ? undefined : old["ref"];
   if (ref !== oref) {
-    if (oref != null) detachRef(f, oref);
-    if (ref != null) later(f, () => attachRef(f, ref, dom));
+    // Hidden content detached its refs when it hid, and attaches them when it shows.
+    if (oref != null && (hiddenCount === 0 || hiddenLevel(f) === 0)) detachRef(f, oref);
+    if (ref != null) laterShown(f, () => attachRef(f, ref, dom));
   }
-  if (mount && p.autoFocus && typeof dom.focus === "function") later(f, () => dom.focus());
+  if (mount && p.autoFocus && typeof dom.focus === "function") laterShown(f, () => dom.focus());
 }
 
 /**
@@ -3102,6 +3103,10 @@ export interface ClassCore {
   removeAll(f: Any): void;
   readContext(f: Any, ctx: Any): Any;
   later(f: Any, fn: () => void): void;
+  /** later, unless f is hidden content, which runs it when it shows. */
+  laterShown(f: Any, fn: () => void): void;
+  /** How hidden f is: 0 not, 1 or 2 inside content Suspense or Activity hid. */
+  hiddenLevel(f: Any): number;
   attachRef(f: Any, ref: Any, v: Any): void;
   detachRef(f: Any, ref: Any): void;
   schedule(f: Any): void;
@@ -3119,7 +3124,7 @@ export interface ClassSupport {
   enqueue(inst: Any, partial: Any, cb: (() => void) | undefined, force: boolean): void;
   /** Whether class fiber `f` is an error boundary (getDerivedStateFromError or componentDidCatch). */
   boundary(f: Any): boolean;
-  /** componentWillUnmount and ref cleanup for class fiber `f`. */
+  /** componentWillUnmount for class fiber `f` (its ref is detached before). */
   unmount(f: Any): void;
 }
 
@@ -3139,6 +3144,8 @@ export function __installClasses(make: (core: ClassCore) => ClassSupport): void 
     removeAll: (f) => removeAll(f),
     readContext,
     later,
+    laterShown,
+    hiddenLevel,
     attachRef,
     detachRef,
     schedule,
@@ -3267,6 +3274,11 @@ function runSuspense(f: Fiber): void {
       // Resolved: the fallback goes and the kept content is shown again.
       if (f.q !== null) {
         setHidden(primary, false);
+        if (primary.f & HIDDEN) {
+          primary.f &= ~HIDDEN;
+          hiddenCount--;
+          if (hiddenLevel(primary) === 0) reappear(primary);
+        }
         unmount(f.q, true);
         f.q = null;
         curHost.f |= STRUCT;
@@ -3293,6 +3305,11 @@ function runSuspense(f: Fiber): void {
   if (primary !== null) {
     primary.f |= DIRTY;
     setHidden(primary, true);
+    if (!(primary.f & HIDDEN)) {
+      primary.f |= HIDDEN;
+      hiddenCount++;
+      if (hiddenLevel(primary) === 0) disappear(primary);
+    }
   }
   let fb: Fiber | null = f.q;
   if (fb === null) {
@@ -3335,59 +3352,145 @@ function retry(f: Fiber): () => void {
 
 /**
  * Render an Activity. Hidden content stays mounted and keeps rendering (state intact), but its
- * nodes are hidden and its effects cleaned up until it is shown again, as React's does.
+ * nodes are hidden and, as React's Offscreen does, it commits no effects, refs or class
+ * lifecycles until it is shown: hiding cleans up what ran, showing runs it all once.
  */
 function runActivity(f: Fiber): void {
   const hide = f.p.mode === "hidden";
   let inner: Fiber | null = f.s;
+  const mounting = inner === null;
   if (inner === null) {
     inner = f.s = frag(f, 0);
     f.c = [inner];
     curHost.f |= STRUCT;
   }
   const was = (f.f & HIDDEN) !== 0;
+  // Hidden before the render, so the render commits nothing.
+  if (hide && !was) {
+    f.f |= HIDDEN;
+    hiddenCount++;
+  }
   reconcile(inner, f.p.children);
-  if (hide !== was) {
-    f.f ^= HIDDEN;
-    setHidden(inner, hide);
-    if (hide) disconnect(inner);
-    else reconnect(inner);
+  if (hide === was) return;
+  // Inside other hidden content, what is cleaned up or run waits for that content.
+  const above = hiddenLevel(f);
+  if (hide) {
+    setHidden(inner, true);
+    if (mounting) return;
+    if (above === 0) disappear(inner);
+    if (above < 2) disconnectPassive(inner);
+  } else {
+    f.f &= ~HIDDEN;
+    hiddenCount--;
+    setHidden(inner, false);
+    if (above === 0) reappear(inner);
+    if (above < 2) reconnectPassive(inner);
   }
 }
 
-// Clean up and later re-run the effects of a hidden Activity's subtree.
-function disconnect(f: Fiber): void {
-  if (f.h !== null) {
-    for (let ix = 0, xs = f.h; ix < xs.length; ix++) {
-      const h = xs[ix]!;
-      if (h.k !== 0 && h.x !== undefined) {
-        const x = h.x;
-        h.x = undefined;
-        safely(f, x);
-      }
+// Hidden content (React's Offscreen): inside a hidden Activity nothing commits (level 2);
+// inside content a Suspense boundary hid, layout effects, refs and class lifecycles wait while
+// passive effects stay connected (level 1). `hiddenCount` counts such subtrees, so the common
+// case looks nothing up.
+let hiddenCount = 0;
+
+/** How hidden fiber `f` is: 0 not, 1 its layout work waits, 2 all its effects wait. */
+function hiddenLevel(f: Fiber): number {
+  if (hiddenCount === 0) return 0;
+  let level = 0;
+  for (let p = f.r; p !== null; p = p.r)
+    if (p.f & HIDDEN) {
+      if (p.n === ACTIVITY) return 2;
+      // A Suspense boundary's primary fragment, hidden while its fallback shows.
+      if (p.n === FRAG) level = 1;
     }
+  return level;
+}
+
+/** Queue `fn` with layout effects, unless `f` is hidden content, which runs it when it shows. */
+function laterShown(f: Fiber, fn: () => void): void {
+  if (hiddenCount === 0 || hiddenLevel(f) === 0) later(f, fn);
+}
+
+/** Whether hiding and showing walk into child `c`: not into an Activity hidden on its own. */
+const walks = (c: Fiber): boolean => !(c.n === ACTIVITY && c.f & HIDDEN);
+
+/**
+ * Hide `f`'s subtree's layout work, parent first (React's disappearLayoutEffects): layout
+ * cleanups run, refs detach, classes unmount.
+ */
+function disappear(f: Fiber): void {
+  if (f.n === FUNC) {
+    if (f.h !== null)
+      for (let ix = 0, xs = f.h; ix < xs.length; ix++) {
+        const h = xs[ix]!;
+        if (h.k === LAYOUT && h.x !== undefined) {
+          const x = h.x;
+          h.x = undefined;
+          safely(f, x);
+        }
+      }
+  } else if (f.n === HOST) {
+    if (f.p.ref != null) safely(f, () => detachRef(f, f.p.ref));
+  } else if (f.n === CLASS) {
+    if (f.p.ref != null) safely(f, () => detachRef(f, f.p.ref));
+    if (classes !== null) safely(f, () => classes!.unmount(f));
   }
   for (let ix = 0, xs = f.c; ix < xs.length; ix++) {
     const c = xs[ix]!;
-    disconnect(c);
+    if (walks(c)) disappear(c);
+  }
+}
+
+/** Clean up `f`'s subtree's passive effects, parent first, in the passive flush. */
+function disconnectPassive(f: Fiber): void {
+  if (f.n === FUNC && f.h !== null)
+    for (let ix = 0, xs = f.h; ix < xs.length; ix++) {
+      const h = xs[ix]!;
+      if (h.k === PASSIVE && h.x !== undefined) {
+        passiveUnmountQ.push(h.x);
+        h.x = undefined;
+      }
+    }
+  for (let ix = 0, xs = f.c; ix < xs.length; ix++) {
+    const c = xs[ix]!;
+    if (walks(c)) disconnectPassive(c);
   }
 }
 
 /**
- * Queue the effects of a shown Activity's subtree to run again: children first, and all layout
- * effects of a fiber before its passive ones, the order a mount runs them in.
+ * Show `f`'s subtree's layout work again, children first (React's reappearLayoutEffects): layout
+ * effects run, classes mount, refs attach.
  */
-function reconnect(f: Fiber): void {
+function reappear(f: Fiber): void {
   for (let ix = 0, xs = f.c; ix < xs.length; ix++) {
     const c = xs[ix]!;
-    reconnect(c);
+    if (walks(c)) reappear(c);
   }
-  if (f.h !== null)
-    for (let ix = 0, xs = f.h; ix < xs.length; ix++) {
-      const h = xs[ix]!;
-      if (h.k === LAYOUT) layoutQ.push(h);
-    }
-  if (f.h !== null)
+  if (f.n === FUNC) {
+    if (f.h !== null)
+      for (let ix = 0, xs = f.h; ix < xs.length; ix++) {
+        const h = xs[ix]!;
+        if (h.k === LAYOUT) layoutQ.push(h);
+      }
+  } else if (f.n === HOST) {
+    const ref = f.p.ref;
+    if (ref != null) later(f, () => attachRef(f, ref, f.d));
+  } else if (f.n === CLASS) {
+    const inst = f.s,
+      ref = f.p.ref;
+    if (inst !== null && typeof inst.componentDidMount === "function") later(f, () => inst.componentDidMount());
+    if (ref != null) later(f, () => attachRef(f, ref, inst));
+  }
+}
+
+/** Queue `f`'s subtree's passive effects to run again, children first. */
+function reconnectPassive(f: Fiber): void {
+  for (let ix = 0, xs = f.c; ix < xs.length; ix++) {
+    const c = xs[ix]!;
+    if (walks(c)) reconnectPassive(c);
+  }
+  if (f.n === FUNC && f.h !== null)
     for (let ix = 0, xs = f.h; ix < xs.length; ix++) {
       const h = xs[ix]!;
       if (h.k === PASSIVE) passiveQ.push(h);
@@ -3411,7 +3514,8 @@ function unmount(f: Fiber, rm: boolean): void {
     case HOST:
       // A hoisted node sits in <head>, not inside its parent: it is always removed itself.
       if ((rm || f.f & HOIST) && f.d.parentNode !== null) f.d.parentNode.removeChild(f.d);
-      if (f.p.ref != null) safely(f, () => detachRef(f, f.p.ref));
+      // Hidden content detached its refs when it hid.
+      if (f.p.ref != null && (hiddenCount === 0 || hiddenLevel(f) === 0)) safely(f, () => detachRef(f, f.p.ref));
       for (let ix = 0, xs = f.c; ix < xs.length; ix++) {
         const c = xs[ix]!;
         unmount(c, false);
@@ -3450,10 +3554,20 @@ function unmount(f: Fiber, rm: boolean): void {
       }
       break;
     case CLASS:
-      // The ref is detached, then componentWillUnmount runs, each on its own, as React does.
-      if (f.p.ref != null) safely(f, () => detachRef(f, f.p.ref));
-      if (classes !== null) safely(f, () => classes!.unmount(f));
+      // The ref is detached, then componentWillUnmount runs, each on its own, as React does;
+      // hidden content did both when it hid.
+      if (hiddenCount === 0 || hiddenLevel(f) === 0) {
+        if (f.p.ref != null) safely(f, () => detachRef(f, f.p.ref));
+        if (classes !== null) safely(f, () => classes!.unmount(f));
+      }
       break;
+    case ACTIVITY:
+      for (let ix = 0, xs = f.c; ix < xs.length; ix++) {
+        const c = xs[ix]!;
+        unmount(c, rm);
+      }
+      if (f.f & HIDDEN) hiddenCount--;
+      return;
     case PORTAL:
       // A portal's nodes live in its own container, which is not being removed.
       for (let ix = 0, xs = f.c; ix < xs.length; ix++) {
@@ -3853,6 +3967,8 @@ function runEffects(q: Hook[]): void {
 function commitEffects(f: Fiber): void {
   const fx: Any[] = f.x;
   f.x = null;
+  // Hidden content runs its layout effects (level 1), or all of them (2), when it shows.
+  const level = hiddenCount === 0 ? 0 : hiddenLevel(f);
   for (let i = 0; i < fx.length; i += 3) {
     const h: Hook = fx[i],
       deps = fx[i + 2];
@@ -3866,7 +3982,9 @@ function commitEffects(f: Fiber): void {
         const r = h.c();
         h.x = typeof r === "function" ? r : undefined;
       });
-    } else (h.k === LAYOUT ? layoutQ : passiveQ).push(h);
+    } else if (h.k === LAYOUT) {
+      if (level === 0) layoutQ.push(h);
+    } else if (level < 2) passiveQ.push(h);
   }
 }
 
