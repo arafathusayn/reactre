@@ -1000,7 +1000,7 @@ function reconcile(p: Fiber, children: Any): void {
       // match; what is left in the map afterwards is unmounted.
       const map = keyMap(old, oi, oe);
       // Fewer keys than children: a key repeats. React's own algorithm takes the rest, when the
-      // default entry installed it (see __installFull).
+      // keys feature installed it (see __installKeys).
       if (map.size <= oe - oi && dupList) return dupList(p, items, old, i, oi, nc);
       moved = middle(p, items, i, ne, map, nc);
       if (map.size) {
@@ -3327,20 +3327,65 @@ export function __installClasses(make: (core: ClassCore) => ClassSupport): void 
     },
     isRendering: (f) => f === cur,
     report: callReport,
-    thrownIn: recordThrown,
-    componentStack,
+    thrownIn: (f, e) => thrownIn(f, e),
+    componentStack: (e, f) => stackOf(e, f),
   });
 }
 
+/** Internal: what component stacks (./features/stacks.ts) read of the runtime. */
+export interface StackCore {
+  readonly HOST: number;
+  readonly FUNC: number;
+  readonly CLASS: number;
+  readonly SUSPENSE: number;
+  readonly ACTIVITY: number;
+  readonly LAZY: number;
+  readonly SLOT: number;
+  /** Run fn with no component rendering, so a hook it calls throws. */
+  outside<T>(fn: () => T): T;
+}
+
+/** Internal: what component stacks provide. */
+export interface StackSupport {
+  /** Record that `e` was thrown in f, unless something deeper already did. */
+  thrownIn(f: Any, e: Any): void;
+  /** The component stack of error `e`, from where it was thrown (else from f). */
+  componentStack(e: Any, f: Any): string;
+}
+
 /**
- * Internal: what the default entry (@reactre/compat, ./index.ts) adds to this module besides
- * class support: component stacks in error reports, and React's handling of a list whose keys
- * repeat. Apps on @reactre/compat/core leave their code out: an error is reported with an empty
- * component stack, and repeated keys are reconciled by compat's own rules.
+ * Internal: installs component stacks in error reports; @reactre/compat/features/stacks calls it
+ * when it loads. Until then, errors are reported with an empty component stack.
  */
-export function __installFull(): void {
-  thrownIn = recordThrown;
-  stackOf = componentStack;
+export function __installStacks(make: (core: StackCore) => StackSupport): void {
+  const s = make({
+    HOST,
+    FUNC,
+    CLASS,
+    SUSPENSE,
+    ACTIVITY,
+    LAZY,
+    SLOT,
+    outside(fn) {
+      const prev = cur;
+      cur = null;
+      try {
+        return fn();
+      } finally {
+        cur = prev;
+      }
+    },
+  });
+  thrownIn = s.thrownIn;
+  stackOf = s.componentStack;
+}
+
+/**
+ * Internal: installs React's handling of a list whose keys repeat;
+ * @reactre/compat/features/keys calls it when it loads. Until then, repeated keys are reconciled
+ * by compat's own rules.
+ */
+export function __installKeys(): void {
   dupList = dupKeys;
 }
 
@@ -4364,73 +4409,10 @@ function reportUncaught(e: Any): void {
     }, 0);
 }
 
-// Component stacks come with the default entry (see __installFull): until it installs them, a
-// throw records nothing and errors are reported with an empty stack.
+// Component stacks come with ./features/stacks.ts (see __installStacks): until it installs them,
+// a throw records nothing and errors are reported with an empty stack.
 let thrownIn: (f: Fiber, e: Any) => void = () => {},
   stackOf: (e: Any, f: Fiber | null) => string = () => "";
-
-// Where the value thrown last came from: the first fiber whose catch it passed, which is the
-// deepest (a component's render, the parent of a child that could not be created, an effect's
-// component). Only a throw writes it; componentStack reads it when the error is reported.
-// NO_PROPS is never thrown, so it stands for nothing recorded.
-let lastThrown: Any = NO_PROPS,
-  thrownBy: Fiber | null = null;
-function recordThrown(f: Fiber, e: Any): void {
-  if (e !== lastThrown) {
-    lastThrown = e;
-    thrownBy = f;
-  }
-}
-
-/**
- * The component stack React's production build reports error `e` with: a frame per host element
- * and component from the fiber `e` was thrown in (else from `f`) up to the root, innermost first,
- * named as React's describeFiber names them. Each frame is React's built-in one ("\n    at Name
- * (<anonymous>)" where the engine writes V8-style stacks): React finds a function or class
- * component's frame by calling it and reading a native stack trace, which only an engine can
- * write, and writes this one when it finds none.
- */
-function componentStack(e: Any, f: Fiber | null): string {
-  if (e === lastThrown) f = thrownBy;
-  lastThrown = NO_PROPS;
-  thrownBy = null;
-  let s = "",
-    prev: Fiber | null = null;
-  for (; f !== null; prev = f, f = f.r) {
-    const n = f.n,
-      t = f.t;
-    // A compiled template's slot: the template's elements around it, which React has as hosts.
-    if (n === SLOT) for (let x = f.d; ; x = x.parentNode) if (((s += frame(x.localName)), x === f.r!.d)) break;
-    const name =
-      n === FUNC
-        ? nameOfType(f.s)
-        : n === HOST || n === CLASS || n === ACTIVITY || t === SuspenseList || t === ViewTransition
-          ? nameOfType(t)
-          : n === SUSPENSE
-            ? prev !== null && prev.k === 1
-              ? "Suspense Fallback"
-              : "Suspense"
-            : n === LAZY && prev === null
-              ? "Lazy"
-              : null;
-    if (name) s += frame(name);
-  }
-  return s;
-}
-
-// React's frame format, read once from a stack trace as React reads it: what comes before the
-// name (V8's "    at ") and after it.
-let framePrefix: string | undefined,
-  frameSuffix = "";
-function frame(name: string): string {
-  if (framePrefix === undefined) {
-    const st = String(Error().stack),
-      m = st.trim().match(/\n( *(at )?)/);
-    framePrefix = (m && m[1]) || "";
-    frameSuffix = st.includes("\n    at") ? " (<anonymous>)" : st.includes("@") ? "@unknown:0:0" : "";
-  }
-  return "\n" + framePrefix + name + frameSuffix;
-}
 
 // Parents render before children: queued fibers sort by depth, counted when
 // more than one is queued (rare) instead of stored in every fiber.

@@ -370,12 +370,7 @@ describe("duplicate keys", () => {
 // #region Component stacks
 
 describe("component stacks", () => {
-  /**
-   * The stack React gives, each frame's location replaced with "<anonymous>": React finds a
-   * function or class component's frame by calling it and reading the native stack trace
-   * ("at Name (file:line:col)"), where compat writes the frame React writes when it finds none
-   * ("at Name (<anonymous>)").
-   */
+  /** A stack with each frame's location replaced with "<anonymous>", to read the names alone. */
   const names = (stack: string): string => stack.replace(/^( +at \S+) \(.*\)$/gm, "$1 (<anonymous>)");
 
   // A test error's message; React's own errors are minified, compat's are not.
@@ -383,7 +378,7 @@ describe("component stacks", () => {
 
   /**
    * Renders `make(L)` with React and with compat into roots with both error callbacks, and
-   * expects the same reports, component stacks included (React's with locations replaced),
+   * expects the same reports, component stacks included, locations and all,
    * after `ms` more for content that waits on a promise. Returns compat's reports.
    */
   async function reports(make: (L: Lib) => Any, ms = 0): Promise<string[]> {
@@ -404,7 +399,7 @@ describe("component stacks", () => {
     const react = await run(React, ReactClient.createRoot, ReactDOM.flushSync);
     const compat = await run(Compat, (c, o) => Compat.createRoot(c as unknown as Element, o), Compat.flushSync);
     expect(react.length).toBeGreaterThan(0);
-    expect(compat).toEqual(react.map(names));
+    expect(compat).toEqual(react);
     return compat;
   }
 
@@ -429,9 +424,65 @@ describe("component stacks", () => {
       }
       return h(App);
     });
-    // Each frame exactly as React writes one it found no source location for.
     const frames = ["Boom", "label", "Field", "li", "Item", "List", "ul", "section", "App"];
-    expect(stacks).toEqual(["uncaught boom" + frames.map((n) => `\n    at ${n} (<anonymous>)`).join("")]);
+    expect(stacks.map(names)).toEqual(["uncaught boom" + frames.map((n) => `\n    at ${n} (<anonymous>)`).join("")]);
+  });
+
+  test("a component's frame is where calling it without props throws: hooks, classes, displayName", async () => {
+    const stacks = await reports((L) => {
+      const h = L.createElement;
+      function Counter() {
+        const [n] = L.useState(0);
+        return h("b", null, n, h(Boom));
+      }
+      class Panel extends L.Component<Any> {
+        constructor(props: Any) {
+          super(props);
+        }
+        render() {
+          return h(Counter);
+        }
+      }
+      class Plain extends L.Component<Any> {
+        render() {
+          return h(Panel);
+        }
+      }
+      // Called without props, as the probe calls it, it returns a promise that rejects: no frame.
+      function Odd(props: Any) {
+        return props === undefined ? Promise.reject(new Error("probe")) : h(Plain);
+      }
+      const Anon = [(p: Any) => h("i", null, p.title, h(Odd))][0]! as Any;
+      Anon.displayName = "Titled";
+      return h(Anon, { title: "t" });
+    });
+    expect(stacks.map(names)).toEqual([
+      "uncaught boom" +
+        ["Boom", "b", "Counter", "Panel", "Plain", "Odd", "i", "Titled"]
+          .map((n) => `\n    at ${n} (<anonymous>)`)
+          .join(""),
+    ]);
+    // Counter's and Titled's frames are in this file, where their first line that can throw is.
+    expect(stacks[0]).toMatch(/at Counter \(.*client\.test\.ts:\d+:\d+\)/);
+    expect(stacks[0]).toMatch(/at Titled \(.*client\.test\.ts:\d+:\d+\)/);
+  });
+
+  test("a stack trace too short to reach the probe gives the component's name alone, as React's", async () => {
+    const limit = Error.stackTraceLimit;
+    Error.stackTraceLimit = 1;
+    try {
+      const stacks = await reports((L) => {
+        const h = L.createElement;
+        function Counter() {
+          L.useState(0);
+          return h(Boom);
+        }
+        return h(Counter);
+      });
+      expect(stacks).toEqual(["uncaught boom\n    at Boom (<anonymous>)\n    at Counter (<anonymous>)"]);
+    } finally {
+      Error.stackTraceLimit = limit;
+    }
   });
 
   test("an error boundary's report and componentDidCatch get the stack", async () => {
@@ -444,7 +495,7 @@ describe("component stacks", () => {
           return { failed: true };
         }
         componentDidCatch(_e: Any, info: Any) {
-          seen.push(names(info.componentStack));
+          seen.push(info.componentStack);
         }
         render() {
           return this.state.failed ? "failed" : this.props.children;
@@ -476,7 +527,7 @@ describe("component stacks", () => {
       root.render(h(Compat.Suspense, null, h("div", null, h(Compat.SuspenseList, null, h(Boom))))),
     );
     const frames = ["Boom", "SuspenseList", "div", "Suspense"];
-    expect(stacks).toEqual([frames.map((n) => `\n    at ${n} (<anonymous>)`).join("")]);
+    expect(stacks.map(names)).toEqual([frames.map((n) => `\n    at ${n} (<anonymous>)`).join("")]);
   });
 
   test("an effect's error starts at its component; a bad child type at its parent", async () => {

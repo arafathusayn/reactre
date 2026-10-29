@@ -22,7 +22,10 @@
   "type": "module",
   "sideEffects": [
     "./src/index.ts",
-    "./dist/index.js"
+    "./src/features/*.ts",
+    "./dist/index.js",
+    "./dist/features/*.js",
+    "./dist/chunk-*.js"
   ],
   "exports": {
     ".": {
@@ -39,6 +42,11 @@
       "types": "./src/index.ts",
       "bun": "./src/index.ts",
       "default": "./dist/index.js"
+    },
+    "./features/*": {
+      "types": "./src/features/*.ts",
+      "bun": "./src/features/*.ts",
+      "default": "./dist/features/*.js"
     },
     "./server": {
       "types": "./src/server.ts",
@@ -61,7 +69,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/index.ts src/core.ts src/server.ts --outdir dist --target browser --format esm --splitting --packages external && bun build src/compiler.ts src/api.ts --outdir dist --target node --format esm --packages external"
+    "build": "rm -rf dist && bun build src/index.ts src/core.ts src/server.ts src/features/classes.ts src/features/stacks.ts src/features/keys.ts --outdir dist --target browser --format esm --splitting --chunk-naming \"chunk-[hash].[ext]\" --packages external && bun build src/compiler.ts src/api.ts --outdir dist --target node --format esm --packages external"
   },
   "dependencies": {
     "@reactre/compiler": "workspace:*",

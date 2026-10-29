@@ -86,7 +86,7 @@ export interface BuildOptions {
 /**
  * A Bun plugin that resolves our packages, and `react` and `react-dom` where the entry runs on
  * reactre-compat, from `dir`, so a build can take them from another revision. Every `react` and
- * `react-dom` subpath maps to the @reactre/compat root, which provides both APIs.
+ * `react-dom` subpath maps to @reactre/compat/core, which provides both APIs.
  */
 function resolveFrom(dir: string, react: Entry["react"]): BunPlugin {
   return {
@@ -95,6 +95,9 @@ function resolveFrom(dir: string, react: Entry["react"]): BunPlugin {
       build.onResolve({ filter: /^@reactre\// }, (args) => ({
         path: Bun.resolveSync(args.path, dir),
       }));
+      // The benchmark app's explicit choice: @reactre/compat/core alone, without the modules that
+      // install class components, React's component stacks and React's handling of repeated keys
+      // (@reactre/compat/features/*). It renders no class, reports no error and repeats no key.
       if (react === "reactre-compat")
         build.onResolve({ filter: /^react(-dom)?(\/.*)?$/ }, () => ({
           path: Bun.resolveSync("@reactre/compat/core", dir),

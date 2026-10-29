@@ -351,7 +351,9 @@ describe("error boundaries with componentDidCatch only", () => {
       }
       render(h(Catcher, null, h(Bomb)));
       expect(html()).toBe("<p>caught</p>");
-      const componentStack = "\n    at Bomb (<anonymous>)\n    at Catcher (<anonymous>)";
+      // Each component's frame where calling it without props throws (client.test.ts compares
+      // them with React's).
+      const componentStack = expect.stringMatching(/^\n {4}at Bomb \(.*classes\.test\.ts:\d+:\d+\)\n {4}at Catcher \(/);
       expect(log).toEqual(["report bang", { componentStack, errorBoundary: inst }, "did catch bang"]);
     } finally {
       globalThis.setTimeout = realSetTimeout;
@@ -397,7 +399,14 @@ describe("packaging", () => {
   // the install (Vite's Rolldown does), so the manifest must name it.
   test("the entries with classes are declared as having side effects", async () => {
     const manifest = (await Bun.file(new URL("../package.json", import.meta.url)).json()) as { sideEffects: unknown };
-    expect(manifest.sideEffects).toEqual(["./src/index.ts", "./dist/index.js"]);
+    expect(manifest.sideEffects).toEqual([
+      "./src/index.ts",
+      "./src/features/*.ts",
+      "./dist/index.js",
+      "./dist/features/*.js",
+      // The chunks the feature modules share with the main entry, which hold the installs.
+      "./dist/chunk-*.js",
+    ]);
   });
 
   // Each entry in a process of its own, resolved by package name, so no other test's install
