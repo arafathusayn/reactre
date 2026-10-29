@@ -4,7 +4,9 @@
 // the HTML React's own server writes, byte for byte: text separators, Suspense markers and
 // streaming instructions, hoisted <title>, <meta> and <link> tags, image preloads, resource
 // hints (preload, preinit, ...), stylesheet precedence, form actions, useId's server ids, and
-// the rest.
+// the rest. Partial prerendering is React's too: react-dom/static's prerender (and its Node
+// stream, and resumeAndPrerender) writes the prelude and the postponed state, as React's JSON,
+// and resume (and resumeToPipeableStream) writes the rest from it.
 //
 // Key design decisions:
 //
@@ -30,8 +32,12 @@
 //      writable is full (React's Node build), and 2048-byte views for renderToReadableStream (its
 //      browser and edge builds), so the chunks are React's too.
 //
-// What differs from React (see the README for the full list): the prerender and resume APIs are
-// not supported (they throw). Errors carry React's full messages, as React's server builds for
+//   5. A prerender's resumable state is plain data, React's objects rather than Maps and Sets, so
+//      its postponed state serializes to React's JSON: compat resumes React's prerenders and React
+//      resumes compat's. A resume replays the prerendered tree with tasks that have no segment,
+//      writing nothing until they reach postponed work, as React's replay tasks do.
+//
+// What differs from React (see the README for the full list): errors carry React's full messages, as React's server builds for
 // Node, Deno, Bun and edge runtimes do; its browser builds throw minified codes.
 //
 // The file reads top down, in folding regions: HTML writing (escaping, attributes, elements,
