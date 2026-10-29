@@ -3,7 +3,7 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { ALWAYS, enabledApis, GROUPS, KEYS, REQUIRES } from "../src/api.ts";
+import { ALWAYS, BEHAVIOURS, enabledApis, GROUPS, KEYS, MODULES, REQUIRES } from "../src/api.ts";
 import React from "../src/core.ts";
 import * as Core from "../src/core.ts";
 
@@ -20,24 +20,52 @@ describe("API manifest", () => {
   });
 
   test('"all" is every key, less what is excluded and what is part of it', () => {
-    expect(enabledApis("all", [])).toEqual(new Set(KEYS));
-    const on = enabledApis("all", ["useEffect", "@classes", "useActionState"]);
-    for (const k of ["useEffect", "Component", "PureComponent", "useActionState", "useFormState"])
+    expect(enabledApis("all", [])).toEqual(new Set([...KEYS, ...BEHAVIOURS]));
+    const on = enabledApis("all", ["useEffect", "@classes", "useActionState", "componentStack"]);
+    for (const k of ["useEffect", "Component", "PureComponent", "useActionState", "useFormState", "componentStack"])
       expect(on.has(k)).toBe(false);
-    expect(on.size).toBe(KEYS.length - 5);
+    expect(on.size).toBe(KEYS.length + BEHAVIOURS.length - 6);
   });
 
-  test("a list is those keys, groups expanded, with what each is part of", () => {
+  test("a list is those keys, groups expanded, with what each is part of, and every behaviour", () => {
     expect(enabledApis(["createRoot", "useState", "@suspense", "PureComponent"], [])).toEqual(
-      new Set(["createRoot", "useState", "Suspense", "SuspenseList", "lazy", "PureComponent", "Component"]),
+      new Set([
+        "createRoot",
+        "useState",
+        "Suspense",
+        "SuspenseList",
+        "lazy",
+        "PureComponent",
+        "Component",
+        ...BEHAVIOURS,
+      ]),
     );
-    expect(enabledApis(["hydrateRoot", "useFormState"], ["useState"])).toEqual(
-      new Set(["hydrateRoot", "useFormState", "useActionState"]),
+    expect(enabledApis(["hydrateRoot", "useFormState"], ["useState", "repeatedKeys"])).toEqual(
+      new Set(["hydrateRoot", "useFormState", "useActionState", "componentStack"]),
     );
+  });
+
+  test("each module key's module is an export of the package that installs its feature", async () => {
+    const pkg = (await Bun.file(new URL("../package.json", import.meta.url)).json()) as {
+      exports: Record<string, Record<string, string>>;
+      sideEffects: string[];
+    };
+    expect(Object.keys(MODULES).sort()).toEqual(["Component", ...BEHAVIOURS].sort());
+    expect(pkg.exports["./features/*"]).toEqual({
+      types: "./src/features/*.ts",
+      bun: "./src/features/*.ts",
+      default: "./dist/features/*.js",
+    });
+    expect(pkg.sideEffects).toEqual(expect.arrayContaining(["./src/features/*.ts", "./dist/features/*.js"]));
+    for (const m of Object.values(MODULES)) {
+      expect(m).toStartWith("@reactre/compat/features/");
+      expect(await Bun.file(new URL(`../src/features/${m.slice(25)}.ts`, import.meta.url)).exists()).toBe(true);
+    }
   });
 
   test("an unknown key, or no root, is an error", () => {
     expect(() => enabledApis("all", ["useStat"])).toThrow('"useStat" is not an API key');
+    expect(() => enabledApis("all", ["useStat"])).toThrow("the behaviours componentStack, repeatedKeys and the groups");
     expect(() => enabledApis(["@forms"], [])).toThrow("an app needs createRoot or hydrateRoot");
     expect(() => enabledApis("all", ["createRoot", "hydrateRoot"])).toThrow("needs createRoot or hydrateRoot");
   });

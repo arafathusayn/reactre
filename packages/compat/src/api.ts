@@ -11,6 +11,11 @@
 //     Component throws a clear error when a class renders.
 //   - What every app needs (elements, fragments, the version and the internals compiled code and
 //     libraries read) is not a key.
+//   - A behaviour React has that is not an export (component stacks, React's handling of repeated
+//     keys) is a key too, in BEHAVIOURS. A behaviour is on unless an app's options exclude it, so
+//     every set of options is React's behaviour for everything it keeps.
+//   - A key whose code is a module of its own (MODULES) is in the build exactly when it is on:
+//     @reactre/plugin's entry imports that module, which installs it into @reactre/compat/core.
 
 /** The names every build exports, which no option turns off. */
 export const ALWAYS: readonly string[] = [
@@ -82,6 +87,24 @@ export const KEYS: readonly string[] = [
   "preinitModule",
 ];
 
+/**
+ * Keys for React's behaviours that are not exports: on unless the options exclude them, whatever
+ * `apis` lists. `componentStack`: errors are reported with React's component stack (else an empty
+ * one). `repeatedKeys`: a list whose keys repeat is reconciled as React does (else by compat's own
+ * rules).
+ */
+export const BEHAVIOURS: readonly string[] = ["componentStack", "repeatedKeys"];
+
+/**
+ * The keys whose code is a module of its own, and that module. With the key on, the module
+ * @reactre/plugin writes for an app's options imports it; @reactre/compat imports all of them.
+ */
+export const MODULES: Readonly<Record<string, string>> = {
+  Component: "@reactre/compat/features/classes",
+  componentStack: "@reactre/compat/features/stacks",
+  repeatedKeys: "@reactre/compat/features/keys",
+};
+
 /** Groups of keys, by the feature they make up. A group is written where a key may be. */
 export const GROUPS: Readonly<Record<string, readonly string[]>> = {
   "@suspense": ["Suspense", "SuspenseList", "lazy"],
@@ -97,7 +120,7 @@ export const REQUIRES: Readonly<Record<string, string>> = {
   useFormState: "useActionState",
 };
 
-const known = new Set(KEYS);
+const known = new Set([...KEYS, ...BEHAVIOURS]);
 
 /** Keys and groups as keys, or an error naming the first unknown one. */
 function expand(list: readonly string[]): string[] {
@@ -108,19 +131,20 @@ function expand(list: readonly string[]): string[] {
     else if (known.has(k)) out.push(k);
     else
       throw new Error(
-        `@reactre/compat: "${k}" is not an API key. Keys are React's export names (${KEYS.join(", ")}) ` +
-          `and the groups ${Object.keys(GROUPS).join(", ")}.`,
+        `@reactre/compat: "${k}" is not an API key. Keys are React's export names (${KEYS.join(", ")}), ` +
+          `the behaviours ${BEHAVIOURS.join(", ")} and the groups ${Object.keys(GROUPS).join(", ")}.`,
       );
   }
   return out;
 }
 
 /**
- * The keys that are on for `apis` ("all", or the keys an app uses) less `exclude`. A key listed
- * in `apis` turns on what it is part of; a key excluded turns off what is part of it.
+ * The keys that are on for `apis` ("all", or the keys an app uses) and every behaviour, less
+ * `exclude`. A key listed in `apis` turns on what it is part of; a key excluded turns off what is
+ * part of it.
  */
 export function enabledApis(apis: "all" | readonly string[], exclude: readonly string[]): Set<string> {
-  const on = new Set(apis === "all" ? KEYS : expand(apis));
+  const on = new Set([...(apis === "all" ? KEYS : expand(apis)), ...BEHAVIOURS]);
   for (const [k, whole] of Object.entries(REQUIRES)) if (on.has(k)) on.add(whole);
   for (const k of expand(exclude)) on.delete(k);
   for (const [k, whole] of Object.entries(REQUIRES)) if (!on.has(whole)) on.delete(k);
