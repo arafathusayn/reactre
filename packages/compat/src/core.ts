@@ -4393,6 +4393,8 @@ export interface ClassCore {
   report(report: (e: Any, info: Any) => void, e: Any, info: Any): void;
   /** Record that `e` was thrown in f (by a lifecycle or below), unless something deeper already did. */
   thrownIn(f: Any, e: Any): void;
+  /** As thrownIn, for an error a boundary's fallback threw once an error counted: it counts too. */
+  settledIn(f: Any, e: Any): void;
   /** Record that f's render threw `e`. */
   renderThrew(f: Any, e: Any): void;
   /** The component stack of error `e`, from where it was thrown (else from f). */
@@ -4460,6 +4462,10 @@ export function __installClasses(make: (core: ClassCore) => ClassSupport): void 
     isRendering: (f) => f === cur,
     report: callReport,
     thrownIn: (f, e) => childThrew(f, e),
+    settledIn: (f, e) => {
+      childThrew(f, e);
+      if (e !== null && typeof e === "object") settled.add(e);
+    },
     renderThrew: (f, e) => renderThrew(f, e),
     // Class support asks for a stack only for an error a boundary caught: counted for hydration.
     componentStack: (e, f) => (failures++, stackOf(e, f)),
@@ -6086,7 +6092,23 @@ function once(q: Hook[], start: number): Hook[] {
  * throws), else null.
  */
 function renderAgain(f: Fiber, e: Any): Any {
-  const errors = isThenable(e) ? null : failed(f, e);
+  const fresh = e === lastError;
+  let errors = isThenable(e) ? null : failed(f, e);
+  // With ./features/undo.ts, an error this render threw renders again even when no component's
+  // own render threw it (a child's type, a context consumer, `lazy`, a class lifecycle), as React
+  // retries the root after any render-phase error; not a DOM error, which React meets as it commits.
+  if (
+    errors === null &&
+    fresh &&
+    !isThenable(e) &&
+    undoWatch !== null &&
+    holding === MUT &&
+    !retrying &&
+    !hydrating &&
+    !domError(e) &&
+    !settled.has(e)
+  )
+    errors = [new Error(prodMessage(520), { cause: e }), captureStacks(e, f)];
   if (errors === null) return e;
   draftAt(f, e);
   // With ./features/undo.ts, an update's retry is React's: the pass goes on, is undone when it
@@ -6109,6 +6131,11 @@ function renderAgain(f: Fiber, e: Any): Any {
   if (x !== null && !isThenable(x)) captureStacks(x, f);
   return x;
 }
+
+/** Whether `e` is the DOM's own error (an insertion it refused), not a render's. */
+const domError = (e: Any): boolean => typeof DOMException === "function" && e instanceof DOMException;
+// Errors thrown where an error already counts (a boundary's fallback): never rendered again.
+const settled = new WeakSet<object>();
 
 /**
  * The error boundary that catches `e`, thrown in f, renders its fallback only for show (see draft

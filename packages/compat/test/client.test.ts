@@ -3267,6 +3267,63 @@ describe("the render loop", () => {
     });
   });
 
+  test("the retry renders again after any error the render throws, not only a component's own", async () => {
+    const h = (L: Lib) => L.createElement;
+    // An element of an invalid type (#130), once, from a parent's update.
+    await stepsSame((L, log) => {
+      let set: Any = null,
+        calls = 0;
+      const App = named(log, "App", () => {
+        const [n, s] = L.useState(0);
+        set = s;
+        const type: Any = n && calls++ === 0 ? undefined : "b";
+        return h(L)("div", null, h(L)(type, null, "x" + n));
+      });
+      return [(root, flush) => flush(() => root.render(h(L)(App))), (_, flush) => flush(() => set(1))];
+    });
+    // A context consumer whose render prop throws once.
+    await stepsSame((L, log) => {
+      let set: Any = null,
+        calls = 0;
+      const Ctx = L.createContext(0);
+      const App = named(log, "App", () => {
+        const [n, s] = L.useState(0);
+        set = s;
+        return h(L)(
+          Ctx.Provider,
+          { value: n },
+          h(L)(Ctx.Consumer, null, (v: number) => {
+            if (v && calls++ === 0) throw new Error("once");
+            return "v" + v;
+          }),
+        );
+      });
+      return [(root, flush) => flush(() => root.render(h(L)(App))), (_, flush) => flush(() => set(1))];
+    });
+    // A class whose getDerivedStateFromProps throws once in an update.
+    await stepsSame((L, log) => {
+      let set: Any = null,
+        calls = 0;
+      class K extends L.Component<Any, Any> {
+        state = {};
+        static getDerivedStateFromProps(props: Any) {
+          if (props.n && calls++ === 0) throw new Error("once");
+          return null;
+        }
+        render() {
+          log.push("render K " + this.props.n);
+          return "k" + this.props.n;
+        }
+      }
+      const App = named(log, "App", () => {
+        const [n, s] = L.useState(0);
+        set = s;
+        return h(L)(K, { n });
+      });
+      return [(root, flush) => flush(() => root.render(h(L)(App))), (_, flush) => flush(() => set(1))];
+    });
+  });
+
   test("an update's retry renders again from the component whose update it is", async () => {
     const h = (L: Lib) => L.createElement;
     await stepsSame((L, log) => {

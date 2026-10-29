@@ -80,7 +80,7 @@ function support(core: ClassCore): ClassSupport {
         // A render that threw is not done: the fiber stays dirty, so its next update renders it
         // even when its element is unchanged.
         f.f |= DIRTY;
-        if (final) core.thrownIn(f, e);
+        if (final) core.settledIn(f, e);
         else core.renderThrew(f, e);
         throw e;
       }
