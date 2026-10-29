@@ -3312,7 +3312,9 @@ function thenableStateAfterSuspending(x: Any): Any[] | null {
 // The component __serverRender calls on each pass: each pass reads its promises from the first.
 let renderingComponent: Any = null;
 function renderPass(props: Any, secondArg: Any): Any {
-  thenableIndex = 0;
+  // Each pass counts its useActionState hooks anew, as React's renderWithHooks does.
+  thenableIndex = actionStateCounter = 0;
+  actionStateMatchingIndex = -1;
   return renderingComponent(props, secondArg);
 }
 

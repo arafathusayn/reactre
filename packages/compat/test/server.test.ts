@@ -3511,6 +3511,30 @@ describe("formState and server actions", () => {
     expect(html).toContain("again:2:42");
     expect(html).toContain("<!--F!-->");
   });
+
+  test("a component that sets state while it renders takes each pass's action and initial state", async () => {
+    const ran: string[] = [];
+    const passes = (L: Lib): Any => {
+      const acts = [serverAction("ref"), serverAction("ref")];
+      const plain = [(s: Any, p: Any) => void ran.push("first " + s + " " + p), (s: Any, p: Any) => void ran.push("last " + s + " " + p)];
+      function Again(): Any {
+        const [n, setN] = L.useState(0);
+        const [state, formAction] = L.useActionState(acts[n === 0 ? 0 : 1], "s" + n);
+        const [other, dispatch] = L.useActionState(plain[n === 0 ? 0 : 1], "p" + n);
+        if (n < 2) setN(n + 1);
+        else dispatch("payload");
+        return L.createElement("form", { action: formAction }, ["again", n, state, other].join(":"));
+      }
+      return L.createElement("div", null, L.createElement(Again));
+    };
+    const html = await same(passes, undefined, true);
+    // The form binds the last pass's state, as React's does.
+    expect(html).toContain("again:2:s2:p2");
+    expect(html).toContain("[&quot;s2&quot;]");
+    expect(new Set(ran)).toEqual(new Set(["last p2 payload"]));
+    const key = actionKey(await streamAll(ReactServer, passes(React)));
+    expect(await sameStream(passes, { formState: [42, key, "ref", null] })).toContain("again:2:42:p2");
+  });
 });
 
 describe("hints from async work", () => {

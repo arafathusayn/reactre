@@ -6954,15 +6954,10 @@ export function useActionState<S, P>(
   const f = cur!;
   const h = hook();
   if (h.s === null) {
-    if (server !== null) {
-      // A server render: React's server hook. Its state goes in the state hook above (hi - 3), so
-      // the passes that follow return it.
-      const r = server.actionState(action, initialState, permalink);
-      f.h![hi - 3]!.v = r[0];
-      h.v = { r: action };
-      h.s = r[1];
-      return r;
-    }
+    // A server render: React's server hook, which keeps nothing, so each pass (a component that
+    // sets state while it renders renders again) gets its own action, state and dispatch; `h.s`
+    // stays null, which brings the next pass here too.
+    if (server !== null) return server.actionState(action, initialState, permalink);
     // a: the action dispatch runs (null once one failed, until a new action is rendered); r: the
     // action rendered last; s: the state the next action starts from; q: the actions queued, the
     // first one running; n: actions dispatched in transitions and not finished.
