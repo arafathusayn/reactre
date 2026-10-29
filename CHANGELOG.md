@@ -26,6 +26,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Fixed: a `<title>` rendered anywhere goes into `<head>` before the titles already there, as React places it, so the newest one sets the document's title (react-helmet-async's nested titles).
 - Fixed: a new `<img>` gets `srcSet` and `src` after its other props, as React sets them, so attributes such as `sizes` and `loading` apply before the image is requested (react-image-crop's markup).
 - Fixed: class components: `setState` in `componentWillMount` applies before the first render with no second render after it, and a class with a `getSnapshotBeforeUpdate` method gets no `componentWillMount` call, as in React.
+- Fixed: hooks follow React 19's rules:
+  - Deps arrays of another length compare on their common part.
+  - An effect keeps each render's deps.
+  - `useEffectEvent` returns a new function each render and throws when called during rendering.
+  - `cache` returns a wrapper.
+  - `useId` counts across all roots, as React's one client counter does.
+  - A passive cleanup that throws after its component is removed goes to the error boundary above the removed subtree, or to the root, which unmounts and calls `onUncaughtError`. An error from a sync render's passive effects renders before `flushSync` returns.
+- Fixed: `useActionState` queues actions as React does:
+  - The first action runs inside `dispatch`; the others wait for it.
+  - In a transition, `isPending` is true until the queue drains, and the state is the last action's result.
+  - Outside a transition, there is no pending state: the component suspends until the action finishes.
+  - An action that fails rejects the actions queued after it, none of which runs, and its error reaches the error boundary once. Dispatch does nothing until a new action is rendered.
 - Fixed: hidden content follows React's Offscreen rules:
   - A hidden `<Activity>` commits no effects, refs or class lifecycles, from its first render to the render that shows it.
   - Hiding runs every layout cleanup, ref detach and `componentWillUnmount`, parent first, then every passive cleanup.

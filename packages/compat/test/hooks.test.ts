@@ -27,6 +27,7 @@ import {
   requestFormReset,
   type Root,
   startTransition,
+  Suspense,
   unstable_useCacheRefresh,
   use,
   useActionState,
@@ -166,6 +167,26 @@ describe("effects", () => {
     flushSync(() => plain.render(h("div", null)));
     expect(reported).toEqual([boom]);
   });
+
+  // React routes it from the removed subtree's nearest mounted ancestor: here to the root, whose
+  // onUncaughtError gets it and whose tree unmounts.
+  test("a passive cleanup that throws after its component is removed goes to the root's onUncaughtError", () => {
+    const boom = new Error("cleanup");
+    function Leaf() {
+      useEffect(
+        () => () => {
+          throw boom;
+        },
+        [],
+      );
+      return null;
+    }
+    render(h("div", null, h(Leaf)));
+    render(h("div", null));
+    expect(uncaught).toEqual([boom]);
+    expect(reported).toEqual([]);
+    expect(html()).toBe("");
+  });
 });
 
 describe("hooks outside a component", () => {
@@ -266,6 +287,19 @@ describe("useState and useReducer", () => {
 });
 
 describe("useRef, useMemo and useCallback", () => {
+  // React's areHookInputsEqual compares deps of another length on their common part. An effect
+  // keeps the deps of each render; useMemo keeps the deps it last computed with.
+  test("deps of another length compare on their common part, as React's do", () => {
+    const log: string[] = [];
+    function App({ deps }: { deps: unknown[] }) {
+      useLayoutEffect(() => void log.push("effect " + deps.join()), deps);
+      const v = useMemo(() => (log.push("memo " + deps.join()), deps.length), deps);
+      return h("p", null, v);
+    }
+    for (const deps of [[1], [1, 2], [], [2]]) render(h(App, { deps }));
+    expect(log).toEqual(["memo 1", "effect 1", "memo 2"]);
+  });
+
   test("useRef returns the same object on every render, starting at its initial value", () => {
     const refs: { current: unknown }[] = [];
     function App({ n }: { n: number }) {
@@ -400,6 +434,19 @@ describe("useId", () => {
     expect(ids.slice(2)).toEqual(ids.slice(0, 2));
   });
 
+  // React's client counter is one for the page, so two roots never give the same id.
+  test("two roots give different ids, as React's counter is one for the page", () => {
+    const ids: string[] = [];
+    function Field() {
+      ids.push(useId());
+      return null;
+    }
+    render(h(Field));
+    const other = createRoot(new FakeElement("DIV") as unknown as Element);
+    flushSync(() => other.render(h(Field)));
+    expect(ids[0]).not.toBe(ids[1]);
+  });
+
   test("the root's identifierPrefix goes after the first underscore", () => {
     let id = "";
     function Field() {
@@ -532,6 +579,29 @@ describe("useSyncExternalStore", () => {
 });
 
 describe("useEffectEvent", () => {
+  // React returns a new function each render (all calling the latest one), and throws when one
+  // is called while a component renders.
+  test("an effect event is a new function each render, and throws when called during rendering", () => {
+    const seen: (() => number)[] = [];
+    let caught = "";
+    function App({ n }: { n: number }) {
+      const ev = useEffectEvent(() => n);
+      seen.push(ev);
+      if (n === 2)
+        try {
+          ev();
+        } catch (e) {
+          caught = (e as Error).message;
+        }
+      return null;
+    }
+    render(h(App, { n: 1 }));
+    render(h(App, { n: 2 }));
+    expect(seen[0]).not.toBe(seen[1]);
+    expect(seen[0]!()).toBe(2);
+    expect(caught).toBe("A function wrapped in useEffectEvent can't be called during rendering.");
+  });
+
   test("the function from any render calls the latest render's callback", () => {
     const fns: unknown[] = [];
     const log: string[] = [];
@@ -803,6 +873,86 @@ describe("useOptimistic", () => {
 
 // Dispatches are made in transitions, as React expects: outside one, React's isPending stays false.
 describe("useActionState", () => {
+  // React runs the first queued action synchronously, inside dispatch.
+  test("an action with nothing queued before it runs inside dispatch", () => {
+    const log: string[] = [];
+    let dispatch!: (p: number) => void;
+    function App() {
+      const [state, d] = useActionState((s: number, p: number) => (log.push("run " + p), s + p), 0);
+      dispatch = d;
+      return h("p", null, state);
+    }
+    render(h(App));
+    flushSync(() =>
+      startTransition(() => {
+        dispatch(1);
+        log.push("after dispatch");
+      }),
+    );
+    expect(log).toEqual(["run 1", "after dispatch"]);
+    expect(html()).toBe("<p>1</p>");
+  });
+
+  // React rejects every queued action when one fails (onActionError): none of them runs, and the
+  // error reaches the component's boundary once.
+  test("an action that fails rejects the actions queued after it", async () => {
+    const gate = deferred();
+    const boom = new Error("action");
+    const calls: number[] = [];
+    let dispatch!: (p: number) => void;
+    function App() {
+      const [state, d] = useActionState(async (s: number, p: number) => {
+        calls.push(p);
+        if (p === 1) {
+          await gate.promise;
+          throw boom;
+        }
+        return s + p;
+      }, 0);
+      dispatch = d;
+      return h("p", null, state);
+    }
+    render(h(App));
+    flushSync(() =>
+      startTransition(() => {
+        dispatch(1);
+        dispatch(2);
+        dispatch(3);
+      }),
+    );
+    gate.resolve();
+    await nextTask();
+    expect(calls).toEqual([1]);
+    expect(uncaught).toEqual([boom]);
+    expect(html()).toBe("");
+  });
+
+  // Outside a transition React sets no pending state, and the component suspends on the action
+  // until it finishes.
+  test("dispatched outside a transition, the component suspends and is never pending", async () => {
+    const gate = deferred();
+    const seen: boolean[] = [];
+    let dispatch!: (p: number) => void;
+    function App() {
+      const [state, d, pending] = useActionState(async (s: number, p: number) => {
+        await gate.promise;
+        return s + p;
+      }, 0);
+      dispatch = d;
+      seen.push(pending);
+      // Text, which Suspense hides without a style (this file's fake elements have none).
+      return state;
+    }
+    render(h(Suspense, { fallback: "wait" }, h(App)));
+    flushSync(() => dispatch(1));
+    expect(html()).toBe("wait");
+    gate.resolve();
+    // The reveal waits out Suspense's throttle (300 ms) after the fallback showed.
+    for (let i = 0; i < 40 && html() === "wait"; i++) await nextTask();
+    expect(html()).toBe("1");
+    expect(seen.includes(true)).toBe(false);
+  });
+
   test("dispatches run one at a time, each from the last one's state, pending until all finish", async () => {
     const calls: [number, number][] = [];
     let dispatch!: (p: number) => void;
@@ -1017,9 +1167,11 @@ describe("forms", () => {
 });
 
 describe("server-only APIs and stubs", () => {
-  test("cache does not memoize on the client: every call runs the function", () => {
+  test("cache does not memoize on the client: every call runs the function, through a wrapper", () => {
     let calls = 0;
-    const f = cache((n: number) => (calls++, n * 2));
+    const g = (n: number) => (calls++, n * 2);
+    const f = cache(g);
+    expect(f).not.toBe(g);
     expect(f(2)).toBe(4);
     expect(f(2)).toBe(4);
     expect(calls).toBe(2);

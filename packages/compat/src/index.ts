@@ -2795,8 +2795,6 @@ class RootImpl implements Root {
   /** identifierPrefix, for useId. */
   readonly prefix: string;
   readonly opts: RootOptions;
-  /** The next useId number. */
-  ids = 0;
   /** Whether the first render hydrates the container's server HTML. */
   hydrate = false;
   /** Whether the first render has started (it clears or hydrates the container once). */
@@ -3448,7 +3446,7 @@ function disconnectPassive(f: Fiber): void {
     for (let ix = 0, xs = f.h; ix < xs.length; ix++) {
       const h = xs[ix]!;
       if (h.k === PASSIVE && h.x !== undefined) {
-        passiveUnmountQ.push(h.x);
+        passiveUnmountQ.push(f, h.x);
         h.x = undefined;
       }
     }
@@ -3539,7 +3537,7 @@ function unmount(f: Fiber, rm: boolean): void {
           // Layout and insertion cleanups run now; passive ones wait for the passive flush, as
           // in React.
           if (h.k !== PASSIVE) safely(f, h.x);
-          else if (h.k === PASSIVE) passiveUnmountQ.push(h.x);
+          else if (h.k === PASSIVE) passiveUnmountQ.push(f, h.x);
           h.x = undefined;
         }
       }
@@ -3688,29 +3686,35 @@ function flushWork(sync: boolean): void {
   if (flushing) return;
   flushing = true;
   try {
-    while (queue.length || layoutQ.length) {
-      while (queue.length) {
-        // Effects of the last commit run before the next render, as in React: its refs and
-        // layout effects first, so its passive effects never see a ref still unset.
-        flushLayout();
-        flushPassive();
-        // Two queue arrays, swapped: updates made while this one renders go
-        // to the other, and neither is allocated again.
-        const q = queue;
-        queue = spareQueue;
-        if (q.length > 1) q.sort(byDepth);
-        for (let ix = 0; ix < q.length; ix++) {
-          const f = q[ix]!;
-          f.f &= ~QUEUED;
-          // Skipped when a parent's render already rendered it (DIRTY cleared) or removed it.
-          if ((f.f & (DIRTY | DEAD)) === DIRTY) rerender(f);
+    for (;;) {
+      routed = false;
+      while (queue.length || layoutQ.length) {
+        while (queue.length) {
+          // Effects of the last commit run before the next render, as in React: its refs and
+          // layout effects first, so its passive effects never see a ref still unset.
+          flushLayout();
+          flushPassive();
+          // Two queue arrays, swapped: updates made while this one renders go
+          // to the other, and neither is allocated again.
+          const q = queue;
+          queue = spareQueue;
+          if (q.length > 1) q.sort(byDepth);
+          for (let ix = 0; ix < q.length; ix++) {
+            const f = q[ix]!;
+            f.f &= ~QUEUED;
+            // Skipped when a parent's render already rendered it (DIRTY cleared) or removed it.
+            if ((f.f & (DIRTY | DEAD)) === DIRTY) rerender(f);
+          }
+          q.length = 0;
+          spareQueue = q;
         }
-        q.length = 0;
-        spareQueue = q;
+        flushLayout();
       }
-      flushLayout();
+      if (!sync) break;
+      flushPassive();
+      // An error a passive effect threw renders now, as React flushes the sync lane it is on.
+      if (!routed || !queue.length) break;
     }
-    if (sync) flushPassive();
   } finally {
     flushing = false;
   }
@@ -3777,9 +3781,13 @@ function rerender(f: Fiber): void {
 
 // #region Errors and boundaries
 
+// Whether throwTo routed something since flushWork last looked.
+let routed = false;
+
 // Route a value thrown while rendering (or from an effect) of f to the
 // nearest boundary above it, marking the path so a retry renders it again.
 function throwTo(f: Fiber, e: Any): void {
+  routed = true;
   const promise = isThenable(e);
   f.f |= DIRTY;
   // Promises go to the nearest Suspense, errors to the nearest error boundary class; the root
@@ -3897,7 +3905,7 @@ class Hook {
 
 let layoutQ: Hook[] = []; // layout effects and refs, run before the flush returns
 let passiveQ: Hook[] = []; // passive effects, run after paint or before the next render
-let passiveUnmountQ: (() => void)[] = []; // passive cleanups of unmounted components
+let passiveUnmountQ: Any[] = []; // passive cleanups of unmounted components: fiber, cleanup pairs
 
 // Queue fn to run with layout effects, in order.
 // A Hook of kind 0 serves as the queue entry, so layoutQ holds one type.
@@ -3920,13 +3928,16 @@ function flushPassive(): void {
   const un = passiveUnmountQ;
   if (un.length) {
     passiveUnmountQ = [];
-    for (let ix = 0, xs = un; ix < xs.length; ix++) {
-      const x = xs[ix]!;
-      // The component is gone, so there is no boundary to route to: reported as uncaught.
+    for (let i = 0; i < un.length; i += 2) {
+      let f: Fiber = un[i];
       try {
-        x();
+        un[i + 1]();
       } catch (e) {
-        reportError(e);
+        // As React does: from the removed subtree's nearest mounted ancestor, to a boundary
+        // above it or the root; with no mounted ancestor left, reported as uncaught.
+        while (f.r !== null && f.r.f & DEAD) f = f.r;
+        if (f.r === null) reportUncaught(e);
+        else throwTo(f, e);
       }
     }
   }
@@ -4009,10 +4020,13 @@ function hook(): Hook {
   return h;
 }
 
-/** Whether deps `b` differ from committed deps `a` by Object.is; missing deps always differ. */
+/**
+ * Whether deps `b` differ from committed deps `a` by Object.is; missing deps always differ. Deps
+ * of another length compare on their common part, as React's areHookInputsEqual does.
+ */
 function depsChanged(a: Any, b: Any): boolean {
-  if (a === NO_DEPS || b == null || a == null || a.length !== b.length) return true;
-  for (let i = 0; i < a.length; i++) if (!Object.is(a[i], b[i])) return true;
+  if (a === NO_DEPS || b == null || a == null) return true;
+  for (let i = 0; i < a.length && i < b.length; i++) if (!Object.is(a[i], b[i])) return true;
   return false;
 }
 
@@ -4026,6 +4040,8 @@ function effect(kind: number, create: () => Any, deps: Any): void {
     h = hook();
   h.k = kind;
   if (deps == null || depsChanged(h.d, deps)) (f.x ??= []).push(h, create, deps ?? null);
+  // Unchanged deps are kept too, as React keeps each render's: the next render compares with them.
+  else h.d = deps;
 }
 
 /** Run `effect` after the browser paints, again whenever `deps` change; its returned function cleans up. */
@@ -4149,19 +4165,19 @@ export function useImperativeHandle(ref: Any, create: () => Any, deps?: readonly
 export function useDebugValue(_value: unknown, _format?: (v: Any) => Any): void {}
 
 /**
- * A unique id, stable for the component's life. A per-root counter in React 19's format
- * (`_r_0_`, with the root's identifierPrefix after the first `_`). It is not derived from the
- * tree position, so it need not match the id the server rendered.
+ * A unique id, stable for the component's life. One counter for the page, as React's client
+ * has, in React 19's format (`_r_0_`, with the root's identifierPrefix after the first `_`). It
+ * is not derived from the tree position, so it need not match the id the server rendered.
  */
 export function useId(): string {
   const h = hook();
   if (h.s === null) {
     h.s = 1;
-    const r = h.f.o;
-    h.v = "_" + r.prefix + "r_" + (r.ids++).toString(32) + "_";
+    h.v = "_" + h.f.o.prefix + "r_" + (clientIds++).toString(32) + "_";
   }
   return h.v;
 }
+let clientIds = 0;
 
 /**
  * A value read from an external store, re-rendering when it changes. The server snapshot is
@@ -4226,17 +4242,20 @@ export function useSyncExternalStoreWithSelector<S, T>(
   return useSyncExternalStore(subscribe, select);
 }
 
-/** A stable function that always calls the latest `fn` (for effects that must not re-run when it changes). */
+/**
+ * A function that calls the latest `fn` (for effects that must not re-run when it changes). As
+ * React's, it is a new function each render, every one calling the latest `fn`, and it throws
+ * when called while a component renders.
+ */
 export function useEffectEvent<F extends (...args: Any[]) => Any>(fn: F): F {
   const h = hook();
-  if (h.s === null) {
-    h.v = fn;
-    h.s = (...args: Any[]) => h.v(...args);
-  }
   // Updated during render, not in an effect: rendering is synchronous, so the effects that call
   // the function run after the render that set it.
   h.v = fn;
-  return h.s;
+  return ((...args: Any[]) => {
+    if (cur !== null) throw new Error("A function wrapped in useEffectEvent can't be called during rendering.");
+    return h.v(...args);
+  }) as F;
 }
 
 /**
@@ -4443,44 +4462,88 @@ export function useOptimistic<S, A>(passthrough: S, reducer?: (s: S, a: A) => S)
   return [s, h.s];
 }
 
-/** `[state, dispatch, isPending]`: dispatch runs `action(state, payload)`, one at a time, and keeps its result. */
+/**
+ * `[state, dispatch, isPending]`: dispatch runs `action(state, payload)`, one at a time, and keeps
+ * its result, as React's action queue does. The first queued action runs inside dispatch. In a
+ * transition the state changes when an action finishes and isPending is true meanwhile; outside
+ * one the state is the running action, which the component suspends on. An action that fails
+ * rejects the ones queued after it, and its error goes to the component's boundary.
+ */
 export function useActionState<S, P>(
   action: (state: S, payload: P) => S | Promise<S>,
   initialState: S,
   _permalink?: string,
 ): [S, (payload: P) => void, boolean] {
-  const [state, setState] = useState(initialState);
+  const [stored, setState] = useState<Any>(initialState);
   const [pending, setPending] = useState(false);
   const f = cur!;
   const h = hook();
   if (h.s === null) {
-    // a: the latest action; s: the state the next call starts from; n: calls running or queued;
-    // p: the tail of the chain that runs calls one after another, as React queues them.
-    const box = (h.v = { a: action, s: initialState, n: 0, p: Promise.resolve() as Promise<unknown> });
+    // a: the action dispatch runs (null once one failed, until a new action is rendered); r: the
+    // action rendered last; s: the state the next action starts from; q: the actions queued, the
+    // first one running; n: actions dispatched in transitions and not finished.
+    const box = (h.v = { a: action as Any, r: action as Any, s: initialState as Any, q: [] as Any[], n: 0 });
+    const settle = (node: Any): void => {
+      if (node.t === null) return;
+      for (const d of node.t.done) d();
+      if (--box.n === 0) setPending(false);
+    };
+    const succeed = (node: Any, v: Any): void => {
+      box.s = v;
+      node.res(v);
+      settle(node);
+      box.q.shift();
+      // As React renders the state of the last action dispatched, a transition shows only the
+      // state its last action leaves.
+      if (box.q.length) run(box.q[0]);
+      else if (node.t !== null) setState(() => v);
+    };
+    const fail = (node: Any, e: Any): void => {
+      const all = box.q;
+      box.q = [];
+      box.a = null;
+      for (const n of all) {
+        n.rej(e);
+        settle(n);
+      }
+      // Outside a transition the state is the action, whose rejection the render throws.
+      if (node.t !== null) throwTo(f, e);
+    };
+    const run = (node: Any): void => {
+      let r: Any;
+      try {
+        r = node.t !== null ? inTransition(node.t, () => node.a(box.s, node.payload)) : node.a(box.s, node.payload);
+      } catch (e) {
+        return fail(node, e);
+      }
+      if (isThenable(r))
+        r.then(
+          (v: Any) => succeed(node, v),
+          (e: Any) => fail(node, e),
+        );
+      else succeed(node, r);
+    };
     h.s = (payload: P) => {
-      box.n++;
-      setPending(true);
-      const t: Transition = { done: [] };
+      if (box.a === null) return;
       const outer = transition;
-      box.p = box.p
-        .then(() => inTransition(t, () => box.a(box.s, payload)))
-        .then(
-          (next) => {
-            box.s = next as S;
-            setState(() => next as S);
-          },
-          (e) => throwTo(f, e),
-        )
-        .finally(() => {
-          for (const d of t.done) d();
-          if (--box.n === 0) setPending(false);
-        });
-      // A form action or transition that queued this waits for it.
-      if (outer !== null && outer.wait !== undefined) outer.wait.push(box.p);
+      const node: Any = { a: box.a, payload, t: outer !== null ? ({ done: [] } as Transition) : null };
+      node.p = new Promise((res, rej) => {
+        node.res = res;
+        node.rej = rej;
+      });
+      node.p.catch(noop);
+      if (node.t !== null) {
+        box.n++;
+        setPending(true);
+        // A form action or transition that queued this waits for it.
+        if (outer!.wait !== undefined) outer!.wait.push(node.p.then(noop, noop));
+      } else setState(() => node.p);
+      box.q.push(node);
+      if (box.q.length === 1) run(node);
     };
   }
-  h.v.a = action;
-  return [state, h.s, pending];
+  if (action !== h.v.r) h.v.a = h.v.r = action;
+  return [isThenable(stored) ? readThenable(stored) : stored, h.s, pending];
 }
 export { useActionState as useFormState };
 
@@ -4552,9 +4615,11 @@ export function requestFormReset(form: HTMLFormElement): void {
 
 // #region Server-only APIs and stubs
 
-/** The client has no cache: the function itself. */
-export function cache<F>(fn: F): F {
-  return fn;
+/** The client has no cache: a function that calls `fn`, as React's client cache returns. */
+export function cache<F extends (...args: Any[]) => Any>(fn: F): F {
+  return function (this: unknown, ...args: Any[]) {
+    return fn.apply(null, args);
+  } as F;
 }
 /** Always null on the client. */
 export function cacheSignal(): null {
