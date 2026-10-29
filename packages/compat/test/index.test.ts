@@ -9,7 +9,7 @@
 // Suspense's reveal throttle, keyboard event fields, where <title> goes in <head>, and when an
 // <img> gets its src.
 
-import { beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { FakeElement, FakeEvent, installFakeDocument, ops, resetOps } from "@reactre/testdom";
 
@@ -748,6 +748,17 @@ describe("hooks", () => {
 
 describe("suspense", () => {
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  // Without a MutationObserver, ./features/concurrent.ts (installed by whichever file loaded it
+  // first in this process) can't hold the reveal, so these tests take the timer path every time.
+  const g = globalThis as { MutationObserver?: unknown };
+  let observer: unknown;
+  beforeEach(() => {
+    observer = g.MutationObserver;
+    delete g.MutationObserver;
+  });
+  afterEach(() => {
+    g.MutationObserver = observer;
+  });
   /** Renders a boundary whose child suspends until `resolve` is called; `settled` follows it. */
   function suspend(): { resolve: () => void; settled: Promise<void> } {
     let resolve!: () => void;
