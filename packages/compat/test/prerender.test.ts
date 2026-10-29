@@ -5,12 +5,14 @@
 // and must write the same prelude, the same postponed state (as JSON) and report the same errors;
 // then React resumes its postponed state and compat resumes both React's (parsed from the JSON) and
 // its own (the object it returned), and each must write React's HTML. The web entries are compared
-// with React's browser build (react-dom/static.browser, server.browser), the Node ones with its
-// Node build.
+// with React's browser build (react-dom/static.browser, server.browser) through compat's browser
+// entry, the Node ones with its Node build through compat's Node entry, errors by their very
+// messages: the browser build's minified codes, the Node build's full text.
 
 import { describe, expect, test } from "bun:test";
 
 import * as Compat from "../src/core.ts";
+import * as Browser from "../src/server.browser.ts";
 import * as Server from "../src/server.ts";
 
 // biome-ignore lint: both libraries are used through one untyped interface.
@@ -53,29 +55,8 @@ const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
 /** A promise that resolves to `value` after `ms`. */
 const later = <T>(value: T, ms = 1): Promise<T> => new Promise((r) => setTimeout(() => r(value), ms));
 
-// React's browser build throws minified errors; compat throws the full messages. These are React's
-// messages for the codes the tests meet (react.dev/errors), to compare the two.
-const messages: Record<string, string> = {
-  "486": "It should not be possible to postpone at the root. This is a bug in React.",
-  "487": "We should not have any resumable nodes in the shell. This is a bug in React.",
-  "488":
-    "Couldn't find all resumable slots by key/index during replaying. The tree doesn't match so React will fallback to client rendering.",
-  "490":
-    "Expected the resume to render <%s> in this slot but instead it rendered <%s>. The tree doesn't match so React will fallback to client rendering.",
-  "491":
-    "It should not be possible to postpone both at the root of an element as well as a slot below. This is a bug in React.",
-};
-
-/** An error's message, as the logs compare them: a minified React error's in full. */
-function message(e: Any): string {
-  const text = e instanceof Error ? e.message : String(e);
-  const m = /^Minified React error #(\d+); visit https:\/\/react\.dev\/errors\/\d+(\?\S*)? for/.exec(text);
-  const template = m ? messages[m[1]!] : undefined;
-  if (template === undefined) return text;
-  const args = new URLSearchParams(m![2] ?? "").getAll("args[]");
-  let i = 0;
-  return template.replace(/%s/g, () => args[i++] ?? "");
-}
+/** An error's message, as the logs compare them. */
+const message = (e: Any): string => (e instanceof Error ? e.message : String(e));
 
 /**
  * A component that waits: forever in the phases listed in `pendingIn` (prerender by default), for
@@ -188,14 +169,15 @@ interface Result {
 async function same(make: Make, options: Options = {}, node = false, resumeOptions: Options = {}): Promise<Result> {
   const entry = node ? "prerenderToNodeStream" : "prerender";
   const r = await prerenderWith(node ? ReactNodeStatic : ReactStatic, entry, make(React, "prerender"), options);
-  const c = await prerenderWith(Server, entry, make(Compat, "prerender"), options);
+  const compat = node ? Server : Browser;
+  const c = await prerenderWith(compat, entry, make(Compat, "prerender"), options);
   expectSame(c, r);
   if (r.postponed === null) return { prelude: r.html, postponed: null, resumed: "", log: r.log };
   const reactServer = node ? ReactNodeServer : ReactServer;
   const rr = await resumeWith(reactServer, node, make(React, "resume"), JSON.parse(r.json), resumeOptions);
-  const cr = await resumeWith(Server, node, make(Compat, "resume"), JSON.parse(r.json), resumeOptions);
+  const cr = await resumeWith(compat, node, make(Compat, "resume"), JSON.parse(r.json), resumeOptions);
   expectSame(cr, rr);
-  const own = await resumeWith(Server, node, make(Compat, "resume"), c.postponed, resumeOptions);
+  const own = await resumeWith(compat, node, make(Compat, "resume"), c.postponed, resumeOptions);
   expectSame(own, rr);
   return { prelude: r.html, postponed: r.postponed, resumed: rr.html, log: rr.log };
 }
@@ -241,7 +223,7 @@ describe("prerender", () => {
       formState: [1, "k", "ref", null],
     };
     const r = await prerenderWith(ReactStatic, "prerender", make(React, "prerender"), options, false);
-    const c = await prerenderWith(Server, "prerender", make(Compat, "prerender"), options, false);
+    const c = await prerenderWith(Browser, "prerender", make(Compat, "prerender"), options, false);
     expectSame(c, r);
     expect(r.postponed).toBeNull();
     expect(r.html).toContain("late");
@@ -250,7 +232,7 @@ describe("prerender", () => {
     expectSame(cn, rn);
     // Without options, too.
     const bare = (L: Lib): Any => h(L, "p", null, "plain");
-    expect(await text((await Server.prerender(bare(Compat))).prelude)).toBe(
+    expect(await text((await Browser.prerender(bare(Compat))).prelude)).toBe(
       await text((await ReactStatic.prerender(bare(React))).prelude),
     );
   });
@@ -305,14 +287,14 @@ describe("prerender", () => {
       await tick();
       c.abort();
     });
-    const c = await prerenderWith(Server, "prerender", make(Compat, "prerender"), {}, async (c) => {
+    const c = await prerenderWith(Browser, "prerender", make(Compat, "prerender"), {}, async (c) => {
       await tick();
       c.abort();
     });
     expectSame(c, r);
     const early = async (s: Any): Promise<Rendered> =>
-      prerenderWith(s, "prerender", make(s === Server ? Compat : React, "prerender"), {}, async (c) => c.abort(STOP));
-    expectSame(await early(Server), await early(ReactStatic));
+      prerenderWith(s, "prerender", make(s === Browser ? Compat : React, "prerender"), {}, async (c) => c.abort(STOP));
+    expectSame(await early(Browser), await early(ReactStatic));
   });
 
   test("nested boundaries: pending in completed, completed in pending, pending in pending", async () => {
@@ -561,7 +543,7 @@ describe("prerender", () => {
       }
       return "resolved";
     };
-    expect(await fail(Server, Compat)).toBe(await fail(ReactStatic, React));
+    expect(await fail(Browser, Compat)).toBe(await fail(ReactStatic, React));
     // A fallback the prerender writes first that throws fails the boundary around it.
     const fallback: Make = (L, phase) => {
       function Boom(): Any {
@@ -925,7 +907,7 @@ describe("replaying the prerendered tree", () => {
     for (const revealOrder of ["forwards", "backwards", "unstable_legacy-backwards", "together"]) {
       const make: Make = (L, phase) => h(L, "div", null, suspense(L, "list…", list(L, phase, revealOrder)));
       const r = await prerenderWith(ReactStatic, "prerender", make(React, "prerender"));
-      const c = await prerenderWith(Server, "prerender", make(Compat, "prerender"));
+      const c = await prerenderWith(Browser, "prerender", make(Compat, "prerender"));
       expectSame(c, r);
       const first = async (s: Any, L: Lib): Promise<string> => {
         const stream = await s.resume(make(L, "resume"), JSON.parse(r.json), { onError() {} });
@@ -943,7 +925,7 @@ describe("replaying the prerendered tree", () => {
       };
       const resumed = await first(ReactServer, React);
       expect(resumed).toContain("two");
-      expect(await first(Server, Compat)).toBe(resumed);
+      expect(await first(Browser, Compat)).toBe(resumed);
     }
     // A row that waits outside any boundary leaves the shell to the resume.
     const shell: Make = (L, phase) =>
@@ -1267,7 +1249,7 @@ describe("resuming a tree that differs", () => {
         return "rejected: " + message(e) + log.join();
       }
     };
-    expect(await run(Server, Compat)).toBe(await run(ReactServer, React));
+    expect(await run(Browser, Compat)).toBe(await run(ReactServer, React));
   });
 });
 
@@ -1313,7 +1295,7 @@ describe("resumeAndPrerender", () => {
       const entry = node ? "prerenderToNodeStream" : "prerender";
       const again = node ? "resumeAndPrerenderToNodeStream" : "resumeAndPrerender";
       const r = await prerenderWith(node ? ReactNodeStatic : ReactStatic, entry, make(React, "prerender"));
-      const c = await prerenderWith(Server, entry, make(Compat, "prerender"));
+      const c = await prerenderWith(node ? Server : Browser, entry, make(Compat, "prerender"));
       expectSame(c, r);
       const middle = async (s: Any, L: Lib, postponed: Any): Promise<Rendered> => {
         const log: string[] = [];
@@ -1329,7 +1311,7 @@ describe("resumeAndPrerender", () => {
         return { html, postponed: next, json: JSON.stringify(next), log, headers: [] };
       };
       const rm = await middle(node ? ReactNodeStatic : ReactStatic, React, JSON.parse(r.json));
-      const cm = await middle(Server, Compat, JSON.parse(r.json));
+      const cm = await middle(node ? Server : Browser, Compat, JSON.parse(r.json));
       expectSame(cm, rm);
       expect(rm.postponed).not.toBeNull();
       const rr = await resumeWith(
@@ -1338,7 +1320,7 @@ describe("resumeAndPrerender", () => {
         make(React, "resume"),
         JSON.parse(rm.json),
       );
-      const cr = await resumeWith(Server, node, make(Compat, "resume"), JSON.parse(rm.json));
+      const cr = await resumeWith(node ? Server : Browser, node, make(Compat, "resume"), JSON.parse(rm.json));
       expectSame(cr, rr);
     }
   });
@@ -1377,8 +1359,8 @@ describe("resumeAndPrerender", () => {
         return "rejected: " + message(e) + log.join();
       }
     };
-    expect(await run(Server, Compat, "resume")).toBe(await run(ReactStatic, React, "resume"));
-    expect(await run(Server, Compat, "middle")).toBe(await run(ReactStatic, React, "middle"));
+    expect(await run(Browser, Compat, "resume")).toBe(await run(ReactStatic, React, "resume"));
+    expect(await run(Browser, Compat, "middle")).toBe(await run(ReactStatic, React, "middle"));
   });
 });
 
@@ -1428,7 +1410,7 @@ describe("aborting a resume", () => {
         return "rejected: " + message(e) + log.join();
       }
     };
-    expect(await run(Server, Compat)).toBe(await run(ReactServer, React));
+    expect(await run(Browser, Compat)).toBe(await run(ReactServer, React));
   });
 
   test("aborted from a component the resume replays", async () => {
@@ -1471,7 +1453,7 @@ describe("aborting a resume", () => {
         return "rejected: " + message(e) + log.join();
       }
     };
-    expect(await run(Server, Compat)).toBe(await run(ReactServer, React));
+    expect(await run(Browser, Compat)).toBe(await run(ReactServer, React));
   });
 
   test("a resume whose shell fails rejects", async () => {
@@ -1497,6 +1479,6 @@ describe("aborting a resume", () => {
         return message(e);
       }
     };
-    expect(await run(Server, Compat)).toBe(await run(ReactServer, React));
+    expect(await run(Browser, Compat)).toBe(await run(ReactServer, React));
   });
 });

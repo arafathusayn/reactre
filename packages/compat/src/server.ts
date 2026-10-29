@@ -37,8 +37,28 @@
 //      resumes compat's. A resume replays the prerendered tree with tasks that have no segment,
 //      writing nothing until they reach postponed work, as React's replay tasks do.
 //
-// What differs from React (see the README for the full list): errors carry React's full messages, as React's server builds for
-// Node, Deno, Bun and edge runtimes do; its browser builds throw minified codes.
+//   6. Errors are those of React's build for the entry. React's browser builds
+//      (react-dom/server.browser, react-dom/static.browser) throw its minified production codes,
+//      its Node build full messages, and its edge and Bun builds full messages from the streams
+//      but codes from renderToString and renderToStaticMarkup, which they take from the browser
+//      build. This module is the Node build (@reactre/compat/server and /server.node);
+//      ./server.browser.ts and ./server.edge.ts wrap its functions with __minified, which marks
+//      the request a call creates, and every error site asks errorMessage, which reads the mark
+//      of its request. One module serves all three, so the work is shared and a render a
+//      component starts takes its own entry's errors.
+//
+//      Entries are picked as bundlers pick React's builds: the package's export conditions for
+//      ./server and ./static copy react-dom's for react-dom/server and react-dom/static ("workerd"
+//      and "edge-light" to the edge entry, "worker" and "browser" to the browser one, "bun" to the
+//      edge one for ./server, as react-dom/server resolves to its Bun build there, and "deno" to
+//      the browser one for ./static), and @reactre/plugin resolves the bare forms to ./server and
+//      ./static and each named build (.browser, .edge, .bun, .node) to its entry. A bundle for the
+//      browser or a web worker so gets the codes, a Node SSR build the full messages. Every
+//      entry exports the whole API, so an import that resolves through one resolves through all.
+//      The client pays nothing: the formatter is the server's own copy of core.ts's prodMessage,
+//      which during a server render defers to ServerHooks.message.
+//
+// What else differs from React is listed in the README.
 //
 // The file reads top down, in folding regions: HTML writing (escaping, attributes, elements,
 // resources), format and tree contexts, the request and its tasks, rendering, the work loop,
@@ -83,6 +103,51 @@ const RECOVERABLE_TYPE = Symbol.for("react.recoverable");
 const hasOwn = Object.prototype.hasOwnProperty;
 const isArray = Array.isArray;
 const noop = (): void => {};
+
+// #region Errors
+
+/** React's formatProdErrorMessage: error `code`'s link to react.dev/errors, carrying each argument. */
+function minifiedMessage(code: number, args: Any[]): string {
+  let url = "https://react.dev/errors/" + code;
+  for (let i = 0; i < args.length; i++) url += (i > 0 ? "&" : "?") + "args[]=" + encodeURIComponent(args[i]);
+  return (
+    "Minified React error #" +
+    code +
+    "; visit " +
+    url +
+    " for the full message or use the non-minified dev environment for full errors and additional helpful warnings."
+  );
+}
+
+/**
+ * The message of React's error `code` for `request` (the one working now, at a site inside its
+ * work): `full`, as React's Node build throws it, or the code and `args` where the entry that
+ * created the request stands for a build that minifies.
+ */
+function errorMessage(request: Request | null, code: number, full: string, ...args: Any[]): string {
+  return request !== null && request.minified ? minifiedMessage(code, args) : full;
+}
+
+// Whether the request created next throws minified codes: set by __minified around its call.
+let minifyNext = false;
+
+/**
+ * Internal (./server.browser.ts, ./server.edge.ts): `fn`, one of this module's renders, as a build
+ * that throws React's minified codes. The request the call creates is marked; the flag is cleared
+ * once it is read, so a render a component starts takes its own entry's errors.
+ */
+export function __minified<F extends (...args: Any[]) => Any>(fn: F): F {
+  return ((...args: Any[]) => {
+    minifyNext = true;
+    try {
+      return fn(...args);
+    } finally {
+      minifyNext = false;
+    }
+  }) as F;
+}
+
+// #endregion
 
 // #region HTML writing
 
@@ -239,7 +304,11 @@ const styleNames = new Map<string, string>();
 function pushStyleAttribute(target: string[], style: Any): void {
   if (typeof style !== "object")
     throw new Error(
-      "The `style` prop expects a mapping from style properties to values, not a string. For example, style={{marginRight: spacing + 'em'}} when using JSX.",
+      errorMessage(
+        currentRequest,
+        62,
+        "The `style` prop expects a mapping from style properties to values, not a string. For example, style={{marginRight: spacing + 'em'}} when using JSX.",
+      ),
     );
   let first = true;
   for (const name in style) {
@@ -437,14 +506,26 @@ function pushAttribute(target: string[], name: string, value: Any): void {
   }
 }
 
+/** React's checks of dangerouslySetInnerHTML: no children with it, and an object with `__html`. */
+function checkInnerHTML(innerHTML: Any, children: Any): void {
+  if (children != null)
+    throw new Error(
+      errorMessage(currentRequest, 60, "Can only set one of `children` or `props.dangerouslySetInnerHTML`."),
+    );
+  if (typeof innerHTML !== "object" || !("__html" in innerHTML))
+    throw new Error(
+      errorMessage(
+        currentRequest,
+        61,
+        "`props.dangerouslySetInnerHTML` must be in the form `{__html: ...}`. Please visit https://react.dev/link/dangerously-set-inner-html for more information.",
+      ),
+    );
+}
+
 /** dangerouslySetInnerHTML's HTML, checked as React checks it. */
 function pushInnerHTML(target: string[], innerHTML: Any, children: Any): void {
   if (innerHTML == null) return;
-  if (children != null) throw new Error("Can only set one of `children` or `props.dangerouslySetInnerHTML`.");
-  if (typeof innerHTML !== "object" || !("__html" in innerHTML))
-    throw new Error(
-      "`props.dangerouslySetInnerHTML` must be in the form `{__html: ...}`. Please visit https://react.dev/link/dangerously-set-inner-html for more information.",
-    );
+  checkInnerHTML(innerHTML, children);
   const html = innerHTML.__html;
   if (html !== null && html !== undefined) target.push("" + html);
 }
@@ -461,7 +542,13 @@ const formReplayingRuntime =
 
 function validateAdditionalFormField(value: Any): void {
   if (typeof value !== "string")
-    throw new Error("File/Blob fields are not yet supported in progressive forms. Will fallback to client hydration.");
+    throw new Error(
+      errorMessage(
+        currentRequest,
+        480,
+        "File/Blob fields are not yet supported in progressive forms. Will fallback to client hydration.",
+      ),
+    );
 }
 
 function pushAdditionalFormField(this: string[], value: Any, key: string): void {
@@ -548,7 +635,7 @@ const endTags = new Map<string, string>();
 function startChunkForTag(tag: string): string {
   let chunk = startTags.get(tag);
   if (chunk === undefined) {
-    if (!validTag.test(tag)) throw new Error("Invalid tag: " + tag);
+    if (!validTag.test(tag)) throw new Error(errorMessage(currentRequest, 65, "Invalid tag: " + tag, tag));
     startTags.set(tag, (chunk = "<" + tag));
   }
   return chunk;
@@ -562,7 +649,14 @@ function endChunkForTag(tag: string): string {
 
 /** A self-closing tag's error, for children or inner HTML on one. */
 const selfClosing = (tag: string): Error =>
-  new Error(tag + " is a self-closing tag and must neither have `children` nor use `dangerouslySetInnerHTML`.");
+  new Error(
+    errorMessage(
+      currentRequest,
+      399,
+      tag + " is a self-closing tag and must neither have `children` nor use `dangerouslySetInnerHTML`.",
+      tag,
+    ),
+  );
 
 /** A view transition's attributes, for the first element under a <ViewTransition> (streams only). */
 function pushViewTransitionAttributes(target: string[], ctx: FormatContext): void {
@@ -817,7 +911,9 @@ function pushStartInstance(
             defaultValue = v;
             break;
           case "dangerouslySetInnerHTML":
-            throw new Error("`dangerouslySetInnerHTML` does not make sense on <textarea>.");
+            throw new Error(
+              errorMessage(currentRequest, 91, "`dangerouslySetInnerHTML` does not make sense on <textarea>."),
+            );
           default:
             pushAttribute(target, k, v);
         }
@@ -826,8 +922,12 @@ function pushStartInstance(
       pushViewTransitionAttributes(target, ctx);
       target.push(">");
       if (children != null) {
-        if (value != null) throw new Error("If you supply `defaultValue` on a <textarea>, do not pass children.");
-        if (isArray(children) && children.length > 1) throw new Error("<textarea> can only have at most one child.");
+        if (value != null)
+          throw new Error(
+            errorMessage(currentRequest, 92, "If you supply `defaultValue` on a <textarea>, do not pass children."),
+          );
+        if (isArray(children) && children.length > 1)
+          throw new Error(errorMessage(currentRequest, 93, "<textarea> can only have at most one child."));
         // As React: an array's string form, not its first item's.
         value = "" + children;
       }
@@ -1041,7 +1141,9 @@ function pushStartInstance(
         const v = props[k];
         if (v == null) continue;
         if (k === "children" || k === "dangerouslySetInnerHTML")
-          throw new Error("menuitems cannot have `children` nor `dangerouslySetInnerHTML`.");
+          throw new Error(
+            errorMessage(currentRequest, 400, "menuitems cannot have `children` nor `dangerouslySetInnerHTML`."),
+          );
         pushAttribute(target, k, v);
       }
       pushViewTransitionAttributes(target, ctx);
@@ -1232,11 +1334,7 @@ function pushStartInstance(
       target.push(">");
       // A leading newline is dropped by the HTML parser, so one more is written.
       if (innerHTML != null) {
-        if (children != null) throw new Error("Can only set one of `children` or `props.dangerouslySetInnerHTML`.");
-        if (typeof innerHTML !== "object" || !("__html" in innerHTML))
-          throw new Error(
-            "`props.dangerouslySetInnerHTML` must be in the form `{__html: ...}`. Please visit https://react.dev/link/dangerously-set-inner-html for more information.",
-          );
+        checkInnerHTML(innerHTML, children);
         const html = innerHTML.__html;
         if (html !== null && html !== undefined) {
           if (typeof html === "string" && html.length > 0 && html[0] === "\n") target.push("\n", html);
@@ -1345,7 +1443,15 @@ function pushStartInstance(
       if (ctx.insertionMode < (type === "html" ? 1 : HTML_MODE)) {
         const preamble = preambleState || state.preamble;
         const field = type === "html" ? "htmlChunks" : type === "head" ? "headChunks" : "bodyChunks";
-        if (preamble[field]) throw new Error("The `<" + type + ">` tag may only be rendered once.");
+        if (preamble[field])
+          throw new Error(
+            errorMessage(
+              currentRequest,
+              545,
+              "The `<" + type + ">` tag may only be rendered once.",
+              "`<" + type + ">`",
+            ),
+          );
         if (preambleState !== null) target.push("<!--" + type + "-->");
         const chunks: string[] = (preamble[field] = type === "html" ? [state.doctype] : []);
         return pushStartSingletonElement(chunks, props, type, ctx);
@@ -2485,6 +2591,8 @@ interface Request {
   trackedPostpones: TrackedPostpones | null;
   /** The postponed state a prerender with a written shell gave: its prelude's flushes number segments. */
   postponedState: PostponedState | null;
+  /** Whether its errors are React's minified codes: an entry that stands for a browser build made it. */
+  minified: boolean;
 }
 
 /** React's default onError: logs the error, gives no digest. */
@@ -2592,7 +2700,15 @@ function newRequest(
     rootFormatContext: rootContext,
     trackedPostpones: o.prerender ? { workingMap: new Map(), rootNodes: [], rootSlots: null } : null,
     postponedState: null,
+    minified: readMinifyNext(),
   };
+}
+
+/** The mark __minified set for the request being created, cleared for any created later. */
+function readMinifyNext(): boolean {
+  const minified = minifyNext;
+  minifyNext = false;
+  return minified;
 }
 
 /** The root task: the whole tree, into the root segment. */
@@ -2805,7 +2921,7 @@ function endRenderLifetime(request: Request): void {
 // #region browser() tokens
 
 /** The error a browser() token raises on the server: its boundary renders on the client. */
-function createRecoverableError(token: Any): Error {
+function createRecoverableError(token: Any, request: Request | null = currentRequest): Error {
   const reason = token._reason;
   let initialized: Any;
   if (typeof reason === "function") {
@@ -2816,7 +2932,7 @@ function createRecoverableError(token: Any): Error {
     }
   } else initialized = reason;
   const error = new Error(
-    "Browser-only rendering was requested by `browser()`.",
+    errorMessage(request, 603, "Browser-only rendering was requested by `browser()`."),
     reason === undefined ? undefined : { cause: initialized },
   );
   Object.defineProperty(error, RECOVERABLE_TYPE, { value: true });
@@ -2827,9 +2943,13 @@ const isRecoverableError = (error: Any): boolean =>
   typeof error === "object" && error !== null && error[RECOVERABLE_TYPE] === true;
 
 /** A browser() token outside any boundary: the whole render fails, with this error. */
-function cloneRecoverableErrorAsFatal(error: Any): Error {
+function cloneRecoverableErrorAsFatal(request: Request, error: Any): Error {
   const fatal = new Error(
-    "The server render could not complete because client rendering was requested outside a Suspense boundary. See this error's cause for additional details.",
+    errorMessage(
+      request,
+      604,
+      "The server render could not complete because client rendering was requested outside a Suspense boundary. See this error's cause for additional details.",
+    ),
     hasOwn.call(error, "cause") ? { cause: error.cause } : undefined,
   );
   const stack: string | undefined = error.stack;
@@ -3043,12 +3163,16 @@ const serverHooks: ServerHooks = {
   snapshot(getServerSnapshot, select) {
     if (getServerSnapshot === undefined)
       throw new Error(
-        "Missing getServerSnapshot, which is required for server-rendered content. Will revert to client rendering.",
+        errorMessage(
+          currentRequest,
+          407,
+          "Missing getServerSnapshot, which is required for server-rendered content. Will revert to client rendering.",
+        ),
       );
     const v = getServerSnapshot();
     return select === undefined ? v : select(v);
   },
-  browser: createRecoverableError,
+  browser: (token) => createRecoverableError(token),
   actionState(action, initialState, permalink) {
     // React's server useActionState: a server action's form carries a key for the hook, and a
     // postback (formState) whose key and action match gives the hook its state.
@@ -3095,9 +3219,9 @@ const serverHooks: ServerHooks = {
     }
     return (lastThenable = t);
   },
-  // React's server builds for Node, Deno, Bun and edge runtimes throw full messages; only its
-  // browser builds throw the codes compat's client throws.
+  // React's Node build throws full messages, its browser builds the codes compat's client throws.
   message(code, args) {
+    if (currentRequest!.minified) return minifiedMessage(code, args);
     return code === 438
       ? "An unsupported type was passed to use(): " + args[0]
       : code === 440
@@ -3404,7 +3528,7 @@ function renderElement(request: Request, task: Task, keyPath: KeyPath, type: Any
       task.keyPath = prevKeyPath;
       return;
     case SCOPE_TYPE:
-      throw new Error("ReactDOMServer does not yet support scope components.");
+      throw new Error(errorMessage(request, 343, "ReactDOMServer does not yet support scope components."));
     case SUSPENSE_TYPE:
       renderSuspenseBoundary(request, task, keyPath, props);
       return;
@@ -3463,10 +3587,17 @@ function renderElement(request: Request, task: Task, keyPath: KeyPath, type: Any
       }
     }
   }
+  const got = type == null ? type : typeof type;
   throw new Error(
-    "Element type is invalid: expected a string (for built-in components) or a class/function (for composite components) but got: " +
-      (type == null ? type : typeof type) +
-      ".",
+    errorMessage(
+      request,
+      130,
+      "Element type is invalid: expected a string (for built-in components) or a class/function (for composite components) but got: " +
+        got +
+        ".",
+      got,
+      "",
+    ),
   );
 }
 
@@ -4035,7 +4166,11 @@ function retryNode(request: Request, task: Task): void {
       }
       case PORTAL_TYPE:
         throw new Error(
-          "Portals are not currently supported by the server renderer. Render them conditionally so that they only appear on the client render.",
+          errorMessage(
+            request,
+            257,
+            "Portals are not currently supported by the server renderer. Render them conditionally so that they only appear on the client render.",
+          ),
         );
       case LAZY_TYPE:
         node = node._init(node._payload);
@@ -4072,10 +4207,16 @@ function retryNode(request: Request, task: Task): void {
       return;
     }
     const tag = Object.prototype.toString.call(node);
+    const found = tag === "[object Object]" ? "object with keys {" + Object.keys(node).join(", ") + "}" : tag;
     throw new Error(
-      "Objects are not valid as a React child (found: " +
-        (tag === "[object Object]" ? "object with keys {" + Object.keys(node).join(", ") + "}" : tag) +
-        "). If you meant to render a collection of children, use an array instead.",
+      errorMessage(
+        request,
+        31,
+        "Objects are not valid as a React child (found: " +
+          found +
+          "). If you meant to render a collection of children, use an array instead.",
+        found,
+      ),
     );
   }
   // Text is written unless replaying (no segment).
@@ -4092,7 +4233,8 @@ const NOT_ALL_SLOTS = "Couldn't find all resumable slots by key/index during rep
 
 /** Whether a replay set has nodes left that its one task did not reach: the trees differ. */
 function checkReplayed(replay: ReplaySet): void {
-  if (replay.pendingTasks === 1 && replay.nodes.length > 0) throw new Error(NOT_ALL_SLOTS);
+  if (replay.pendingTasks === 1 && replay.nodes.length > 0)
+    throw new Error(errorMessage(currentRequest, 488, NOT_ALL_SLOTS));
   replay.pendingTasks--;
 }
 
@@ -4123,12 +4265,18 @@ function replayElement(
     if (node.length === 4) {
       if (name !== null && name !== node[0])
         throw new Error(
-          "Expected the resume to render <" +
-            node[0] +
-            "> in this slot but instead it rendered <" +
-            name +
-            ">." +
-            MISMATCH,
+          errorMessage(
+            request,
+            490,
+            "Expected the resume to render <" +
+              node[0] +
+              "> in this slot but instead it rendered <" +
+              name +
+              ">." +
+              MISMATCH,
+            node[0],
+            name,
+          ),
         );
       const childNodes = node[2],
         childSlots = node[3],
@@ -4152,10 +4300,16 @@ function replayElement(
     } else {
       if (type !== SUSPENSE_TYPE)
         throw new Error(
-          "Expected the resume to render <Suspense> in this slot but instead it rendered <" +
-            (getComponentNameFromType(type) || "Unknown") +
-            ">." +
-            MISMATCH,
+          errorMessage(
+            request,
+            490,
+            "Expected the resume to render <Suspense> in this slot but instead it rendered <" +
+              (getComponentNameFromType(type) || "Unknown") +
+              ">." +
+              MISMATCH,
+            "Suspense",
+            getComponentNameFromType(type) || "Unknown",
+          ),
         );
       replaySuspenseBoundary(request, task, keyPath, props, node);
     }
@@ -4618,7 +4772,7 @@ function erroredTask(request: Request, task: Task, x: Any): void {
   request.allPendingTasks--;
   const info = getThrownInfo(task.componentStack);
   if (boundary === null) {
-    const error = isRecoverableError(x) ? cloneRecoverableErrorAsFatal(x) : x;
+    const error = isRecoverableError(x) ? cloneRecoverableErrorAsFatal(request, x) : x;
     logRecoverableError(request, error, info);
     fatalError(request, error);
     return;
@@ -4792,7 +4946,7 @@ function finishAbortedTask(task: Task, request: Request, error: Any): void {
         finishedTask(request, null, task.row, segment);
         return;
       }
-      const e = recoverable ? cloneRecoverableErrorAsFatal(error) : error;
+      const e = recoverable ? cloneRecoverableErrorAsFatal(request, error) : error;
       logRecoverableError(request, e, info);
       if (request.status !== ABORTING && request.status !== CLOSED) fatalError(request, e);
       return;
@@ -4842,11 +4996,11 @@ function abort(request: Request, reason: Any): void {
   endRenderLifetime(request);
   request.aborted = true;
   const error = isRecoverableReason(reason)
-    ? createRecoverableError(reason)
+    ? createRecoverableError(reason, request)
     : reason === undefined
-      ? new Error("The render was aborted by the server without a reason.")
+      ? new Error(errorMessage(request, 432, "The render was aborted by the server without a reason."))
       : typeof reason === "object" && reason !== null && typeof reason.then === "function"
-        ? new Error("The render was aborted by the server with a promise.")
+        ? new Error(errorMessage(request, 530, "The render was aborted by the server with a promise."))
         : reason;
   request.fatalError = error;
   const tasks = request.abortableTasks;
@@ -4913,7 +5067,7 @@ function trackPostpone(request: Request, tracked: TrackedPostpones, task: Task, 
     map.set(keyPath, node);
     addToReplayParent(node, keyPath[0], tracked);
   } else if ((slots = node[3]) === null) slots = node[3] = {};
-  else if (typeof slots === "number") throw new Error(POSTPONED_TWICE);
+  else if (typeof slots === "number") throw new Error(errorMessage(request, 491, POSTPONED_TWICE));
   slots[task.childIndex] = segment.id;
 }
 
@@ -4926,7 +5080,10 @@ function trackPostponedBoundary(request: Request, tracked: TrackedPostpones, bou
   boundary.rootSegmentID = request.nextSegmentId++;
   // A boundary a resumeAndPrerender resumed has no record: React fails there, and so does compat.
   const record = boundary.tracked;
-  if (record === null) throw new Error("It should not be possible to postpone at the root. This is a bug in React.");
+  if (record === null)
+    throw new Error(
+      errorMessage(request, 486, "It should not be possible to postpone at the root. This is a bug in React."),
+    );
   const keyPath = record.contentKeyPath!,
     node = tracked.workingMap.get(keyPath);
   if (node === undefined) {
@@ -4991,7 +5148,9 @@ function abortRemainingReplayNodes(
   nodes.length = 0;
   if (slots === null) return;
   if (boundary === null)
-    throw new Error("We should not have any resumable nodes in the shell. This is a bug in React.");
+    throw new Error(
+      errorMessage(request, 487, "We should not have any resumable nodes in the shell. This is a bug in React."),
+    );
   if (boundary.status !== ERRORED) {
     boundary.status = ERRORED;
     boundary.errorDigest = digest;
@@ -5811,7 +5970,7 @@ function startFlowing(request: Request, destination: Destination): void {
   if (request.status === ABORTING) {
     request.status = CLOSED;
     let error = request.fatalError;
-    if (isRecoverableError(error)) error = cloneRecoverableErrorAsFatal(error);
+    if (isRecoverableError(error)) error = cloneRecoverableErrorAsFatal(request, error);
     destination.error(error);
   } else if (request.status !== CLOSED && request.destination === null) {
     request.destination = destination;
@@ -5896,7 +6055,11 @@ function renderToStringImpl(
   if (didFatal && fatal !== abortReason) throw fatal;
   if (!readyToStream)
     throw new Error(
-      "A component suspended while responding to synchronous input. This will cause the UI to be replaced with a loading indicator. To fix, updates that suspend should be wrapped with startTransition.",
+      errorMessage(
+        request,
+        426,
+        "A component suspended while responding to synchronous input. This will cause the UI to be replaced with a loading indicator. To fix, updates that suspend should be wrapped with startTransition.",
+      ),
     );
   return result;
 }
@@ -6032,7 +6195,8 @@ function pipeableStream(request: Request, emitEarly: boolean): PipeableStream {
   let started = false;
   return {
     pipe(writable) {
-      if (started) throw new Error("React currently only supports piping to one writable stream.");
+      if (started)
+        throw new Error(errorMessage(request, 433, "React currently only supports piping to one writable stream."));
       started = true;
       const destination = writableDestination(writable);
       if (emitEarly) safelyEmitEarlyPreloads(request, request.pendingRootTasks === 0);

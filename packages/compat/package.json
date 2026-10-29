@@ -50,8 +50,37 @@
     },
     "./server": {
       "types": "./src/server.ts",
+      "workerd": "./dist/server.edge.js",
+      "edge-light": "./dist/server.edge.js",
+      "worker": "./dist/server.browser.js",
+      "browser": "./dist/server.browser.js",
+      "bun": "./src/server.edge.ts",
+      "default": "./dist/server.js"
+    },
+    "./static": {
+      "types": "./src/server.ts",
+      "workerd": "./dist/server.edge.js",
+      "edge-light": "./dist/server.edge.js",
+      "deno": "./dist/server.browser.js",
+      "worker": "./dist/server.browser.js",
+      "browser": "./dist/server.browser.js",
       "bun": "./src/server.ts",
       "default": "./dist/server.js"
+    },
+    "./server.node": {
+      "types": "./src/server.ts",
+      "bun": "./src/server.ts",
+      "default": "./dist/server.js"
+    },
+    "./server.browser": {
+      "types": "./src/server.browser.ts",
+      "bun": "./src/server.browser.ts",
+      "default": "./dist/server.browser.js"
+    },
+    "./server.edge": {
+      "types": "./src/server.edge.ts",
+      "bun": "./src/server.edge.ts",
+      "default": "./dist/server.edge.js"
     },
     "./api": {
       "types": "./src/api.ts",
@@ -69,7 +98,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/index.ts src/core.ts src/server.ts src/features/classes.ts src/features/stacks.ts src/features/keys.ts src/features/retry.ts src/features/concurrent.ts --outdir dist --target browser --format esm --splitting --chunk-naming \"chunk-[hash].[ext]\" --packages external && bun build src/compiler.ts src/api.ts --outdir dist --target node --format esm --packages external"
+    "build": "rm -rf dist && bun build src/index.ts src/core.ts src/server.ts src/server.browser.ts src/server.edge.ts src/features/classes.ts src/features/stacks.ts src/features/keys.ts src/features/retry.ts src/features/concurrent.ts --outdir dist --target browser --format esm --splitting --chunk-naming \"chunk-[hash].[ext]\" --root src --packages external && bun build src/compiler.ts src/api.ts --outdir dist --target node --format esm --packages external"
   },
   "dependencies": {
     "@reactre/compiler": "workspace:*",

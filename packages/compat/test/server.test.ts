@@ -4,12 +4,18 @@
 // lazy components come from the library that renders them), renders it with both servers and
 // expects the same HTML: renderToString, renderToStaticMarkup and renderToReadableStream (read
 // once all of it is ready), plus renderToPipeableStream where the test says so. Errors are
-// compared by message. What React's stable build cannot render (browser() tokens) is checked
-// against the HTML React writes for the same boundary when it errors.
+// compared by message, and each of compat's entries throws the message React's build for it
+// throws (raw: minified codes from the browser builds, full text from the others). What React's
+// stable build cannot render (browser() tokens) is checked against the HTML React writes for the
+// same boundary when it errors.
 
 import { describe, expect, spyOn, test } from "bun:test";
 
 import * as Compat from "../src/core.ts";
+import * as Browser from "../src/server.browser.ts";
+import BrowserDefault from "../src/server.browser.ts";
+import * as Edge from "../src/server.edge.ts";
+import EdgeDefault from "../src/server.edge.ts";
 import * as Server from "../src/server.ts";
 import ServerDefault from "../src/server.ts";
 
@@ -26,6 +32,7 @@ const ReactServer: Any = await load("react-dom/server.browser");
 const ReactNodeServer: Any = await load("react-dom/server.node");
 // What react-dom/server resolves to under Bun.
 const ReactBunServer: Any = await load("react-dom/server.bun");
+const ReactEdgeServer: Any = await load("react-dom/server.edge");
 if (prevEnv === undefined) delete process.env["NODE_ENV"];
 else process.env["NODE_ENV"] = prevEnv;
 
@@ -135,21 +142,57 @@ function thrown(fn: () => unknown): string {
   return "(nothing thrown)";
 }
 
-/** Both libraries throw the same message from renderToString and from the stream. */
+/** What a call throws, as its message, untranslated. */
+function raw(fn: () => unknown): string {
+  try {
+    fn();
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  }
+  return "(nothing thrown)";
+}
+
+/** The message renderToReadableStream rejects with, untranslated. */
+async function rejected(server: Any, el: Any): Promise<string> {
+  try {
+    await server.renderToReadableStream(el, quiet);
+  } catch (e) {
+    return (e as Error).message;
+  }
+  return "(resolved)";
+}
+
+/**
+ * Compat's server entries, each with React's build it stands for: @reactre/compat/server is
+ * react-dom/server.node, /server.browser is react-dom/server.browser, and /server.edge is
+ * react-dom/server.edge and react-dom/server.bun (whose renderToString is React's browser build's).
+ */
+const builds: [name: string, compat: Any, react: Any][] = [
+  ["node", Server, ReactNodeServer],
+  ["browser", Browser, ReactServer],
+  ["edge", Edge, ReactEdgeServer],
+  ["bun", Edge, ReactBunServer],
+];
+
+/**
+ * Both libraries throw the same message from renderToString, renderToStaticMarkup and the stream,
+ * through each entry: the very message React's build for the entry throws. Returns the full one.
+ */
 async function sameError(make: Make): Promise<string> {
-  const message = thrown(() => ReactServer.renderToString(make(React)));
-  expect(thrown(() => Server.renderToString(make(Compat)))).toBe(message);
-  expect(thrown(() => Server.renderToStaticMarkup(make(Compat)))).toBe(message);
-  const reject = async (server: Any): Promise<string> => {
-    try {
-      await server.renderToReadableStream(make(server === Server ? Compat : React), quiet);
-    } catch (e) {
-      return full((e as Error).message);
-    }
-    return "(resolved)";
-  };
-  expect(await reject(Server)).toBe(await reject(ReactServer));
-  return message;
+  for (const [name, compat, react] of builds) {
+    const expected = [
+      raw(() => react.renderToString(make(React))),
+      raw(() => react.renderToStaticMarkup(make(React))),
+      await rejected(react, make(React)),
+    ];
+    const actual = [
+      raw(() => compat.renderToString(make(Compat))),
+      raw(() => compat.renderToStaticMarkup(make(Compat))),
+      await rejected(compat, make(Compat)),
+    ];
+    expect({ name, actual }).toEqual({ name, actual: expected });
+  }
+  return raw(() => ReactNodeServer.renderToString(make(React)));
 }
 
 /** A promise that resolves to `value` after `ms`, as a thenable both servers wait on. */
@@ -164,10 +207,19 @@ describe("React's production build", () => {
 });
 
 describe("errors", () => {
-  // React's server builds for Node, Deno, Bun and edge runtimes throw full messages (only its
-  // browser builds minify them), and so does compat's server, its errors from compat's hooks
-  // included, though compat's client throws React's production codes.
-  test("carry React's full messages, as React's Node build throws them", () => {
+  // React's builds differ: its browser builds (react-dom/server.browser, react-dom/static.browser)
+  // throw minified codes, its Node build full messages, and its edge and Bun builds full messages
+  // from the streams but codes from renderToString, which they take from the browser build. Each of
+  // compat's entries throws as React's build for it does, its errors from compat's hooks included.
+  const minified = (code: number, ...args: string[]): string =>
+    "Minified React error #" +
+    code +
+    "; visit https://react.dev/errors/" +
+    code +
+    args.map((a, i) => (i === 0 ? "?" : "&") + "args[]=" + encodeURIComponent(a)).join("") +
+    " for the full message or use the non-minified dev environment for full errors and additional helpful warnings.";
+
+  test("are those of React's build for each entry, hooks' errors included", async () => {
     const cases: Make[] = [
       (L) => {
         function Use() {
@@ -205,20 +257,138 @@ describe("errors", () => {
       (L) => L.createElement("div", null, { x: 1 }),
       (L) => L.createElement("div", null, L.createElement(undefined)),
     ];
-    const raw = (fn: () => unknown): string => {
-      try {
-        fn();
-      } catch (e) {
-        return (e as Error).message;
-      }
-      return "(nothing thrown)";
-    };
     for (const make of cases) {
-      const message = raw(() => ReactNodeServer.renderToString(make(React)));
-      expect(message).not.toStartWith("Minified");
-      expect(message).not.toBe("(nothing thrown)");
-      expect(raw(() => Server.renderToString(make(Compat)))).toBe(message);
+      const node = raw(() => ReactNodeServer.renderToString(make(React)));
+      expect(node).not.toStartWith("Minified");
+      expect(node).not.toBe("(nothing thrown)");
+      expect(raw(() => ReactServer.renderToString(make(React)))).toStartWith("Minified React error #");
+      await sameError(make);
     }
+  });
+
+  test("a render that suspends outside a boundary in renderToString", () => {
+    const make: Make = (L) => {
+      const Never = (): Any => L.use(new Promise(() => {}));
+      return L.createElement("div", null, L.createElement(Never));
+    };
+    for (const [name, compat, react] of builds) {
+      const expected = [
+        raw(() => react.renderToString(make(React))),
+        raw(() => react.renderToStaticMarkup(make(React))),
+      ];
+      const actual = [
+        raw(() => compat.renderToString(make(Compat))),
+        raw(() => compat.renderToStaticMarkup(make(Compat))),
+      ];
+      expect({ name, actual }).toEqual({ name, actual: expected });
+    }
+    expect(raw(() => Browser.renderToString(make(Compat)))).toBe(minified(426));
+  });
+
+  test("aborts without a reason, and with a promise", async () => {
+    const make: Make = (L) => {
+      const Never = (): Any => L.use(new Promise(() => {}));
+      return L.createElement("div", null, L.createElement(L.Suspense, { fallback: "f" }, L.createElement(Never)));
+    };
+    /** The errors a stream reports when it is cancelled with no reason, or its signal aborts with `reason`. */
+    const read = async (server: Any, L: Lib, reason?: unknown): Promise<string[]> => {
+      const controller = new AbortController();
+      const errors: string[] = [];
+      const stream = await server.renderToReadableStream(make(L), {
+        signal: controller.signal,
+        onError: (e: Any) => void errors.push(e.message),
+      });
+      if (reason === undefined) {
+        const reader = stream.getReader();
+        await reader.read();
+        await reader.cancel();
+        await later(null, 2);
+      } else {
+        setTimeout(() => controller.abort(reason), 2);
+        await text(stream);
+      }
+      return errors;
+    };
+    for (const [name, compat, react] of builds) {
+      for (const reason of [undefined, Promise.resolve()]) {
+        const expected = await read(react, React, reason);
+        expect(expected.length).toBe(1);
+        expect({ name, actual: await read(compat, Compat, reason) }).toEqual({ name, actual: expected });
+      }
+    }
+    expect(await read(Browser, Compat)).toEqual([minified(432)]);
+    // renderToPipeableStream's abort(), as React's Node build; compat's browser entry minifies it.
+    const pipeAbort = (server: Any, L: Lib): Promise<string> =>
+      new Promise((resolve) => {
+        const s = server.renderToPipeableStream(make(L), { onError: (e: Any) => resolve(e.message) });
+        s.abort();
+      });
+    expect(await pipeAbort(Server, Compat)).toBe(await pipeAbort(ReactNodeServer, React));
+    expect(await pipeAbort(Browser, Compat)).toBe(minified(432));
+  });
+
+  test("piping twice, as React's Node build; compat's browser entry minifies it", async () => {
+    const pipeTwice = (server: Any, L: Lib): Promise<string> =>
+      new Promise((resolve) => {
+        const writable = { write: () => true, end: () => {}, on: () => writable };
+        const s = server.renderToPipeableStream(L.createElement("p", null, "x"), {
+          onShellReady() {
+            s.pipe(writable);
+            resolve(raw(() => s.pipe(writable)));
+          },
+        });
+      });
+    expect(await pipeTwice(Server, Compat)).toBe(await pipeTwice(ReactNodeServer, React));
+    expect(await pipeTwice(Browser, Compat)).toBe(minified(433));
+  });
+
+  test("browser(): the bailout and the fatal error, minified by the browser entry", async () => {
+    const reasons = (server: Any): Promise<string[]> => {
+      const out: string[] = [];
+      const Client = (): Any => Compat.use((Compat as Any).browser("why"));
+      const el = Compat.createElement(Compat.Suspense, { fallback: "fb" }, Compat.createElement(Client));
+      return streamAll(server, el, { onBrowserBailout: (e: Error) => void out.push(e.message) }).then(() => out);
+    };
+    expect(await reasons(Browser)).toEqual([minified(603)]);
+    expect(await reasons(Edge)).toEqual(["Browser-only rendering was requested by `browser()`."]);
+    const fatal = (server: Any): string =>
+      raw(() => server.renderToStaticMarkup(Compat.createElement(() => Compat.use((Compat as Any).browser()))));
+    expect(fatal(Browser)).toBe(minified(604));
+    expect(fatal(Edge)).toBe(minified(604));
+    expect(fatal(Server)).toStartWith("The server render could not complete");
+    // An abort with a token: its bailout too.
+    const aborted = async (server: Any): Promise<string[]> => {
+      const out: string[] = [];
+      const controller = new AbortController();
+      const Never = (): Any => Compat.use(new Promise(() => {}));
+      const stream = await server.renderToReadableStream(
+        Compat.createElement(Compat.Suspense, { fallback: "f" }, Compat.createElement(Never)),
+        { signal: controller.signal, onBrowserBailout: (e: Error) => void out.push(e.message) },
+      );
+      controller.abort((Compat as Any).browser("aborted"));
+      await text(stream);
+      return out;
+    };
+    expect(await aborted(Browser)).toEqual([minified(603)]);
+    expect(await aborted(Server)).toEqual(["Browser-only rendering was requested by `browser()`."]);
+  });
+
+  test("a render inside a component takes its own entry's errors", () => {
+    // The outer render is the browser entry's; the inner one, started while it renders, the Node one's.
+    let inner = "";
+    const Outer = (): Any => {
+      inner = raw(() => Server.renderToString(Compat.createElement("div", { style: "x" })));
+      return Compat.createElement("div", { style: "x" });
+    };
+    expect(raw(() => Browser.renderToString(Compat.createElement(Outer)))).toBe(minified(62));
+    expect(inner).toStartWith("The `style` prop expects");
+    // And the other way round.
+    const Inner = (): Any => {
+      inner = raw(() => Browser.renderToString(Compat.createElement("div", { style: "x" })));
+      return Compat.createElement("div", { style: "x" });
+    };
+    expect(raw(() => Server.renderToString(Compat.createElement(Inner)))).toStartWith("The `style` prop expects");
+    expect(inner).toBe(minified(62));
   });
 });
 
@@ -240,8 +410,23 @@ describe("entry", () => {
     ]) {
       expect(typeof (Server as Any)[k]).toBe("function");
       expect((ServerDefault as Any)[k]).toBe((Server as Any)[k]);
+      // The browser and edge entries export the same API, so any import resolves through them.
+      for (const [entry, fallback] of [
+        [Browser, BrowserDefault],
+        [Edge, EdgeDefault],
+      ]) {
+        expect(typeof (entry as Any)[k]).toBe("function");
+        expect((fallback as Any)[k]).toBe((entry as Any)[k]);
+      }
     }
     expect(Server.version).toBe(Compat.version);
+    expect(Browser.version).toBe(Compat.version);
+    expect(Edge.version).toBe(Compat.version);
+    expect((BrowserDefault as Any).version).toBe(Compat.version);
+    expect((EdgeDefault as Any).version).toBe(Compat.version);
+    // The edge entry differs from the Node one only in renderToString and renderToStaticMarkup.
+    expect(Edge.renderToReadableStream).toBe(Server.renderToReadableStream);
+    expect(Edge.renderToString).not.toBe(Server.renderToString);
   });
 });
 
