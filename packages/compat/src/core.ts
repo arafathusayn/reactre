@@ -1553,7 +1553,15 @@ function update(f: Fiber, el: ReactElement, mount: boolean): void {
  * Render fiber `f` by kind, with `f.p` already set to its new props and `old` its previous ones
  * (null on mount). Clears DIRTY first, so an update scheduled during the render marks it again.
  */
+// Probe (not for main): the per-render hook a copy-on-write render undo would need.
+let touch: ((f: Fiber) => void) | null = null;
+/** Internal (probe): set the hook run() calls before it changes a fiber it updates. */
+export function __installTouch(fn: (f: Fiber) => void): void {
+  touch = fn;
+}
+
 function run(f: Fiber, old: Props | null, mount: boolean): void {
+  if (touch !== null && !mount) touch(f);
   f.f &= ~DIRTY;
   switch (f.n) {
     case HOST:
