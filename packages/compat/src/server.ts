@@ -1094,9 +1094,9 @@ function pushStartInstance(
           return pushLinkImpl(target, props);
         // A stylesheet with a precedence: a resource, written once, in precedence order.
         let queue = state.styles.get(precedence);
-        const resourceState = rs.styleResources.get(href);
+        const resourceState = hasOwn.call(rs.styleResources, href) ? rs.styleResources[href] : undefined;
         if (resourceState !== null) {
-          rs.styleResources.set(href, null);
+          rs.styleResources[href] = null;
           if (!queue) {
             queue = { precedence: escapeText(precedence), rules: [], hrefs: [], sheets: new Map() };
             state.styles.set(precedence, queue);
@@ -1138,9 +1138,9 @@ function pushStartInstance(
       const key = props["src"];
       const module = props["type"] === "module";
       const resources = module ? rs.moduleScriptResources : rs.scriptResources;
-      const resourceState = resources.get(key);
+      const resourceState = hasOwn.call(resources, key) ? resources[key] : undefined;
       if (resourceState !== null) {
-        resources.set(key, null);
+        resources[key] = null;
         let scriptProps = props;
         if (resourceState) {
           // A preload of the script lends its credentials, and is no longer written.
@@ -1179,8 +1179,8 @@ function pushStartInstance(
       }
       // A style with a precedence and href: its rules join its precedence's style tag.
       let queue = state.styles.get(precedence);
-      if (rs.styleResources.get(href) !== null) {
-        rs.styleResources.set(href, null);
+      if ((hasOwn.call(rs.styleResources, href) ? rs.styleResources[href] : undefined) !== null) {
+        rs.styleResources[href] = null;
         if (!queue) {
           queue = { precedence: escapeText(precedence), rules: [], hrefs: [], sheets: new Map() };
           state.styles.set(precedence, queue);
@@ -1267,8 +1267,8 @@ function pushStartInstance(
             promotable.delete(key);
             state.highImagePreloads.add(resource);
           }
-        } else if (!rs.imageResources.has(key)) {
-          rs.imageResources.add(key);
+        } else if (!hasOwn.call(rs.imageResources, key)) {
+          rs.imageResources[key] = PRELOAD_NO_CREDS;
           const input = props["crossOrigin"];
           const crossOrigin = typeof input === "string" ? (input === "use-credentials" ? input : "") : undefined;
           // With onHeaders, a Link header while it has room, for a high-priority image or while
@@ -1293,6 +1293,7 @@ function pushStartInstance(
               }),
             )
           ) {
+            state.resets.image[key] = PRELOAD_NO_CREDS;
             headers.highImagePreloads = appendHeader(headers.highImagePreloads, lastHeader);
             return pushSelfClosing(target, props, "img", ctx);
           }
@@ -1449,23 +1450,37 @@ interface PreambleState {
 
 const createPreambleState = (): PreambleState => ({ htmlChunks: null, headChunks: null, bodyChunks: null });
 
-/** What the render has written once and must not again (React's resumable state). */
+/** A bootstrap script option: its URL, or its URL and credentials. */
+type BootstrapScript = string | { src: string; integrity?: string; crossOrigin?: string };
+
+/** Resources by key: React's plain objects, so that a prerender's postponed state is React's JSON. */
+type Resources<T> = Record<string, T>;
+
+/**
+ * What the render has written once and must not again (React's resumable state). It is plain
+ * data, as React's is: a prerender's postponed state carries it, as JSON, to the resume.
+ */
 interface ResumableState {
   idPrefix: string;
   nextFormID: number;
+  streamingFormat: number;
+  /** The bootstrap options: the stream writes them after the shell (a resume, if the shell was not). */
+  bootstrapScriptContent: string | undefined;
+  bootstrapScripts: BootstrapScript[] | undefined;
+  bootstrapModules: BootstrapScript[] | undefined;
   /** Instruction scripts already written, as bits. */
   instructions: number;
   hasBody: boolean;
   hasHtml: boolean;
   /** The resources hinted or written, by key (for preloads of other types, by type, then URL). */
-  unknownResources: Map<string, Set<string>>;
-  dnsResources: Set<string>;
-  connectResources: { default: Set<string>; anonymous: Set<string>; credentials: Set<string> };
-  imageResources: Set<string>;
-  styleResources: Map<string, ResourceState>;
-  scriptResources: Map<string, ResourceState>;
-  moduleUnknownResources: Map<string, Set<string>>;
-  moduleScriptResources: Map<string, ResourceState>;
+  unknownResources: Resources<Resources<ResourceState>>;
+  dnsResources: Resources<null>;
+  connectResources: { default: Resources<null>; anonymous: Resources<null>; credentials: Resources<null> };
+  imageResources: Resources<ResourceState>;
+  styleResources: Resources<ResourceState>;
+  scriptResources: Resources<ResourceState>;
+  moduleUnknownResources: Resources<Resources<ResourceState>>;
+  moduleScriptResources: Resources<ResourceState>;
 }
 
 /**
@@ -1475,21 +1490,26 @@ interface ResumableState {
 type ResourceState = string[] | null;
 const PRELOAD_NO_CREDS: string[] = [];
 
-function createResumableState(identifierPrefix: string | undefined): ResumableState {
+function createResumableState(options: StreamOptions | undefined): ResumableState {
+  const identifierPrefix = options?.identifierPrefix;
   return {
     idPrefix: identifierPrefix === undefined ? "" : identifierPrefix,
     nextFormID: 0,
+    streamingFormat: 0,
+    bootstrapScriptContent: options?.bootstrapScriptContent,
+    bootstrapScripts: options?.bootstrapScripts,
+    bootstrapModules: options?.bootstrapModules,
     instructions: 0,
     hasBody: false,
     hasHtml: false,
-    unknownResources: new Map(),
-    dnsResources: new Set(),
-    connectResources: { default: new Set(), anonymous: new Set(), credentials: new Set() },
-    imageResources: new Set(),
-    styleResources: new Map(),
-    scriptResources: new Map(),
-    moduleUnknownResources: new Map(),
-    moduleScriptResources: new Map(),
+    unknownResources: {},
+    dnsResources: {},
+    connectResources: { default: {}, anonymous: {}, credentials: {} },
+    imageResources: {},
+    styleResources: {},
+    scriptResources: {},
+    moduleUnknownResources: {},
+    moduleScriptResources: {},
   };
 }
 
@@ -1526,6 +1546,17 @@ interface RenderState {
   nonce: { script: string | undefined; style: string | undefined };
   /** onHeaders' Link header as it fills, until it is given (then null); null without onHeaders. */
   headers: HeadersState | null;
+  /**
+   * The hints the Link header took: what a prerender whose shell could not be written keeps in its
+   * postponed state, so that the resume, which renders the shell again, does not write them twice.
+   */
+  resets: {
+    font: Resources<ResourceState>;
+    dns: Resources<null>;
+    connect: { default: Resources<null>; anonymous: Resources<null>; credentials: Resources<null> };
+    image: Resources<ResourceState>;
+    style: Resources<ResourceState>;
+  };
   onHeaders: ((headers: Record<string, string>) => void) | undefined;
   stylesToHoist: boolean;
   /** "<!DOCTYPE html>" for streams; renderToString writes none. */
@@ -1542,7 +1573,6 @@ interface HeadersState {
   remainingCapacity: number;
 }
 
-/** Options of the stream entries that shape the HTML. */
 /** The options both stream entries take. */
 export interface StreamOptions {
   identifierPrefix?: string;
@@ -1606,7 +1636,7 @@ function createRenderState(
   const startInlineStyle = nonceStyle === undefined ? "<style" : '<style nonce="' + escapeText(nonceStyle) + '"';
   const idPrefix = rs.idPrefix;
   const bootstrapChunks: string[] = [];
-  const content = options?.bootstrapScriptContent;
+  const content = rs.bootstrapScriptContent;
   if (content !== undefined) {
     bootstrapChunks.push(startInlineScript);
     pushCompletedShellIdAttribute(bootstrapChunks, rs);
@@ -1652,6 +1682,7 @@ function createRenderState(
           remainingCapacity: 2 + (typeof maxHeadersLength === "number" ? maxHeadersLength : 2000),
         }
       : null,
+    resets: { font: {}, dns: {}, connect: { default: {}, anonymous: {}, credentials: {} }, image: {}, style: {} },
     onHeaders,
     stylesToHoist: false,
     doctype: legacy ? "" : "<!DOCTYPE html>",
@@ -1672,8 +1703,8 @@ function createRenderState(
         props["crossOrigin"] = crossOrigin =
           config.crossOrigin == null ? undefined : config.crossOrigin === "use-credentials" ? "use-credentials" : "";
       }
-      rs.scriptResources.set(src, null);
-      rs.moduleScriptResources.set(src, null);
+      rs.scriptResources[src] = null;
+      rs.moduleScriptResources[src] = null;
       const link: string[] = [];
       pushLinkImpl(link, props);
       state.bootstrapScripts.add(link);
@@ -1685,8 +1716,8 @@ function createRenderState(
       bootstrapChunks.push(' async="">', "</script>");
     }
   };
-  bootstrap(options?.bootstrapScripts, false);
-  bootstrap(options?.bootstrapModules, true);
+  bootstrap(rs.bootstrapScripts, false);
+  bootstrap(rs.bootstrapModules, true);
   return state;
 }
 
@@ -1767,11 +1798,13 @@ function adoptPreload(sheet: Stylesheet, state: string[], preload: string[] | un
 }
 
 /** A preload of another type: once per type and URL. Whether it was new. */
-function addUnknown(resources: Map<string, Set<string>>, as: string, href: string): boolean {
-  let hrefs = resources.get(as);
-  if (hrefs === undefined) resources.set(as, (hrefs = new Set()));
-  else if (hrefs.has(href)) return false;
-  hrefs.add(href);
+function addUnknown(resources: Resources<Resources<ResourceState>>, as: string, href: string): boolean {
+  let hrefs: Resources<ResourceState>;
+  if (hasOwn.call(resources, as)) {
+    hrefs = resources[as]!;
+    if (hasOwn.call(hrefs, href)) return false;
+  } else resources[as] = hrefs = {};
+  hrefs[href] = PRELOAD_NO_CREDS;
   return true;
 }
 
@@ -1785,9 +1818,9 @@ function linkOf(props: Props): string[] {
 function preinitScriptAs(src: string, options: Any, module: boolean): void {
   const request = currentRequest!;
   const resources = module ? request.resumableState.moduleScriptResources : request.resumableState.scriptResources;
-  const resourceState = resources.get(src);
+  const resourceState = hasOwn.call(resources, src) ? resources[src] : undefined;
   if (!src || resourceState === null) return;
-  resources.set(src, null);
+  resources[src] = null;
   const props: Props = module ? { src, type: "module", async: true, ...options } : { src, async: true, ...options };
   const state = request.renderState;
   if (resourceState) {
@@ -1861,6 +1894,10 @@ function safelyEmitEarlyPreloads(request: Request, shellComplete: boolean): void
             media: props["media"],
           });
           if (!fitsHeader(headers, header)) break outer;
+          state.resets.style[props["href"]] =
+            typeof props["crossOrigin"] === "string" || typeof props["integrity"] === "string"
+              ? [props["crossOrigin"], props["integrity"]]
+              : PRELOAD_NO_CREDS;
           link = appendHeader(link, header);
         }
     state.onHeaders!(link ? { Link: link } : {});
@@ -1873,28 +1910,26 @@ const serverHints = {
   "dns-prefetch"(href: string): void {
     const request = currentRequest!,
       dns = request.resumableState.dnsResources;
-    if (!href || dns.has(href)) return;
-    dns.add(href);
+    if (!href || hasOwn.call(dns, href)) return;
+    dns[href] = null;
     const headers = request.renderState.headers;
     if (
       headers &&
       headers.remainingCapacity > 0 &&
       fitsHeader(headers, "<" + escapeHrefForHeader(href) + ">; rel=dns-prefetch")
-    )
+    ) {
+      request.renderState.resets.dns[href] = null;
       headers.preconnects = appendHeader(headers.preconnects, lastHeader);
-    else request.renderState.preconnects.add(linkOf({ href, rel: "dns-prefetch" }));
+    } else request.renderState.preconnects.add(linkOf({ href, rel: "dns-prefetch" }));
   },
   preconnect(href: string, crossOrigin: string | null | undefined): void {
     const request = currentRequest!,
       connect = request.resumableState.connectResources;
-    const bucket =
-      crossOrigin === "use-credentials"
-        ? connect.credentials
-        : typeof crossOrigin === "string"
-          ? connect.anonymous
-          : connect.default;
-    if (!href || bucket.has(href)) return;
-    bucket.add(href);
+    const name =
+      crossOrigin === "use-credentials" ? "credentials" : typeof crossOrigin === "string" ? "anonymous" : "default";
+    const bucket = connect[name];
+    if (!href || hasOwn.call(bucket, href)) return;
+    bucket[href] = null;
     const headers = request.renderState.headers;
     if (
       headers &&
@@ -1906,9 +1941,10 @@ const serverHints = {
           ">; rel=preconnect" +
           (typeof crossOrigin === "string" ? '; crossorigin="' + escapeParamForHeader(crossOrigin) + '"' : ""),
       )
-    )
+    ) {
+      request.renderState.resets.connect[name][href] = null;
       headers.preconnects = appendHeader(headers.preconnects, lastHeader);
-    else request.renderState.preconnects.add(linkOf({ rel: "preconnect", href, crossOrigin }));
+    } else request.renderState.preconnects.add(linkOf({ rel: "preconnect", href, crossOrigin }));
   },
   L(href: string, as: string, options: Any): void {
     const request = currentRequest!,
@@ -1919,8 +1955,8 @@ const serverHints = {
       case "image": {
         const imageSrcSet = options.imageSrcSet;
         const key = imageSrcSet ? imageSrcSet + "\n" + (options.imageSizes || "") : href;
-        if (rs.imageResources.has(key)) return;
-        rs.imageResources.add(key);
+        if (hasOwn.call(rs.imageResources, key)) return;
+        rs.imageResources[key] = PRELOAD_NO_CREDS;
         const headers = state.headers;
         if (
           headers &&
@@ -1929,6 +1965,7 @@ const serverHints = {
           options.fetchPriority === "high" &&
           fitsHeader(headers, getPreloadAsHeader(href, as, options))
         ) {
+          state.resets.image[key] = PRELOAD_NO_CREDS;
           headers.highImagePreloads = appendHeader(headers.highImagePreloads, lastHeader);
           return;
         }
@@ -1943,9 +1980,9 @@ const serverHints = {
       case "style":
       case "script": {
         const resources = as === "style" ? rs.styleResources : rs.scriptResources;
-        if (resources.has(href)) return;
+        if (hasOwn.call(resources, href)) return;
         const link = linkOf({ rel: "preload", href, as, ...options });
-        resources.set(href, credentialsOf(options));
+        resources[href] = credentialsOf(options);
         (as === "style" ? state.preloads.stylesheets : state.preloads.scripts).set(href, link);
         state.bulkPreloads.add(link);
         return;
@@ -1958,9 +1995,10 @@ const serverHints = {
       headers.remainingCapacity > 0 &&
       as === "font" &&
       fitsHeader(headers, getPreloadAsHeader(href, as, options))
-    )
+    ) {
+      state.resets.font[href] = PRELOAD_NO_CREDS;
       headers.fontPreloads = appendHeader(headers.fontPreloads, lastHeader);
-    else
+    } else
       (as === "font" ? state.fontPreloads : state.bulkPreloads).add(linkOf({ rel: "preload", href, as, ...options }));
   },
   m(href: string, options: Any): void {
@@ -1970,8 +2008,8 @@ const serverHints = {
     if (!href) return;
     const as = options && typeof options.as === "string" ? options.as : "script";
     if (as === "script") {
-      if (rs.moduleScriptResources.has(href)) return;
-      rs.moduleScriptResources.set(href, credentialsOf(options));
+      if (hasOwn.call(rs.moduleScriptResources, href)) return;
+      rs.moduleScriptResources[href] = credentialsOf(options);
     } else if (!addUnknown(rs.moduleUnknownResources, as, href)) return;
     const link = linkOf({ rel: "modulepreload", href, ...options });
     if (as === "script") state.preloads.moduleScripts.set(href, link);
@@ -1983,9 +2021,9 @@ const serverHints = {
       state = request.renderState;
     if (!href) return;
     const prec = precedence || "default";
-    const resourceState = rs.styleResources.get(href);
+    const resourceState = hasOwn.call(rs.styleResources, href) ? rs.styleResources[href] : undefined;
     if (resourceState === null) return;
-    rs.styleResources.set(href, null);
+    rs.styleResources[href] = null;
     let queue = state.styles.get(prec);
     if (!queue) {
       queue = { precedence: escapeText(prec), rules: [], hrefs: [], sheets: new Map() };
@@ -2271,6 +2309,8 @@ const COMPLETED = 1;
 const FLUSHED = 2;
 const ABORTED = 3;
 const ERRORED = 4;
+/** A prerender's: the work left for the resume. */
+const POSTPONED = 5;
 
 /** Where flushed HTML goes, through views of bytes as React's builds write them. */
 interface Destination {
@@ -2318,6 +2358,8 @@ interface Boundary {
   contentState: HoistableState;
   fallbackState: HoistableState;
   preamble: { content: PreambleState; fallback: PreambleState } | null;
+  /** In a prerender: the content's key path and the fallback's replay node, should it postpone. */
+  tracked: { contentKeyPath: KeyPath | null; fallbackNode: ReplayNode } | null;
 }
 
 /** A row of a <SuspenseList>, which reveals its boundaries in order. */
@@ -2330,13 +2372,18 @@ interface Row {
   next: Row | null;
 }
 
-/** A unit of work: a node to render into a segment, retried when what it waits for settles. */
+/**
+ * A unit of work: a node to render into a segment, retried when what it waits for settles. A
+ * resume's replay task has no segment: it renders the prerendered tree again, writing nothing,
+ * to reach the postponed work its replay set names.
+ */
 interface Task {
+  replay: ReplaySet | null;
   node: Any;
   childIndex: number;
   ping: () => void;
   blockedBoundary: Boundary | null;
-  blockedSegment: Segment;
+  blockedSegment: Segment | null;
   blockedPreamble: PreambleState | null;
   hoistableState: HoistableState | null;
   abortSet: Set<Task>;
@@ -2354,6 +2401,40 @@ interface Task {
 
 /** A step of an element path: the parent's path, the element's type name, its key or index. */
 type KeyPath = [KeyPath | null, string | null, string | number];
+
+/** Where postponed work goes in a replay node: one segment for the node, or one per child index. */
+type ReplaySlots = number | Record<number, number> | null;
+
+/**
+ * An element of the prerendered tree on the way to postponed work, as React's postponed state
+ * holds it: its name, key or index, the nodes under it and its slots; a Suspense boundary's node
+ * adds its fallback's node and its segment id.
+ */
+type ReplayNode = [string | null, string | number, ReplayNode[], ReplaySlots, (ReplayNode | null)?, number?];
+
+/** The replay nodes and slots a replay task renders toward, and the tasks still replaying them. */
+interface ReplaySet {
+  nodes: ReplayNode[];
+  slots: ReplaySlots;
+  pendingTasks: number;
+}
+
+/** A prerender's record of its postponed work, by key path, as replay nodes from the root. */
+interface TrackedPostpones {
+  workingMap: Map<KeyPath, ReplayNode>;
+  rootNodes: ReplayNode[];
+  rootSlots: ReplaySlots;
+}
+
+/** What a prerender leaves for the resume: React's postponed state, the same JSON. */
+export interface PostponedState {
+  nextSegmentId: number;
+  rootFormatContext: FormatContext;
+  progressiveChunkSize: number;
+  resumableState: ResumableState;
+  replayNodes: ReplayNode[];
+  replaySlots: ReplaySlots;
+}
 
 interface Request {
   /** renderToString and renderToStaticMarkup: legacy's flush rules and no doctype. */
@@ -2392,6 +2473,12 @@ interface Request {
   formState: ReactFormState | null;
   /** The hash of useActionState keys: MD5 for renderToPipeableStream, else MurmurHash3. */
   hash: (key: string) => string | number;
+  /** The root's format context, which a prerender's postponed state carries to the resume. */
+  rootFormatContext: FormatContext;
+  /** A prerender's record of the work it postponed; null outside a prerender. */
+  trackedPostpones: TrackedPostpones | null;
+  /** The postponed state a prerender with a written shell gave: its prelude's flushes number segments. */
+  postponedState: PostponedState | null;
 }
 
 /** React's default onError: logs the error, gives no digest. */
@@ -2411,23 +2498,66 @@ interface RequestOptions {
   onFatalError?: ((error: unknown) => void) | undefined;
   onHeaders?: ((headers: Record<string, string>) => void) | undefined;
   scheduleWork: (fn: () => void) => void;
-  /** renderToPipeableStream: React's Node build, whose form keys are MD5 hashes. */
+  /** The Node build's entries, whose form keys are MD5 hashes. */
   md5?: boolean;
+  /** prerender and resumeAndPrerender: record the work left for a resume. */
+  prerender?: boolean;
 }
 
 function createRequest(children: Any, o: RequestOptions): Request {
   __serverHints(hintDispatcher);
-  const rs = createResumableState(o.options?.identifierPrefix);
+  const rs = createResumableState(o.options);
   const rootContext = o.legacy
     ? formatContext(ROOT_HTML_MODE, null, 0, null)
     : createRootFormatContext(o.options?.namespaceURI);
-  const request: Request = {
+  const request = newRequest(o, rs, rootContext, o.progressiveChunkSize);
+  pushRootTask(request, children, rootContext);
+  return request;
+}
+
+/** A resume's request: from the postponed state, a replay of the tree down to the postponed work. */
+function resumeRequest(children: Any, postponed: PostponedState, o: RequestOptions): Request {
+  __serverHints(hintDispatcher);
+  const rootContext = postponed.rootFormatContext;
+  const request = newRequest(o, postponed.resumableState, rootContext, postponed.progressiveChunkSize);
+  request.nextSegmentId = postponed.nextSegmentId;
+  // A prerender whose shell could not be written leaves it all to the resume.
+  if (typeof postponed.replaySlots === "number") pushRootTask(request, children, rootContext);
+  else {
+    const task = createReplayTask(
+      request,
+      { nodes: postponed.replayNodes, slots: postponed.replaySlots, pendingTasks: 0 },
+      children,
+      -1,
+      null,
+      null,
+      request.abortableTasks,
+      null,
+      rootContext,
+      null,
+      emptyTreeContext,
+      null,
+      null,
+    );
+    pushComponentStack(task);
+    request.pingedTasks.push(task);
+  }
+  return request;
+}
+
+function newRequest(
+  o: RequestOptions,
+  rs: ResumableState,
+  rootContext: FormatContext,
+  progressiveChunkSize: number | undefined,
+): Request {
+  return {
     legacy: o.legacy,
     destination: null,
     flushScheduled: false,
     resumableState: rs,
     renderState: createRenderState(rs, o.legacy ? undefined : o.options, o.legacy, o.generateStaticMarkup, o.onHeaders),
-    progressiveChunkSize: o.progressiveChunkSize === undefined ? 12800 : o.progressiveChunkSize,
+    progressiveChunkSize: progressiveChunkSize === undefined ? 12800 : progressiveChunkSize,
     status: OPENING,
     fatalError: null,
     aborted: false,
@@ -2453,7 +2583,14 @@ function createRequest(children: Any, o: RequestOptions): Request {
     scheduleWork: o.scheduleWork,
     formState: o.legacy ? null : (o.options?.formState ?? null),
     hash: o.md5 ? md5 : murmurhash3,
+    rootFormatContext: rootContext,
+    trackedPostpones: o.prerender ? { workingMap: new Map(), rootNodes: [], rootSlots: null } : null,
+    postponedState: null,
   };
+}
+
+/** The root task: the whole tree, into the root segment. */
+function pushRootTask(request: Request, children: Any, rootContext: FormatContext): void {
   const root = createPendingSegment(request, 0, null, rootContext, false, false);
   root.parentFlushed = true;
   const task = createRenderTask(
@@ -2474,14 +2611,14 @@ function createRequest(children: Any, o: RequestOptions): Request {
   );
   pushComponentStack(task);
   request.pingedTasks.push(task);
-  return request;
 }
 
 function pingTask(request: Request, task: Task): void {
   request.pingedTasks.push(task);
   if (request.pingedTasks.length === 1) {
     request.flushScheduled = request.destination !== null;
-    if (request.status === OPENING) queueMicrotask(() => performWork(request));
+    // A prerender renders all it can before its abort: settled work goes on in a microtask.
+    if (request.trackedPostpones !== null || request.status === OPENING) queueMicrotask(() => performWork(request));
     else request.scheduleWork(() => performWork(request));
   }
 }
@@ -2506,6 +2643,7 @@ function createSuspenseBoundary(
     contentState: createHoistableState(),
     fallbackState: createHoistableState(),
     preamble,
+    tracked: null,
   };
   if (row !== null) {
     row.pendingTasks++;
@@ -2541,12 +2679,56 @@ function createRenderTask(
   else blockedBoundary.pendingTasks++;
   if (row !== null) row.pendingTasks++;
   const task: Task = {
+    replay: null,
     node,
     childIndex,
     ping: () => pingTask(request, task),
     blockedBoundary,
     blockedSegment,
     blockedPreamble,
+    hoistableState,
+    abortSet,
+    formatContext,
+    context,
+    treeContext,
+    row,
+    componentStack,
+    thenableState: null,
+    keyPath,
+  };
+  abortSet.add(task);
+  return task;
+}
+
+/** A resume's task that replays the prerendered tree toward the postponed work in `replay`. */
+function createReplayTask(
+  request: Request,
+  replay: ReplaySet,
+  node: Any,
+  childIndex: number,
+  blockedBoundary: Boundary | null,
+  hoistableState: HoistableState | null,
+  abortSet: Set<Task>,
+  keyPath: KeyPath | null,
+  formatContext: FormatContext,
+  context: ContextNode | null,
+  treeContext: TreeContext,
+  row: Row | null,
+  componentStack: StackNode | null,
+): Task {
+  request.allPendingTasks++;
+  if (blockedBoundary === null) request.pendingRootTasks++;
+  else blockedBoundary.pendingTasks++;
+  if (row !== null) row.pendingTasks++;
+  replay.pendingTasks++;
+  const task: Task = {
+    replay,
+    node,
+    childIndex,
+    ping: () => pingTask(request, task),
+    blockedBoundary,
+    blockedSegment: null,
+    blockedPreamble: null,
     hoistableState,
     abortSet,
     formatContext,
@@ -3066,9 +3248,10 @@ function finishFunctionComponent(
   matchingIndex: number,
 ): void {
   let markers = false;
+  // A resume has no formState, so a replay task, with no segment, never writes the markers.
   if (actionStateCount !== 0 && request.formState !== null) {
     markers = true;
-    const chunks = task.blockedSegment.chunks;
+    const chunks = task.blockedSegment!.chunks;
     for (let i = 0; i < actionStateCount; i++) chunks.push(i === matchingIndex ? "<!--F!-->" : "<!--F-->");
   }
   const prevKeyPath = task.keyPath;
@@ -3188,6 +3371,12 @@ function renderElement(request: Request, task: Task, keyPath: KeyPath, type: Any
     case ACTIVITY_TYPE: {
       if (props["mode"] === "hidden") return;
       const segment = task.blockedSegment;
+      if (segment === null) {
+        task.keyPath = keyPath;
+        renderNode(request, task, props["children"], -1);
+        task.keyPath = prevKeyPath;
+        return;
+      }
       const marks = !request.renderState.generateStaticMarkup;
       if (marks) segment.chunks.push("<!--&-->");
       segment.lastPushedText = false;
@@ -3276,6 +3465,17 @@ function renderElement(request: Request, task: Task, keyPath: KeyPath, type: Any
 /** A host element: its start tag, children and end tag; <head>'s children go to the preamble. */
 function renderHostElement(request: Request, task: Task, keyPath: KeyPath, type: string, props: Props): void {
   const segment = task.blockedSegment;
+  if (segment === null) {
+    // Replaying: only the children, toward the postponed work.
+    const prevContext = task.formatContext,
+      prevKeyPath = task.keyPath;
+    task.formatContext = getChildFormatContext(prevContext, type, props);
+    task.keyPath = keyPath;
+    renderNode(request, task, props["children"], -1);
+    task.formatContext = prevContext;
+    task.keyPath = prevKeyPath;
+    return;
+  }
   const children = pushStartInstance(
     segment.chunks,
     type,
@@ -3419,16 +3619,32 @@ function renderViewTransition(request: Request, task: Task, props: Props): void 
 /**
  * A Suspense boundary: its content renders first, into a segment of its own; if that completes,
  * the fallback never renders. Otherwise the fallback renders in a task of its own and the content
- * finishes when what it waits for settles (or, for renderToString, renders on the client).
+ * finishes when what it waits for settles (or, for renderToString, renders on the client). A
+ * prerender writes the fallback first and renders the content in a task of its own, so that the
+ * content an abort postpones leaves the fallback in the prelude.
  */
 function renderSuspenseBoundary(request: Request, task: Task, keyPath: KeyPath, props: Props): void {
   const prevKeyPath = task.keyPath,
     prevContext = task.formatContext,
-    prevRow = task.row,
-    parentBoundary = task.blockedBoundary,
+    prevRow = task.row;
+  if (task.replay !== null) {
+    // A boundary of the prerendered tree that is not postponed itself: its content, replayed.
+    task.keyPath = keyPath;
+    task.formatContext = getSuspenseContentFormatContext(request.resumableState, prevContext);
+    task.row = null;
+    try {
+      renderNode(request, task, props["children"], -1);
+    } finally {
+      task.keyPath = prevKeyPath;
+      task.formatContext = prevContext;
+      task.row = prevRow;
+    }
+    return;
+  }
+  const parentBoundary = task.blockedBoundary,
     parentPreamble = task.blockedPreamble,
     parentHoistableState = task.hoistableState,
-    parentSegment = task.blockedSegment,
+    parentSegment = task.blockedSegment!,
     fallback = props["fallback"],
     content = props["children"],
     fallbackAbortSet = new Set<Task>();
@@ -3452,6 +3668,53 @@ function renderSuspenseBoundary(request: Request, task: Task, keyPath: KeyPath, 
   parentSegment.lastPushedText = false;
   const contentRootSegment = createPendingSegment(request, 0, null, task.formatContext, false, false);
   contentRootSegment.parentFlushed = true;
+  const tracked = request.trackedPostpones;
+  if (tracked !== null) {
+    const componentStack = task.componentStack,
+      fallbackKeyPath: KeyPath = [keyPath[0], "Suspense Fallback", keyPath[2]],
+      fallbackNode: ReplayNode = [fallbackKeyPath[1], fallbackKeyPath[2], [], null];
+    tracked.workingMap.set(fallbackKeyPath, fallbackNode);
+    boundary.tracked = { contentKeyPath: keyPath, fallbackNode };
+    task.blockedSegment = boundarySegment;
+    task.blockedPreamble = boundary.preamble === null ? null : boundary.preamble.fallback;
+    task.keyPath = fallbackKeyPath;
+    task.formatContext = getSuspenseFallbackFormatContext(request.resumableState, prevContext);
+    // As in React, an error keeps the fallback's stack (renderNodeDestructive restores it otherwise).
+    task.componentStack = fallbackStack(componentStack);
+    try {
+      renderNode(request, task, fallback, -1);
+      segmentFinale(request, boundarySegment);
+      boundarySegment.status = COMPLETED;
+      finishedSegment(request, parentBoundary, boundarySegment);
+    } catch (thrown) {
+      boundarySegment.status = request.aborted ? ABORTED : ERRORED;
+      throw thrown;
+    } finally {
+      task.blockedSegment = parentSegment;
+      task.blockedPreamble = parentPreamble;
+      task.keyPath = prevKeyPath;
+      task.formatContext = prevContext;
+    }
+    const contentTask = createRenderTask(
+      request,
+      content,
+      -1,
+      boundary,
+      contentRootSegment,
+      boundary.preamble === null ? null : boundary.preamble.content,
+      boundary.contentState,
+      task.abortSet,
+      keyPath,
+      getSuspenseContentFormatContext(request.resumableState, task.formatContext),
+      task.context,
+      task.treeContext,
+      null,
+      componentStack,
+    );
+    pushComponentStack(contentTask);
+    request.pingedTasks.push(contentTask);
+    return;
+  }
   task.blockedBoundary = boundary;
   task.blockedPreamble = boundary.preamble === null ? null : boundary.preamble.content;
   task.hoistableState = boundary.contentState;
@@ -3561,7 +3824,21 @@ function renderSuspenseListRows(request: Request, task: Task, keyPath: KeyPath, 
   task.keyPath = keyPath;
   const total = rows.length;
   let previous: Row | null = null;
-  if (revealOrder !== "backwards" && revealOrder !== "unstable_legacy-backwards") {
+  if (task.replay !== null) {
+    // Replaying: rows in reveal order, a row the prerender postponed resumed into its segment.
+    const slots = task.replay.slots;
+    for (let n = 0; n < total; n++) {
+      const i = revealOrder !== "backwards" && revealOrder !== "unstable_legacy-backwards" ? n : total - 1 - n;
+      task.row = previous = createSuspenseListRow(previous);
+      task.treeContext = pushTreeContext(prevTreeContext, total, i);
+      const slot = slots !== null && typeof slots === "object" ? slots[i] : undefined;
+      if (typeof slot === "number") {
+        resumeNode(request, task, slot, rows[i], i);
+        delete (slots as Record<number, number>)[i];
+      } else renderNode(request, task, rows[i], i);
+      if (--previous.pendingTasks === 0) finishSuspenseListRow(request, previous);
+    }
+  } else if (revealOrder !== "backwards" && revealOrder !== "unstable_legacy-backwards") {
     for (let i = 0; i < total; i++) {
       task.row = previous = createSuspenseListRow(previous);
       task.treeContext = pushTreeContext(prevTreeContext, total, i);
@@ -3570,7 +3847,7 @@ function renderSuspenseListRows(request: Request, task: Task, keyPath: KeyPath, 
     }
   } else {
     // Backwards: rows render last to first, each into a segment placed in document order.
-    const parentSegment = task.blockedSegment;
+    const parentSegment = task.blockedSegment!;
     const childIndex = parentSegment.children.length,
       chunkIndex = parentSegment.chunks.length;
     for (let n = 0; n < total; n++) {
@@ -3716,6 +3993,11 @@ function getIteratorFn(o: Any): Any {
 
 /** Render a node in place: an element, text, an array, an iterable, a promise or a context. */
 function renderNodeDestructive(request: Request, task: Task, node: Any, childIndex: number): void {
+  const replay = task.replay;
+  if (replay !== null && typeof replay.slots === "number") {
+    resumeNode(request, task, replay.slots, node, childIndex);
+    return;
+  }
   task.node = node;
   task.childIndex = childIndex;
   // An error leaves the stack where it was thrown, for the boundary or task that catches it.
@@ -3736,12 +4018,11 @@ function retryNode(request: Request, task: Task): void {
           key = node.key,
           props = node.props;
         const ref = props.ref;
-        const keyPath: KeyPath = [
-          task.keyPath,
-          getComponentNameFromType(type),
-          key == null ? (childIndex === -1 ? 0 : childIndex) : key,
-        ];
-        renderElement(request, task, keyPath, type, props, ref !== undefined ? ref : null);
+        const name = getComponentNameFromType(type),
+          keyOrIndex = key == null ? (childIndex === -1 ? 0 : childIndex) : key;
+        const keyPath: KeyPath = [task.keyPath, name, keyOrIndex];
+        if (task.replay !== null) replayElement(request, task, keyPath, name, keyOrIndex, type, props, ref);
+        else renderElement(request, task, keyPath, type, props, ref !== undefined ? ref : null);
         return;
       }
       case PORTAL_TYPE:
@@ -3789,12 +4070,184 @@ function retryNode(request: Request, task: Task): void {
         "). If you meant to render a collection of children, use an array instead.",
     );
   }
-  if (typeof node === "string") {
-    const segment = task.blockedSegment;
+  // Text is written unless replaying (no segment).
+  const segment = task.blockedSegment;
+  if (segment === null) return;
+  if (typeof node === "string")
     segment.lastPushedText = pushTextInstance(segment.chunks, node, request.renderState, segment.lastPushedText);
-  } else if (typeof node === "number" || typeof node === "bigint") {
-    const segment = task.blockedSegment;
+  else if (typeof node === "number" || typeof node === "bigint")
     segment.lastPushedText = pushTextInstance(segment.chunks, "" + node, request.renderState, segment.lastPushedText);
+}
+
+const MISMATCH = " The tree doesn't match so React will fallback to client rendering.";
+const NOT_ALL_SLOTS = "Couldn't find all resumable slots by key/index during replaying." + MISMATCH;
+
+/** Whether a replay set has nodes left that its one task did not reach: the trees differ. */
+function checkReplayed(replay: ReplaySet): void {
+  if (replay.pendingTasks === 1 && replay.nodes.length > 0) throw new Error(NOT_ALL_SLOTS);
+  replay.pendingTasks--;
+}
+
+/** Whether a thrown value suspends (a promise) or overflowed the stack: a task retries it. */
+const isSuspension = (x: Any): boolean =>
+  typeof x === "object" && x !== null && (typeof x.then === "function" || x.message === STACK_OVERFLOW);
+
+/**
+ * An element of the prerendered tree, replayed toward the postponed work: the replay node of its
+ * key or index leads on (a Suspense boundary's node, to its postponed content and fallback). An
+ * element with no node there has no postponed work under it, and renders nothing.
+ */
+function replayElement(
+  request: Request,
+  task: Task,
+  keyPath: KeyPath,
+  name: string | null,
+  keyOrIndex: string | number,
+  type: Any,
+  props: Props,
+  ref: Any,
+): void {
+  const replay = task.replay!,
+    nodes = replay.nodes;
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i]!;
+    if (keyOrIndex !== node[1]) continue;
+    if (node.length === 4) {
+      if (name !== null && name !== node[0])
+        throw new Error(
+          "Expected the resume to render <" +
+            node[0] +
+            "> in this slot but instead it rendered <" +
+            name +
+            ">." +
+            MISMATCH,
+        );
+      const childNodes = node[2],
+        childSlots = node[3],
+        currentNode = task.node;
+      task.replay = { nodes: childNodes, slots: childSlots, pendingTasks: 1 };
+      try {
+        renderElement(request, task, keyPath, type, props, ref !== undefined ? ref : null);
+        checkReplayed(task.replay);
+      } catch (x) {
+        if (isSuspension(x)) {
+          if (task.node === currentNode) task.replay = replay;
+          else nodes.splice(i, 1);
+          throw x;
+        }
+        task.replay.pendingTasks--;
+        const error = request.aborted ? request.fatalError : x;
+        const digest = logRecoverableError(request, error, getThrownInfo(task.componentStack));
+        abortRemainingReplayNodes(request, task.blockedBoundary, childNodes, childSlots, digest);
+      }
+      task.replay = replay;
+    } else {
+      if (type !== SUSPENSE_TYPE)
+        throw new Error(
+          "Expected the resume to render <Suspense> in this slot but instead it rendered <" +
+            (getComponentNameFromType(type) || "Unknown") +
+            ">." +
+            MISMATCH,
+        );
+      replaySuspenseBoundary(request, task, keyPath, props, node);
+    }
+    nodes.splice(i, 1);
+    return;
+  }
+}
+
+/** A Suspense boundary the prerender postponed: its content resumes, its fallback replays. */
+function replaySuspenseBoundary(request: Request, task: Task, keyPath: KeyPath, props: Props, node: ReplayNode): void {
+  const fallbackNode = node[4],
+    prevKeyPath = task.keyPath,
+    prevContext = task.formatContext,
+    prevRow = task.row,
+    prevReplay = task.replay,
+    parentBoundary = task.blockedBoundary,
+    parentHoistableState = task.hoistableState,
+    fallbackAbortSet = new Set<Task>();
+  const boundary = createSuspenseBoundary(
+    request,
+    task.row,
+    fallbackAbortSet,
+    task.formatContext.insertionMode < HTML_MODE
+      ? { content: createPreambleState(), fallback: createPreambleState() }
+      : null,
+  );
+  boundary.parentFlushed = true;
+  boundary.rootSegmentID = node[5]!;
+  task.blockedBoundary = boundary;
+  task.hoistableState = boundary.contentState;
+  task.keyPath = keyPath;
+  task.formatContext = getSuspenseContentFormatContext(request.resumableState, prevContext);
+  task.row = null;
+  task.replay = { nodes: node[2], slots: node[3], pendingTasks: 1 };
+  try {
+    renderNode(request, task, props["children"], -1);
+    checkReplayed(task.replay);
+    if (boundary.pendingTasks === 0 && boundary.status === PENDING) {
+      boundary.status = COMPLETED;
+      request.completedBoundaries.push(boundary);
+      return;
+    }
+  } catch (thrown) {
+    boundary.status = ERRORED;
+    const error = request.aborted ? request.fatalError : thrown;
+    boundary.errorDigest = logRecoverableError(request, error, getThrownInfo(task.componentStack));
+    task.replay.pendingTasks--;
+    request.clientRenderedBoundaries.push(boundary);
+  } finally {
+    task.blockedBoundary = parentBoundary;
+    task.hoistableState = parentHoistableState;
+    task.replay = prevReplay;
+    task.keyPath = prevKeyPath;
+    task.formatContext = prevContext;
+    task.row = prevRow;
+  }
+  const fallbackTask = createReplayTask(
+    request,
+    {
+      nodes: fallbackNode == null ? [] : fallbackNode[2],
+      slots: fallbackNode == null ? null : fallbackNode[3],
+      pendingTasks: 0,
+    },
+    props["fallback"],
+    -1,
+    parentBoundary,
+    boundary.fallbackState,
+    fallbackAbortSet,
+    [keyPath[0], "Suspense Fallback", keyPath[2]],
+    getSuspenseFallbackFormatContext(request.resumableState, task.formatContext),
+    task.context,
+    task.treeContext,
+    task.row,
+    fallbackStack(task.componentStack),
+  );
+  pushComponentStack(fallbackTask);
+  request.pingedTasks.push(fallbackTask);
+}
+
+/** Postponed work, rendered into the segment whose placeholder the prelude wrote. */
+function resumeNode(request: Request, task: Task, segmentId: number, node: Any, childIndex: number): void {
+  const prevReplay = task.replay,
+    blockedBoundary = task.blockedBoundary;
+  const resumed = createPendingSegment(request, 0, null, task.formatContext, false, false);
+  resumed.id = segmentId;
+  resumed.parentFlushed = true;
+  try {
+    task.replay = null;
+    task.blockedSegment = resumed;
+    renderNode(request, task, node, childIndex);
+    resumed.status = COMPLETED;
+    finishedSegment(request, blockedBoundary, resumed);
+    if (blockedBoundary === null) request.completedRootSegment = resumed;
+    else {
+      queueCompletedSegment(blockedBoundary, resumed);
+      if (blockedBoundary.parentFlushed) request.partialBoundaries.push(blockedBoundary);
+    }
+  } finally {
+    task.replay = prevReplay;
+    task.blockedSegment = null;
   }
 }
 
@@ -3849,19 +4302,85 @@ function readThenable(t: Any): Any {
 function renderChildrenArray(request: Request, task: Task, children: Any[], childIndex: number): void {
   const prevKeyPath = task.keyPath,
     prevTreeContext = task.treeContext;
-  if (childIndex !== -1) task.keyPath = [prevKeyPath, "Fragment", childIndex];
-  const total = children.length;
-  for (let i = 0; i < total; i++) {
-    task.treeContext = pushTreeContext(prevTreeContext, total, i);
-    renderNode(request, task, children[i], i);
+  if (childIndex !== -1) {
+    task.keyPath = [prevKeyPath, "Fragment", childIndex];
+    if (task.replay !== null) {
+      replayFragment(request, task, children, childIndex);
+      task.keyPath = prevKeyPath;
+      return;
+    }
   }
+  const total = children.length;
+  const slots = task.replay === null ? null : task.replay.slots;
+  if (slots !== null && typeof slots === "object") {
+    // Replaying, with postponed children: each resumes into its segment.
+    for (let i = 0; i < total; i++) {
+      task.treeContext = pushTreeContext(prevTreeContext, total, i);
+      const slot = slots[i];
+      if (typeof slot === "number") {
+        resumeNode(request, task, slot, children[i], i);
+        delete slots[i];
+      } else renderNode(request, task, children[i], i);
+    }
+  } else
+    for (let i = 0; i < total; i++) {
+      task.treeContext = pushTreeContext(prevTreeContext, total, i);
+      renderNode(request, task, children[i], i);
+    }
   task.treeContext = prevTreeContext;
   task.keyPath = prevKeyPath;
 }
 
+/** A nested array of the prerendered tree, replayed through the replay node of its index. */
+function replayFragment(request: Request, task: Task, children: Any[], childIndex: number): void {
+  const replay = task.replay!,
+    nodes = replay.nodes;
+  for (let j = 0; j < nodes.length; j++) {
+    const node = nodes[j]!;
+    if (node[1] !== childIndex) continue;
+    const childNodes = node[2],
+      childSlots = node[3];
+    task.replay = { nodes: childNodes, slots: childSlots, pendingTasks: 1 };
+    try {
+      renderChildrenArray(request, task, children, -1);
+      checkReplayed(task.replay);
+    } catch (x: Any) {
+      if (typeof x === "object" && x !== null && typeof x.then === "function") throw x;
+      task.replay.pendingTasks--;
+      const error = request.aborted ? request.fatalError : x;
+      const digest = logRecoverableError(request, error, getThrownInfo(task.componentStack));
+      abortRemainingReplayNodes(request, task.blockedBoundary, childNodes, childSlots, digest);
+    }
+    task.replay = replay;
+    nodes.splice(j, 1);
+    return;
+  }
+}
+
+/** A replay task for a node that suspended while replaying: it replays the node again later. */
+function spawnNewSuspendedReplayTask(request: Request, task: Task, thenableState: Any[] | null): Task {
+  const newTask = createReplayTask(
+    request,
+    task.replay!,
+    task.node,
+    task.childIndex,
+    task.blockedBoundary,
+    task.hoistableState,
+    task.abortSet,
+    task.keyPath,
+    task.formatContext,
+    task.context,
+    task.treeContext,
+    task.row,
+    task.componentStack,
+  );
+  newTask.thenableState = thenableState;
+  return newTask;
+}
+
 /** A task for a node that suspended: a segment of its own where the node was, rendered later. */
 function spawnNewSuspendedRenderTask(request: Request, task: Task, thenableState: Any[] | null): Task {
-  const segment = task.blockedSegment;
+  const segment = task.blockedSegment!;
   const newSegment = createPendingSegment(
     request,
     segment.chunks.length,
@@ -3904,37 +4423,39 @@ function renderNode(request: Request, task: Task, node: Any, childIndex: number)
     prevKeyPath = task.keyPath,
     prevTree = task.treeContext,
     prevStack = task.componentStack,
+    prevReplay = task.replay,
     segment = task.blockedSegment;
-  const childrenLength = segment.children.length,
-    chunkLength = segment.chunks.length;
+  // A replay task has no segment: nothing written to undo.
+  const childrenLength = segment === null ? 0 : segment.children.length,
+    chunkLength = segment === null ? 0 : segment.chunks.length;
   let x: Any;
   try {
     renderNodeDestructive(request, task, node, childIndex);
     return;
   } catch (thrown) {
-    segment.children.length = childrenLength;
-    segment.chunks.length = chunkLength;
+    if (segment !== null) {
+      segment.children.length = childrenLength;
+      segment.chunks.length = chunkLength;
+    }
     x = thrown;
     if (!request.aborted && typeof x === "object" && x !== null) {
-      if (typeof x.then === "function") {
-        const newTask = spawnNewSuspendedRenderTask(request, task, thenableStateAfterSuspending(x));
-        x.then(newTask.ping, newTask.ping);
+      const suspended = typeof x.then === "function";
+      // A promise: a task renders the node when it settles. A deep tree: the rest renders in a
+      // task of its own, from a fresh stack.
+      if (suspended || x.message === STACK_OVERFLOW) {
+        const state = suspended ? thenableStateAfterSuspending(x) : null;
+        const newTask =
+          segment === null
+            ? spawnNewSuspendedReplayTask(request, task, state)
+            : spawnNewSuspendedRenderTask(request, task, state);
+        if (suspended) x.then(newTask.ping, newTask.ping);
+        else request.pingedTasks.push(newTask);
         task.formatContext = prevFormat;
         task.context = prevContext;
         task.keyPath = prevKeyPath;
         task.treeContext = prevTree;
         task.componentStack = prevStack;
-        switchContext(prevContext);
-        return;
-      }
-      if (x.message === STACK_OVERFLOW) {
-        // A deep tree: the rest renders in a task of its own, from a fresh stack.
-        request.pingedTasks.push(spawnNewSuspendedRenderTask(request, task, null));
-        task.formatContext = prevFormat;
-        task.context = prevContext;
-        task.keyPath = prevKeyPath;
-        task.treeContext = prevTree;
-        task.componentStack = prevStack;
+        task.replay = prevReplay;
         switchContext(prevContext);
         return;
       }
@@ -3980,6 +4501,10 @@ function performWork(request: Request): void {
 
 function retryTask(request: Request, task: Task): void {
   const segment = task.blockedSegment;
+  if (segment === null) {
+    retryReplayTask(request, task);
+    return;
+  }
   if (segment.status !== PENDING) return;
   const prevTask = request.currentTask;
   request.currentTask = task;
@@ -4025,10 +4550,60 @@ function retryTask(request: Request, task: Task): void {
   }
 }
 
+/** A resume's replay task, again: toward its postponed work, or on to what suspended in it. */
+function retryReplayTask(request: Request, task: Task): void {
+  const replay = task.replay!;
+  if (replay.pendingTasks === 0) return;
+  const prevTask = request.currentTask;
+  request.currentTask = task;
+  switchContext(task.context);
+  const startNode = task.node;
+  try {
+    if (typeof replay.slots === "number") resumeNode(request, task, replay.slots, task.node, task.childIndex);
+    else retryNode(request, task);
+    checkReplayed(replay);
+    task.abortSet.delete(task);
+    finishedTask(request, task.blockedBoundary, task.row, null);
+  } catch (thrown) {
+    const x: Any = thrown;
+    if (request.aborted) {
+      request.currentTask = prevTask;
+      abortTask(task, request);
+      task.abortSet.delete(task);
+      finishAbortedTask(task, request, request.fatalError);
+      return;
+    }
+    if (typeof x === "object" && x !== null) {
+      if (typeof x.then === "function") {
+        x.then(task.ping, task.ping);
+        task.thenableState = thenableStateAfterSuspending(x);
+        return;
+      }
+      if (x.message === STACK_OVERFLOW && task.node !== startNode) {
+        task.thenableState = null;
+        request.pingedTasks.push(task);
+        return;
+      }
+    }
+    // The replayed tree differs: what was postponed under it renders on the client. (React counts
+    // the task as the shell's, wherever it is.)
+    replay.pendingTasks--;
+    task.abortSet.delete(task);
+    const digest = logRecoverableError(request, x, getThrownInfo(task.componentStack));
+    abortRemainingReplayNodes(request, task.blockedBoundary, replay.nodes, replay.slots, digest);
+    request.pendingRootTasks--;
+    if (request.pendingRootTasks === 0) completeShell(request);
+    request.allPendingTasks--;
+    if (request.allPendingTasks === 0) completeAll(request);
+  } finally {
+    request.currentTask = prevTask;
+  }
+}
+
 /** A task threw: its boundary renders on the client, or, outside any boundary, the render fails. */
 function erroredTask(request: Request, task: Task, x: Any): void {
   task.abortSet.delete(task);
-  task.blockedSegment.status = ERRORED;
+  task.blockedSegment!.status = ERRORED;
   const boundary = task.blockedBoundary,
     row = task.row;
   if (row !== null && --row.pendingTasks === 0) finishSuspenseListRow(request, row);
@@ -4045,6 +4620,7 @@ function erroredTask(request: Request, task: Task, x: Any): void {
   if (boundary.status !== ERRORED) {
     boundary.status = ERRORED;
     boundary.errorDigest = digest;
+    untrackBoundary(request, boundary);
     const boundaryRow = boundary.row;
     if (boundaryRow !== null) {
       request.allPendingTasks++;
@@ -4052,7 +4628,8 @@ function erroredTask(request: Request, task: Task, x: Any): void {
       request.allPendingTasks--;
     }
     if (boundary.parentFlushed) request.clientRenderedBoundaries.push(boundary);
-    if (request.pendingRootTasks === 0 && boundary.preamble !== null) preparePreamble(request);
+    if (request.pendingRootTasks === 0 && request.trackedPostpones === null && boundary.preamble !== null)
+      preparePreamble(request);
   }
   if (request.allPendingTasks === 0) completeAll(request);
 }
@@ -4121,7 +4698,24 @@ function finishedTask(request: Request, boundary: Boundary | null, row: Row | nu
             if (boundaryRow !== null && --boundaryRow.pendingTasks === 0) finishSuspenseListRow(request, boundaryRow);
             request.allPendingTasks--;
           }
-          if (request.pendingRootTasks === 0 && boundary.preamble !== null) preparePreamble(request);
+          if (request.pendingRootTasks === 0 && request.trackedPostpones === null && boundary.preamble !== null)
+            preparePreamble(request);
+        } else if (boundary.status === POSTPONED && boundary.row !== null) {
+          // A postponed boundary in a SuspenseList: the rows after it wait for the resume too.
+          const boundaryRow = boundary.row,
+            tracked = request.trackedPostpones!,
+            next = boundaryRow.next;
+          if (next !== null && next.boundaries !== null) {
+            const postponed = next.boundaries;
+            next.boundaries = null;
+            for (const b of postponed) {
+              trackPostponedBoundary(request, tracked, b);
+              finishedTask(request, b, null, null);
+            }
+          }
+          request.allPendingTasks++;
+          if (--boundaryRow.pendingTasks === 0) finishSuspenseListRow(request, boundaryRow);
+          request.allPendingTasks--;
         }
       } else {
         if (segment !== null && segment.parentFlushed && (segment.status === COMPLETED || segment.status === ABORTED)) {
@@ -4138,13 +4732,17 @@ function finishedTask(request: Request, boundary: Boundary | null, row: Row | nu
 }
 
 function completeShell(request: Request): void {
-  safelyEmitEarlyPreloads(request, true);
-  preparePreamble(request);
+  // A prerender gives onHeaders its hints and finds its preamble when all is done.
+  if (request.trackedPostpones === null) {
+    safelyEmitEarlyPreloads(request, true);
+    preparePreamble(request);
+  }
   request.onShellReady();
 }
 
 function completeAll(request: Request): void {
-  safelyEmitEarlyPreloads(request, true);
+  const root = request.completedRootSegment;
+  safelyEmitEarlyPreloads(request, request.trackedPostpones === null || root === null || root.status !== POSTPONED);
   preparePreamble(request);
   request.onAllReady();
 }
@@ -4152,45 +4750,82 @@ function completeAll(request: Request): void {
 /** A fallback task no longer needed: its boundary's content completed. */
 function abortTaskSoft(request: Request, task: Task): void {
   const segment = task.blockedSegment;
+  if (segment === null) return;
   segment.status = ABORTED;
   finishedTask(request, task.blockedBoundary, task.row, segment);
 }
 
 function abortTask(task: Task, request: Request): void {
   if (task === request.currentTask) return;
-  const boundary = task.blockedBoundary;
-  task.blockedSegment.status = ABORTED;
+  const boundary = task.blockedBoundary,
+    segment = task.blockedSegment;
+  if (segment !== null) segment.status = ABORTED;
   if (boundary !== null) boundary.fallbackAbortableTasks.forEach((t) => abortTask(t, request));
 }
 
-/** An aborted task: its boundary renders on the client; outside any boundary, the render fails. */
+/**
+ * An aborted task: its boundary renders on the client; outside any boundary, the render fails. In
+ * a prerender, the task's work is postponed instead, for the resume.
+ */
 function finishAbortedTask(task: Task, request: Request, error: Any): void {
   if (task === request.currentTask) return;
   const boundary = task.blockedBoundary,
     segment = task.blockedSegment;
-  if (segment.status !== ABORTED) return;
+  if (segment !== null && segment.status !== ABORTED) return;
   const info = getThrownInfo(task.componentStack);
   const recoverable = isRecoverableError(error);
+  const tracked = request.trackedPostpones;
   if (boundary === null) {
-    const e = recoverable ? cloneRecoverableErrorAsFatal(error) : error;
-    logRecoverableError(request, e, info);
-    if (request.status !== ABORTING && request.status !== CLOSED) fatalError(request, e);
-    return;
+    const replay = task.replay;
+    if (replay === null) {
+      if (!recoverable && tracked !== null) {
+        logRecoverableError(request, error, info);
+        trackPostpone(request, tracked, task, segment!);
+        finishedTask(request, null, task.row, segment);
+        return;
+      }
+      const e = recoverable ? cloneRecoverableErrorAsFatal(error) : error;
+      logRecoverableError(request, e, info);
+      if (request.status !== ABORTING && request.status !== CLOSED) fatalError(request, e);
+      return;
+    }
+    // A replay task of the shell: what it had left to replay renders on the client.
+    if (request.status !== ABORTING && request.status !== CLOSED) {
+      replay.pendingTasks--;
+      if (replay.pendingTasks === 0 && replay.nodes.length > 0)
+        abortRemainingReplayNodes(request, null, replay.nodes, replay.slots, logRecoverableError(request, error, info));
+      request.pendingRootTasks--;
+      if (request.pendingRootTasks === 0) completeShell(request);
+    }
+  } else {
+    if (boundary.status !== ERRORED) {
+      if (!recoverable && tracked !== null && segment !== null) {
+        logRecoverableError(request, error, info);
+        trackPostpone(request, tracked, task, segment);
+        finishFallbackTasks(request, boundary, error);
+        finishedTask(request, boundary, task.row, segment);
+        return;
+      }
+      boundary.status = ERRORED;
+      boundary.errorDigest = logRecoverableError(request, error, info);
+      untrackBoundary(request, boundary);
+      if (boundary.parentFlushed) request.clientRenderedBoundaries.push(boundary);
+    }
+    boundary.pendingTasks--;
+    const boundaryRow = boundary.row;
+    if (boundaryRow !== null && --boundaryRow.pendingTasks === 0) finishSuspenseListRow(request, boundaryRow);
+    finishFallbackTasks(request, boundary, error);
   }
-  if (boundary.status !== ERRORED) {
-    boundary.status = ERRORED;
-    boundary.errorDigest = logRecoverableError(request, error, info);
-    if (boundary.parentFlushed) request.clientRenderedBoundaries.push(boundary);
-  }
-  boundary.pendingTasks--;
-  const boundaryRow = boundary.row;
-  if (boundaryRow !== null && --boundaryRow.pendingTasks === 0) finishSuspenseListRow(request, boundaryRow);
-  boundary.fallbackAbortableTasks.forEach((t) => finishAbortedTask(t, request, error));
-  boundary.fallbackAbortableTasks.clear();
   const row = task.row;
   if (row !== null && --row.pendingTasks === 0) finishSuspenseListRow(request, row);
   request.allPendingTasks--;
   if (request.allPendingTasks === 0) completeAll(request);
+}
+
+/** An aborted boundary's fallback tasks, finished as aborted too. */
+function finishFallbackTasks(request: Request, boundary: Boundary, error: Any): void {
+  boundary.fallbackAbortableTasks.forEach((t) => finishAbortedTask(t, request, error));
+  boundary.fallbackAbortableTasks.clear();
 }
 
 /** Stop the render: what is still pending renders on the client. */
@@ -4229,6 +4864,177 @@ const isRecoverableReason = (reason: Any): boolean =>
 
 // #endregion
 
+// #region Postponed work
+
+/**
+ * A prerender's postponed segment: its id, in the replay node of its task's key path (or the
+ * root's slots), so the resume renders it where the prelude left its placeholder.
+ */
+function trackPostpone(request: Request, tracked: TrackedPostpones, task: Task, segment: Segment): void {
+  segment.status = POSTPONED;
+  const boundary = task.blockedBoundary;
+  if (boundary === null) {
+    // In the shell: the resume renders the shell again.
+    segment.id = request.nextSegmentId++;
+    tracked.rootSlots = segment.id;
+    if (request.completedRootSegment !== null) request.completedRootSegment.status = POSTPONED;
+    return;
+  }
+  // Inside a boundary, a task's key path is never null: it starts at the boundary's element.
+  const keyPath = task.keyPath!;
+  if (boundary.status === PENDING) {
+    const boundaryNode = trackPostponedBoundary(request, tracked, boundary);
+    if (boundary.tracked!.contentKeyPath === keyPath && task.childIndex === -1) {
+      // The boundary's whole content: its root segment.
+      if (segment.id === -1) segment.id = segment.parentFlushed ? boundary.rootSegmentID : request.nextSegmentId++;
+      boundaryNode[3] = segment.id;
+      return;
+    }
+  }
+  if (segment.id === -1) segment.id = segment.parentFlushed ? boundary.rootSegmentID : request.nextSegmentId++;
+  const map = tracked.workingMap;
+  let node = map.get(keyPath);
+  if (task.childIndex === -1) {
+    if (node === undefined) addToReplayParent([keyPath[1], keyPath[2], [], segment.id], keyPath[0], tracked);
+    else node[3] = segment.id;
+    return;
+  }
+  let slots: ReplaySlots;
+  if (node === undefined) {
+    node = [keyPath[1], keyPath[2], [], (slots = {})];
+    map.set(keyPath, node);
+    addToReplayParent(node, keyPath[0], tracked);
+  } else if ((slots = node[3]) === null) slots = node[3] = {};
+  else if (typeof slots === "number") throw new Error(POSTPONED_TWICE);
+  slots[task.childIndex] = segment.id;
+}
+
+const POSTPONED_TWICE =
+  "It should not be possible to postpone both at the root of an element as well as a slot below. This is a bug in React.";
+
+/** A boundary whose content is postponed: its replay node, with its fallback's and its segment id. */
+function trackPostponedBoundary(request: Request, tracked: TrackedPostpones, boundary: Boundary): ReplayNode {
+  boundary.status = POSTPONED;
+  boundary.rootSegmentID = request.nextSegmentId++;
+  // A boundary a resumeAndPrerender resumed has no record: React fails there, and so does compat.
+  const record = boundary.tracked;
+  if (record === null) throw new Error("It should not be possible to postpone at the root. This is a bug in React.");
+  const keyPath = record.contentKeyPath!,
+    node = tracked.workingMap.get(keyPath);
+  if (node === undefined) {
+    const created: ReplayNode = [keyPath[1], keyPath[2], [], null, record.fallbackNode, boundary.rootSegmentID];
+    tracked.workingMap.set(keyPath, created);
+    addToReplayParent(created, keyPath[0], tracked);
+    return created;
+  }
+  node[4] = record.fallbackNode;
+  node[5] = boundary.rootSegmentID;
+  return node;
+}
+
+/** A boundary that errored is rendered on the client: nothing under it is replayed. */
+function untrackBoundary(request: Request, boundary: Boundary): void {
+  const tracked = request.trackedPostpones,
+    record = boundary.tracked;
+  if (tracked === null || record === null) return;
+  // Its node keeps its place, without children, slots or a boundary's fields.
+  const node = tracked.workingMap.get(record.contentKeyPath!);
+  if (node !== undefined) node.splice(2, 4, [], null);
+}
+
+/** Add a replay node under its parent's, making the parents' nodes up to the root as needed. */
+function addToReplayParent(node: ReplayNode, parentKeyPath: KeyPath | null, tracked: TrackedPostpones): void {
+  if (parentKeyPath === null) {
+    tracked.rootNodes.push(node);
+    return;
+  }
+  const map = tracked.workingMap;
+  let parent = map.get(parentKeyPath);
+  if (parent === undefined) {
+    parent = [parentKeyPath[1], parentKeyPath[2], [], null];
+    map.set(parentKeyPath, parent);
+    addToReplayParent(parent, parentKeyPath[0], tracked);
+  }
+  parent[2].push(node);
+}
+
+/**
+ * Replay nodes a resume could not reach, as the tree differs or an error stopped it: their
+ * boundaries render on the client, and so does the boundary around the slots left.
+ */
+function abortRemainingReplayNodes(
+  request: Request,
+  boundary: Boundary | null,
+  nodes: ReplayNode[],
+  slots: ReplaySlots,
+  digest: Any,
+): void {
+  for (const node of nodes) {
+    if (node.length === 4) abortRemainingReplayNodes(request, boundary, node[2], node[3], digest);
+    else {
+      const resumed = createSuspenseBoundary(request, null, new Set(), null);
+      resumed.parentFlushed = true;
+      resumed.rootSegmentID = node[5]!;
+      resumed.status = ERRORED;
+      resumed.errorDigest = digest;
+      request.clientRenderedBoundaries.push(resumed);
+    }
+  }
+  nodes.length = 0;
+  if (slots === null) return;
+  if (boundary === null)
+    throw new Error("We should not have any resumable nodes in the shell. This is a bug in React.");
+  if (boundary.status !== ERRORED) {
+    boundary.status = ERRORED;
+    boundary.errorDigest = digest;
+    if (boundary.parentFlushed) request.clientRenderedBoundaries.push(boundary);
+  }
+  if (typeof slots === "object") for (const index in slots) delete slots[index];
+}
+
+/** What a prerender leaves for the resume, or null when it postponed nothing. */
+function getPostponedState(request: Request): PostponedState | null {
+  const tracked = request.trackedPostpones;
+  if (tracked === null || (tracked.rootNodes.length === 0 && tracked.rootSlots === null))
+    return (request.trackedPostpones = null);
+  const root = request.completedRootSegment,
+    rs = request.resumableState;
+  // A shell the prelude can write: the resume writes the rest. Otherwise the resume renders it all
+  // again, knowing only the hints onHeaders already gave.
+  const flushable = root === null || (root.status !== POSTPONED && request.completedPreambleSegments !== null);
+  if (flushable) {
+    rs.bootstrapScriptContent = undefined;
+    rs.bootstrapScripts = undefined;
+    rs.bootstrapModules = undefined;
+  } else {
+    const resets = request.renderState.resets;
+    rs.nextFormID = 0;
+    rs.hasBody = false;
+    rs.hasHtml = false;
+    rs.unknownResources = { font: resets.font };
+    rs.dnsResources = resets.dns;
+    rs.connectResources = resets.connect;
+    rs.imageResources = resets.image;
+    rs.styleResources = resets.style;
+    rs.scriptResources = {};
+    rs.moduleUnknownResources = {};
+    rs.moduleScriptResources = {};
+    rs.instructions = 0;
+  }
+  const state: PostponedState = {
+    nextSegmentId: flushable ? request.nextSegmentId : 0,
+    rootFormatContext: request.rootFormatContext,
+    progressiveChunkSize: request.progressiveChunkSize,
+    resumableState: rs,
+    replayNodes: tracked.rootNodes,
+    replaySlots: flushable ? tracked.rootSlots : -1,
+  };
+  if (flushable) request.postponedState = state;
+  return state;
+}
+
+// #endregion
+
 // #region The preamble
 
 function hoistPreambleState(state: RenderState, preamble: PreambleState): void {
@@ -4256,7 +5062,10 @@ function preparePreambleFromSegment(request: Request, segment: Segment, collecte
       request.byteSize += boundary.byteSize;
       return preparePreambleFromSubtree(request, boundary.completedSegments[0]!, collected);
     }
+    case POSTPONED:
     case ERRORED:
+      // A prerender's postponed boundary leaves the preamble to the resume.
+      if (boundary.status === POSTPONED && request.trackedPostpones !== null) return true;
       if (segment.status === COMPLETED) {
         hoistPreambleState(request.renderState, preamble.fallback);
         return preparePreambleFromSubtree(request, segment, collected);
@@ -4519,9 +5328,9 @@ function flushSubtree(
   hoistable: HoistableState | null,
 ): boolean {
   segment.parentFlushed = true;
-  if (segment.status === PENDING) {
-    // Not done yet: a placeholder its content replaces later.
-    segment.id = request.nextSegmentId++;
+  if (segment.status === PENDING || segment.status === POSTPONED) {
+    // Not done yet: a placeholder its content (or the resume) replaces later.
+    if (segment.status === PENDING) segment.id = request.nextSegmentId++;
     segment.lastPushedText = false;
     segment.textEmbedded = false;
     destination.push('<template id="');
@@ -4708,6 +5517,8 @@ function flushCompletedQueues(request: Request, destination: Destination): void 
     if (request.pendingRootTasks > 0) return;
     const root = request.completedRootSegment;
     if (root !== null) {
+      // A prerender's shell that the resume renders again: the prelude writes nothing.
+      if (root.status === POSTPONED) return;
       const preambleSegments = request.completedPreambleSegments;
       if (preambleSegments === null) return;
       flushedByteSize = request.byteSize;
@@ -4753,10 +5564,12 @@ function flushCompletedQueues(request: Request, destination: Destination): void 
       flushSegment(request, destination, root, null);
       flushingShell = false;
       request.completedRootSegment = null;
+      const tracked = request.trackedPostpones;
       if (
         request.allPendingTasks !== 0 ||
         request.clientRenderedBoundaries.length !== 0 ||
-        request.completedBoundaries.length !== 0
+        request.completedBoundaries.length !== 0 ||
+        (tracked !== null && (tracked.rootNodes.length !== 0 || tracked.rootSlots !== null))
       ) {
         // More is coming: a script marks when the shell painted, to pace the reveals.
         if ((rs.instructions & 64) === 0) {
@@ -4832,6 +5645,8 @@ function flushCompletedQueues(request: Request, destination: Destination): void 
     completed.splice(0, i);
   } finally {
     flushingPartialBoundaries = false;
+    // The prelude's flushes number new segments: the postponed state's next id follows them.
+    if (request.postponedState !== null) request.postponedState.nextSegmentId = request.nextSegmentId;
     if (
       request.allPendingTasks === 0 &&
       request.clientRenderedBoundaries.length === 0 &&
@@ -4936,7 +5751,7 @@ function controllerDestination(controller: ReadableByteStreamController): Destin
 }
 
 /** renderToPipeableStream's destination: React's Node build's 4096-byte views and backpressure. */
-function writableDestination(writable: PipeableWritable): Destination {
+function writableDestination(writable: Pick<PipeableWritable, "write" | "end" | "destroy" | "flush">): Destination {
   let view = new Uint8Array(4096),
     written = 0,
     room = true;
@@ -5007,7 +5822,8 @@ function startWork(request: Request): void {
   queueMicrotask(() => runInRequest(request, performWork));
   request.scheduleWork(() => {
     if (request.status === OPENING) request.status = OPEN;
-    safelyEmitEarlyPreloads(request, request.pendingRootTasks === 0);
+    // A prerender gives onHeaders its hints once all is done.
+    if (request.trackedPostpones === null) safelyEmitEarlyPreloads(request, request.pendingRootTasks === 0);
   });
 }
 
@@ -5126,24 +5942,7 @@ export function renderToReadableStream(
       options,
       progressiveChunkSize: options?.progressiveChunkSize,
       onAllReady,
-      onShellReady() {
-        let destination: Destination | undefined;
-        const stream = new ReadableStream<Uint8Array>(
-          {
-            type: "bytes",
-            pull(controller: ReadableByteStreamController) {
-              startFlowing(request, (destination ??= controllerDestination(controller)));
-            },
-            cancel(reason: unknown) {
-              request.destination = null;
-              abort(request, reason);
-            },
-          } as Any,
-          { highWaterMark: 0 },
-        ) as ReactDOMServerReadableStream;
-        stream.allReady = allReady;
-        resolve(stream);
-      },
+      onShellReady: () => resolve(withAllReady(readableStream(request), allReady)),
       onShellError(error) {
         allReady.catch(noop);
         reject(error);
@@ -5155,6 +5954,29 @@ export function renderToReadableStream(
     if (options?.signal) attachAbortSignal(request, options.signal);
     startWork(request);
   });
+}
+
+/** The HTML stream of a request, as React's browser build enqueues it: rendering goes on as it is read. */
+function readableStream(request: Request): ReadableStream<Uint8Array> {
+  let destination: Destination | undefined;
+  return new ReadableStream<Uint8Array>(
+    {
+      type: "bytes",
+      pull(controller: ReadableByteStreamController) {
+        startFlowing(request, (destination ??= controllerDestination(controller)));
+      },
+      cancel(reason: unknown) {
+        request.destination = null;
+        abort(request, reason);
+      },
+    } as Any,
+    { highWaterMark: 0 },
+  );
+}
+
+function withAllReady(stream: ReadableStream<Uint8Array>, allReady: Promise<void>): ReactDOMServerReadableStream {
+  (stream as ReactDOMServerReadableStream).allReady = allReady;
+  return stream as ReactDOMServerReadableStream;
 }
 
 /** The writable renderToPipeableStream pipes to: a Node stream.Writable, or anything shaped like one. */
@@ -5193,14 +6015,19 @@ export function renderToPipeableStream(
     scheduleWork: scheduleTask,
     md5: true,
   });
-  let started = false;
   startWork(request);
+  return pipeableStream(request, true);
+}
+
+/** A request's pipe and abort; `emitEarly`: piping gives onHeaders its hints if work has not yet. */
+function pipeableStream(request: Request, emitEarly: boolean): PipeableStream {
+  let started = false;
   return {
     pipe(writable) {
       if (started) throw new Error("React currently only supports piping to one writable stream.");
       started = true;
       const destination = writableDestination(writable);
-      safelyEmitEarlyPreloads(request, request.pendingRootTasks === 0);
+      if (emitEarly) safelyEmitEarlyPreloads(request, request.pendingRootTasks === 0);
       startFlowing(request, destination);
       writable.on("drain", () => startFlowing(request, destination));
       writable.on("error", () => {
@@ -5219,23 +6046,229 @@ export function renderToPipeableStream(
   };
 }
 
-/** An API of React's server this module does not implement: it throws when called. */
-function unsupported(name: string): (...args: Any[]) => never {
-  return () => {
-    throw new Error(
-      `${name} is not supported by @reactre/compat/server: it renders with renderToString, renderToStaticMarkup, renderToReadableStream and renderToPipeableStream. Use react-dom/server's own ${name} for partial prerendering.`,
-    );
-  };
+// Partial prerendering: react-dom/static's prerender renders all it can until its signal aborts,
+// writing the prelude (the shell, and each boundary whose content completed) and the postponed
+// state; react-dom/server's resume renders the rest from it. The web entries enqueue as React's
+// browser build does and hash form keys with MurmurHash3; the Node ones, as React's Node build.
+
+/** prerender's and resumeAndPrerender's result: the prelude's HTML and the work left for resume. */
+export interface StaticResult<Prelude = ReadableStream<Uint8Array>> {
+  /** What resume needs (React's JSON, safe to serialize); null when nothing was postponed. */
+  postponed: PostponedState | null;
+  prelude: Prelude;
 }
 
-/** Not implemented: resuming needs React's prerender (partial prerendering). Throws. */
-export const resume: (...args: Any[]) => never = unsupported("resume");
-/** Not implemented: resuming needs React's prerender (partial prerendering). Throws. */
-export const resumeToPipeableStream: (...args: Any[]) => never = unsupported("resumeToPipeableStream");
-/** Not implemented (react-dom/static's partial prerendering). Throws. */
-export const prerender: (...args: Any[]) => never = unsupported("prerender");
-/** Not implemented (react-dom/static's partial prerendering). Throws. */
-export const prerenderToNodeStream: (...args: Any[]) => never = unsupported("prerenderToNodeStream");
+/** The Node stream prerenderToNodeStream's prelude is: a stream.Readable. */
+export interface NodeReadable {
+  pipe<W>(destination: W): W;
+  on(event: string, listener: (...args: Any[]) => void): unknown;
+  [Symbol.asyncIterator](): AsyncIterator<Any>;
+}
+
+/** prerender's options: the stream options but a nonce and formState, which React's ignores. */
+export interface PrerenderOptions extends Omit<StreamOptions, "nonce" | "formState"> {
+  signal?: AbortSignal;
+  onHeaders?: (headers: Headers) => void;
+}
+
+/** prerenderToNodeStream's options. */
+export interface PrerenderToNodeStreamOptions extends Omit<StreamOptions, "nonce" | "formState"> {
+  signal?: AbortSignal;
+  onHeaders?: (headers: { Link?: string }) => void;
+}
+
+/** resumeAndPrerender's options. */
+export interface ResumeAndPrerenderOptions {
+  signal?: AbortSignal;
+  onError?: StreamOptions["onError"];
+  onBrowserBailout?: StreamOptions["onBrowserBailout"];
+}
+
+/** resume's options: the rest of the HTML takes these beyond the postponed state. */
+export interface ResumeOptions extends ResumeAndPrerenderOptions {
+  nonce?: StreamOptions["nonce"];
+}
+
+/** resumeToPipeableStream's options. */
+export interface ResumeToPipeableStreamOptions extends Omit<ResumeOptions, "signal"> {
+  onShellReady?: () => void;
+  onShellError?: (error: unknown) => void;
+  onAllReady?: () => void;
+}
+
+/** A Node stream.Readable whose reads flush the request: React's Node build's prelude. */
+function nodeReadable(request: Request): NodeReadable {
+  const Readable = (globalThis as Any).process.getBuiltinModule("stream").Readable;
+  const readable = new Readable({ read: () => startFlowing(request, destination) });
+  const destination = writableDestination({
+    write: (chunk) => readable.push(chunk),
+    end: () => readable.push(null),
+    destroy: readable.destroy.bind(readable),
+  });
+  return readable;
+}
+
+/** A prerender's options for its request: React's static entries take no nonce or formState. */
+const staticOptions = (options: PrerenderOptions | PrerenderToNodeStreamOptions | undefined): Any =>
+  options && { ...options, nonce: undefined, formState: undefined };
+
+/** A prerender or resumeAndPrerender, resolved with its prelude once all its work is done. */
+function prerenderWith<Prelude>(
+  start: (onAllReady: () => void, onFatalError: (error: unknown) => void) => Request,
+  prelude: (request: Request) => Prelude,
+  signal: AbortSignal | undefined,
+): Promise<StaticResult<Prelude>> {
+  return new Promise((resolve, reject) => {
+    const request = start(() => {
+      const stream = prelude(request);
+      resolve({ postponed: getPostponedState(request), prelude: stream });
+    }, reject);
+    if (signal) attachAbortSignal(request, signal);
+    startWork(request);
+  });
+}
+
+/**
+ * react-dom/static's prerender: the HTML of `children` once all of it has rendered or the signal
+ * aborted, as a stream (the prelude), and the work left (`postponed`) for resume to render later.
+ * Aborting leaves pending boundaries' content to the resume and their fallbacks in the prelude.
+ */
+export function prerender(children: ReactElement | Any, options?: PrerenderOptions): Promise<StaticResult> {
+  return prerenderWith(
+    (onAllReady, onFatalError) =>
+      createRequest(children, {
+        legacy: false,
+        generateStaticMarkup: false,
+        options: staticOptions(options),
+        progressiveChunkSize: options?.progressiveChunkSize,
+        onAllReady,
+        onFatalError,
+        onHeaders: options?.onHeaders && ((headers) => options.onHeaders!(new Headers(headers))),
+        scheduleWork: scheduleTask,
+        prerender: true,
+      }),
+    readableStream,
+    options?.signal,
+  );
+}
+
+/** prerender with a Node stream.Readable prelude, as React's Node build writes it. */
+export function prerenderToNodeStream(
+  children: ReactElement | Any,
+  options?: PrerenderToNodeStreamOptions,
+): Promise<StaticResult<NodeReadable>> {
+  return prerenderWith(
+    (onAllReady, onFatalError) =>
+      createRequest(children, {
+        legacy: false,
+        generateStaticMarkup: false,
+        options: staticOptions(options),
+        progressiveChunkSize: options?.progressiveChunkSize,
+        onAllReady,
+        onFatalError,
+        onHeaders: options?.onHeaders,
+        scheduleWork: scheduleTask,
+        md5: true,
+        prerender: true,
+      }),
+    nodeReadable,
+    options?.signal,
+  );
+}
+
+/** A resume's request options: React's resumes take only these of theirs. */
+const resumeOptions = (options: ResumeOptions | undefined, md5: boolean, prerender: boolean): RequestOptions => ({
+  legacy: false,
+  generateStaticMarkup: false,
+  options:
+    options &&
+    ({
+      nonce: prerender ? undefined : options.nonce,
+      onError: options.onError,
+      onBrowserBailout: options.onBrowserBailout,
+    } as Any),
+  progressiveChunkSize: undefined,
+  scheduleWork: scheduleTask,
+  md5,
+  prerender,
+});
+
+/**
+ * react-dom/server's resume: the rest of a prerender's HTML, from its postponed state, as a stream
+ * once its shell is ready. `children` is the tree the prerender rendered.
+ */
+export function resume(
+  children: ReactElement | Any,
+  postponedState: PostponedState,
+  options?: ResumeOptions,
+): Promise<ReactDOMServerReadableStream> {
+  return new Promise((resolve, reject) => {
+    let onAllReady!: () => void, onFatalError!: (e: unknown) => void;
+    const allReady = new Promise<void>((res, rej) => {
+      onAllReady = res;
+      onFatalError = rej;
+    });
+    const request: Request = resumeRequest(children, postponedState, {
+      ...resumeOptions(options, false, false),
+      onAllReady,
+      onShellReady: () => resolve(withAllReady(readableStream(request), allReady)),
+      onShellError(error) {
+        allReady.catch(noop);
+        reject(error);
+      },
+      onFatalError,
+    });
+    if (options?.signal) attachAbortSignal(request, options.signal);
+    startWork(request);
+  });
+}
+
+/** resume, written to a Node writable once `pipe` is called, as React's resumeToPipeableStream. */
+export function resumeToPipeableStream(
+  children: ReactElement | Any,
+  postponedState: PostponedState,
+  options?: ResumeToPipeableStreamOptions,
+): PipeableStream {
+  const request = resumeRequest(children, postponedState, {
+    ...resumeOptions(options, true, false),
+    onAllReady: options?.onAllReady,
+    onShellReady: options?.onShellReady,
+    onShellError: options?.onShellError,
+  });
+  startWork(request);
+  return pipeableStream(request, false);
+}
+
+/**
+ * react-dom/static's resumeAndPrerender: a resume that prerenders, so its signal postpones what is
+ * still pending for another resume. Its prelude is the HTML the first prelude left out.
+ */
+export function resumeAndPrerender(
+  children: ReactElement | Any,
+  postponedState: PostponedState,
+  options?: ResumeAndPrerenderOptions,
+): Promise<StaticResult> {
+  return prerenderWith(
+    (onAllReady, onFatalError) =>
+      resumeRequest(children, postponedState, { ...resumeOptions(options, false, true), onAllReady, onFatalError }),
+    readableStream,
+    options?.signal,
+  );
+}
+
+/** resumeAndPrerender with a Node stream.Readable prelude. */
+export function resumeAndPrerenderToNodeStream(
+  children: ReactElement | Any,
+  postponedState: PostponedState,
+  options?: ResumeAndPrerenderOptions,
+): Promise<StaticResult<NodeReadable>> {
+  return prerenderWith(
+    (onAllReady, onFatalError) =>
+      resumeRequest(children, postponedState, { ...resumeOptions(options, true, true), onAllReady, onFatalError }),
+    nodeReadable,
+    options?.signal,
+  );
+}
 
 const ReactDOMServer: Record<string, unknown> = {
   version,
@@ -5247,6 +6280,8 @@ const ReactDOMServer: Record<string, unknown> = {
   resumeToPipeableStream,
   prerender,
   prerenderToNodeStream,
+  resumeAndPrerender,
+  resumeAndPrerenderToNodeStream,
 };
 export default ReactDOMServer;
 

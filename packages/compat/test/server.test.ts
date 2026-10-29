@@ -225,16 +225,13 @@ describe("entry", () => {
       "resumeToPipeableStream",
       "prerender",
       "prerenderToNodeStream",
+      "resumeAndPrerender",
+      "resumeAndPrerenderToNodeStream",
     ]) {
       expect(typeof (Server as Any)[k]).toBe("function");
       expect((ServerDefault as Any)[k]).toBe((Server as Any)[k]);
     }
     expect(Server.version).toBe(Compat.version);
-  });
-
-  test("the prerender and resume APIs throw: compat does not implement them", () => {
-    for (const name of ["resume", "resumeToPipeableStream", "prerender", "prerenderToNodeStream"])
-      expect(() => (Server as Any)[name]()).toThrow(`${name} is not supported by @reactre/compat/server`);
   });
 });
 
