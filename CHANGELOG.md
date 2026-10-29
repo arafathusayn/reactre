@@ -26,6 +26,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### @reactre/compat
 
+- Fixed: `useId` gives React's ids while hydrating. As React's client does, it works out the tree id the server rendered (`_R_…_`) from the component's place in the tree, so the attributes that hold ids hydrate unchanged. The work happens only when `useId` mounts during hydration. Outside hydration ids still come from the client counter (`_r_…_`), which hydration no longer uses up.
 - Added: `renderToReadableStream` and `renderToPipeableStream` take `formState`, a server action's postback: `useActionState` with a server action gives its form React's `$ACTION_KEY` (the permalink, or a hash of the hook's place in the tree, by React's key paths), the hook whose key and action match starts from the postback's state, and each component with the hook writes React's `<!--F!-->` or `<!--F-->` markers.
 - Added: @reactre/compat/server replays a component's promises when it renders again after suspending, as React's server does: `use()` of a promise made during render reads the one the component used at the same place before, so it no longer suspends on each retry.
 - Added: `preload`, `preinit` and the other resource functions called in async work a stream's render started, such as a promise callback, reach the render and are flushed, as in React's Node and edge builds, wherever `AsyncLocalStorage` exists.

@@ -588,7 +588,10 @@ let cur: Fiber | null = null; // the function or class component rendering
 let hi = 0; // its next hook index
 let curHost: Fiber = null as Any; // the host that places nodes created now
 let curNs = HTML_NS; // the namespace new host elements are created in
-let hydrating = false; // claiming server-rendered nodes instead of creating them
+// Claiming server-rendered nodes instead of creating them: then the list mount that records each
+// child's place for useId (forkRun, which hydrateRoot hands its root, so apps that never hydrate
+// leave it out), else false.
+let hydrating: typeof forkRun | false = false;
 
 /** Whether `v` is a promise or any object with a `then` method, as React tests for one. */
 const isThenable = (v: Any): boolean => v !== null && typeof v === "object" && typeof v.then === "function";
@@ -991,12 +994,12 @@ function reconcile(p: Fiber, children: Any): void {
       take(old[oe]!, items[i], nc);
       patchRun(items, i + 1, ne - 1, old, oi + 1, nc);
       take(old[oi]!, items[ne], nc);
-    } else if (i <= ne || oi <= oe) {
+    } else if (oi <= oe) {
       // The general case: old children of the middle by key, reused where the key and type
       // match; what is left in the map afterwards is unmounted.
-      const map = oi <= oe ? keyMap(old, oi, oe) : null;
+      const map = keyMap(old, oi, oe);
       moved = middle(p, items, i, ne, map, nc);
-      if (map !== null && map.size) {
+      if (map.size) {
         if (map.size === m) {
           // Nothing old survived (a full replacement): one native clear
           // beats a removal per node. New nodes are placed after this.
@@ -1004,7 +1007,10 @@ function reconcile(p: Fiber, children: Any): void {
           if (nc.length === 0) return;
         } else for (const o of map.values()) unmount(o, true);
       }
-    }
+    } else if (i <= ne)
+      // Only new children in the middle (an insertion, or a mount), created in order. A hydrating
+      // mount also records where each one sits, for useId's tree ids.
+      moved = hydrating ? hydrating(p, items, children, i, ne, nc) : middle(p, items, i, ne, null, nc);
     patchRun(items, ne + 1, n - 1, old, tail, nc);
   } catch (e) {
     // Keep every live fiber tracked, so the boundary that catches this can
@@ -1071,6 +1077,34 @@ function patchRun(items: Any[], from: number, to: number, old: Fiber[], ofrom: n
     if (it == null || typeof it === "boolean") continue;
     take(old[os++]!, it, nc);
   }
+}
+
+// While hydrating, the arrays whose children are mounting, innermost last: for each, the fiber
+// whose children they are, their length (holes included) and the index of the child mounting
+// now. useId reads them for React's tree ids (see treeId).
+const forks: Any[] = [];
+
+// The middle of a hydrating mount, items[i..ne]: created in order as middle() would, with each
+// child's place recorded in `forks` while it mounts. A single child (not an array or iterable)
+// takes no place: React gives tree ids only to the children of arrays.
+function forkRun(p: Fiber, items: Any[], children: Any, i: number, ne: number, nc: Fiber[]): boolean {
+  const at = forks.length,
+    forked = items[0] !== children;
+  if (forked) forks.push(p, items.length, 0);
+  try {
+    for (; i <= ne; i++) {
+      let it = items[i];
+      if (it == null || typeof it === "boolean") continue;
+      if (typeof it === "object" && it.$$typeof !== ELEMENT && isThenable(it)) it = items[i] = unwrap(it);
+      if (forked) forks[at + 2] = i;
+      const o = create(it, p, keyOf(it, i));
+      o.i = nc.length;
+      nc.push(o);
+    }
+  } finally {
+    forks.length = at;
+  }
+  return true;
 }
 
 // Create fibers for items[from..to].
@@ -2807,8 +2841,8 @@ class RootImpl implements Root {
   /** identifierPrefix, for useId. */
   readonly prefix: string;
   readonly opts: RootOptions;
-  /** Whether the first render hydrates the container's server HTML. */
-  hydrate = false;
+  /** Whether the first render hydrates the container's server HTML: its list mount if so. */
+  hydrate: typeof forkRun | false = false;
   /** Whether the first render has started (it clears or hydrates the container once). */
   mounted = false;
   /** The event listener on each element this root listens on: its container and portals'. */
@@ -2871,7 +2905,7 @@ export function createRoot(container: Element | DocumentFragment, options: RootO
 export function hydrateRoot(container: Element | Document, children: Any, options: RootOptions = {}): Root {
   const r = new RootImpl(container, options);
   roots.add(r);
-  r.hydrate = true;
+  r.hydrate = forkRun;
   r.render(children);
   // Hydrate now, so the server's nodes are claimed before code after this call can change them.
   flushWork(true);
@@ -2895,7 +2929,7 @@ function runRoot(f: Fiber): void {
   if (!r.mounted) {
     r.mounted = true;
     if (r.hydrate) {
-      hydrating = true;
+      hydrating = r.hydrate;
       f.hc = f.d.firstChild;
     } else f.d.textContent = "";
   }
@@ -4754,20 +4788,86 @@ export function useImperativeHandle(ref: Any, create: () => Any, deps?: readonly
 export function useDebugValue(_value: unknown, _format?: (v: Any) => Any): void {}
 
 /**
- * A unique id, stable for the component's life. One counter for the page, as React's client
- * has, in React 19's format (`_r_0_`, with the root's identifierPrefix after the first `_`). It
- * is not derived from the tree position, so it need not match the id the server rendered.
+ * A unique id, stable for the component's life. Outside hydration, one counter for the page, as
+ * React's client has, in React 19's format (`_r_0_`, with the root's identifierPrefix after the
+ * first `_`). While hydrating, and on the server, React's tree id (`_R_…_`): it comes from the
+ * component's place in the tree, so it matches the id the server rendered.
  */
 export function useId(): string {
   const h = hook();
   if (h.s === null) {
-    h.s = 1;
-    // On the server, React's server id, from the component's place in the tree.
-    h.v = server !== null ? server.id() : "_" + h.f.o.prefix + "r_" + (clientIds++).toString(32) + "_";
+    // The hook marks itself as useId's: tree ids count a component's earlier calls (see treeId).
+    h.s = useId;
+    h.v =
+      server !== null
+        ? server.id()
+        : hydrating
+          ? treeId(h)
+          : "_" + h.f.o.prefix + "r_" + (clientIds++).toString(32) + "_";
   }
   return h.v;
 }
 let clientIds = 0;
+
+/**
+ * React's id for useId hook `h` mounting while hydrating: the tree id React's server and its
+ * hydrating client both derive from the component's place in the tree. Worked out here, from
+ * the fibers above, rather than kept up during render as React does, so only a hydrating useId
+ * pays for it.
+ *
+ * Each level of the id is one (count, index) pair, React's pushTreeId: a child of an array is
+ * index of count (holes included), and a component that called useId (or an unnamed
+ * ViewTransition) is index 0 of 1 for what it renders. A later call in the same component adds
+ * `H` and how many calls came before it.
+ */
+function treeId(h: Hook): string {
+  const f = h.f,
+    hs = f.h!;
+  let calls = 0;
+  for (let i = 0; hs[i] !== h; i++) if (hs[i]!.s === useId) calls++;
+  // The levels from f up, as (count, index) pairs: forks are the arrays being mounted, innermost
+  // last, each holding the fiber whose children it mounts.
+  const lv: number[] = [];
+  let top = forks.length;
+  for (let x: Fiber = f; x.r !== null; x = x.r) {
+    if (
+      x !== f &&
+      (x.n === FUNC
+        ? x.h !== null && x.h.some((y) => y.s === useId)
+        : x.t === ViewTransition && (x.p.name == null || x.p.name === "auto"))
+    )
+      lv.push(1, 0);
+    if (top > 0 && forks[top - 3] === x.r) {
+      top -= 3;
+      lv.push(forks[top + 1], forks[top + 2]);
+    }
+  }
+  // React's pushTreeId, from the root down: the index goes above the bits so far, and bits that
+  // would pass 30 move to the overflow string, five at a time.
+  let id = 1,
+    overflow = "";
+  for (let i = lv.length - 2; i >= 0; i -= 2) {
+    const count = lv[i]!;
+    let len = 31 - Math.clz32(id),
+      base = id & ~(1 << len);
+    if (32 - Math.clz32(count) + len > 30) {
+      const bits = len - (len % 5);
+      overflow = (base & ((1 << bits) - 1)).toString(32) + overflow;
+      base >>= bits;
+      len -= bits;
+    }
+    id = (1 << (32 - Math.clz32(count) + len)) | ((lv[i + 1]! + 1) << len) | base;
+  }
+  return (
+    "_" +
+    f.o.prefix +
+    "R_" +
+    (id & ~(1 << (31 - Math.clz32(id)))).toString(32) +
+    overflow +
+    (calls ? "H" + calls.toString(32) : "") +
+    "_"
+  );
+}
 
 /**
  * A value read from an external store, re-rendering when it changes. The client ignores the
