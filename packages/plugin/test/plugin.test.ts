@@ -3,8 +3,9 @@
 // ./bundlers.test.ts.
 
 import { describe, expect, test } from "bun:test";
+import { dirname } from "node:path";
 
-import { reactre, type ReactreOptions } from "../src/index.ts";
+import { baseFor, reactre, type ReactreOptions } from "../src/index.ts";
 
 // biome-ignore lint: the bundlers' hook contexts are stubbed loosely.
 type Any = any;
@@ -88,7 +89,7 @@ describe("compat: where react resolves", () => {
       for (const [id, target] of targets(client)) {
         const { asked, result } = await resolveWith(plugin, id);
         expect(asked).toBe(target);
-        expect(result).toBe("/resolved/" + target);
+        expect(result).toEqual({ id: "/resolved/" + target });
       }
       expect((await resolveWith(plugin, "react-dom-x")).result).toBe("(filtered)");
     }
@@ -156,7 +157,7 @@ describe("compat: where react resolves", () => {
         NormalModuleReplacementPlugin: class {
           constructor(
             readonly test: RegExp,
-            readonly replace: (r: { request: string }) => void,
+            readonly replace: (r: { request: string; context: string }) => void,
           ) {}
           apply() {
             applied.push(this);
@@ -169,12 +170,27 @@ describe("compat: where react resolves", () => {
       hook({ [framework]: bundler, options: {} });
       const replacement = applied[0];
       for (const [id, target] of targets("@reactre/compat")) {
-        const resource = { request: id };
+        const resource = { request: id, context: "/nowhere/app" };
         expect(replacement.test.test(id)).toBe(true);
         replacement.replace(resource);
         expect(resource.request).toBe(target);
+        // Resolved from a directory that reaches @reactre/compat.
+        expect(resource.context).toBe(baseFor("/nowhere/app/_", process.cwd()));
       }
     }
+  });
+
+  test("the target resolves from the importer's directory, else the app's root, else the plugin's", () => {
+    const here = new URL(".", import.meta.url).pathname.replace(/\/$/, "");
+    const plugin = dirname(here) + "/src";
+    // The test's own directory reaches the workspace's @reactre/compat.
+    expect(baseFor(here + "/x.js", "/nowhere")).toBe(here);
+    // A virtual module, no importer, or one that reaches nothing: the root, when it reaches it.
+    expect(baseFor("\0virtual", here)).toBe(here);
+    expect(baseFor(undefined, here)).toBe(here);
+    expect(baseFor("/nowhere/lib/index.js", here)).toBe(here);
+    // Neither reaches it: the plugin's own directory, since the plugin depends on @reactre/compat.
+    expect(baseFor("/nowhere/lib/index.js", "/nowhere")).toBe(plugin);
   });
 
   test("Bun: Bun's resolver, unless the build resolves with react-server", () => {

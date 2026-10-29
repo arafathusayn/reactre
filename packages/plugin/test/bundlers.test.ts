@@ -8,7 +8,7 @@
 // npm, to their dist builds, so those are built first.
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -42,6 +42,18 @@ beforeAll(() => {
     if (r.exitCode !== 0) throw new Error(`building ${dir} failed:\n${r.stderr.toString()}`);
   }
   out = mkdtempSync(join(tmpdir(), "reactre-plugin-"));
+  // An app outside the workspace whose dependency imports react. Neither can see @reactre/compat
+  // through node_modules, as with Bun's and pnpm's isolated installs, where a dependency sees only
+  // its own dependencies.
+  const lib = join(out, "isolated/node_modules/isolated-lib");
+  mkdirSync(lib, { recursive: true });
+  writeFileSync(join(lib, "package.json"), '{ "name": "isolated-lib", "type": "module", "main": "index.js" }');
+  writeFileSync(join(lib, "index.js"), 'export { useState } from "react";\n');
+  writeFileSync(
+    join(out, "isolated/main.js"),
+    'import { useState as fromLib } from "isolated-lib";\nimport { useState, version } from "react";\n' +
+      "export const same = fromLib === useState;\nexport { version };\n",
+  );
 });
 
 afterAll(() => rmSync(out, { recursive: true, force: true }));
@@ -173,6 +185,16 @@ describe.each(Object.keys(bundlers))("%s", (name) => {
     find(root, "BUTTON").dispatchEvent(new FakeEvent("click"));
     await microtasks();
     expect(find(root, "P").textContent).toBe("Count: 1");
+  }, 60_000);
+
+  test("compat: a dependency that cannot see @reactre/compat gets the app's copy", async () => {
+    const file = join(out, `${name}-isolated.js`);
+    await bundle(join(out, "isolated/main.js"), file, { compat: true });
+    const code = await Bun.file(file).text();
+    expect(code).not.toContain("react.production");
+    installFakeDocument();
+    const app = (await import(file)) as { same: boolean; version: string };
+    expect(app.same).toBe(true);
   }, 60_000);
 
   test("compat: resolves react-dom/server to @reactre/compat/server, which renders React's HTML", async () => {
