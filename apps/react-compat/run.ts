@@ -15,7 +15,8 @@
 // `react`, `react-dom` and their subpaths to the runtime, as a bundler plugin for a real app would.
 //
 // Exits non-zero when a scenario differs from React, except a `+core` scenario that differs only
-// because it renders a class (those are listed as needing classes).
+// because it renders a class (those are listed as needing classes), or that needs a feature module
+// core leaves out (NEEDS_FEATURES).
 // --only runs just the scenarios whose names contain one of its comma-separated texts.
 // --verbose prints the pages' console output and both full transcripts of each differing
 // scenario. --dump writes React's transcripts to a file as JSON, to read what each scenario
@@ -76,6 +77,9 @@ const runtimes = (opt("--runtimes") ?? "reactre-compat,reactre-compat+compiler,r
 const ours = (rt: string) => rt.startsWith("reactre-compat");
 // What @reactre/compat/core throws when a class component renders.
 const NO_CLASSES = "this build leaves class support out";
+// Scenarios that need a feature module @reactre/compat/core leaves out on purpose, React's
+// transition lanes (@reactre/compat/features/concurrent): without it a transition renders at once.
+const NEEDS_FEATURES = new Set(["a transition undone keeps a select's selection"]);
 const verbose = args.includes("--verbose");
 /** Only the scenarios whose names contain one of these comma-separated texts. */
 const only = opt("--only");
@@ -141,7 +145,8 @@ try {
     }
     let pass = 0;
     const bad: string[] = [],
-      classes: string[] = [];
+      classes: string[] = [],
+      features: string[] = [];
     for (const name of names) {
       const a = want[name]!,
         b = got[name] ?? ["(missing)"];
@@ -159,6 +164,10 @@ try {
         classes.push(name);
         continue;
       }
+      if (ours(rt) && rt.includes("+core") && NEEDS_FEATURES.has(name)) {
+        features.push(name);
+        continue;
+      }
       bad.push(name);
       console.log(
         `\n${rt} ✗ ${name}\n  react: ${a[diff] ?? "(nothing)"}\n  ${rt.padStart(5)}: ${b[diff] ?? "(nothing)"}`,
@@ -171,6 +180,7 @@ try {
     summary.push(
       `${rt}: ${pass}/${names.length} scenarios match React` +
         (classes.length ? `; need classes: ${classes.join("; ")}` : "") +
+        (features.length ? `; need feature modules: ${features.join("; ")}` : "") +
         (bad.length ? `; differ: ${bad.join("; ")}` : ""),
     );
     if (ours(rt) && bad.length) failed = true;

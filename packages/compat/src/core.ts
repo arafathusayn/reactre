@@ -7395,11 +7395,17 @@ function attempt(b: Batch, check: boolean): boolean {
     if (at.bad.length || moved) {
       undoDom(records, null);
       undoDom(headRecords, head!);
-      // The properties the DOM does not reflect in attributes, as the fields had them.
-      for (let i = 0; i < fv.length; i += 3) {
-        const dom = fv[i];
+      // The properties the DOM does not reflect in attributes, as the fields had them: a select's
+      // options (its nodes put back above) get their selectedness, the others value and checked.
+      for (let i = 0; i < fv.length; i += 4) {
+        const dom = fv[i],
+          sel: boolean[] | null = fv[i + 2];
+        if (sel !== null) {
+          for (let j = 0, o = dom.options; j < sel.length; j++) if (o[j].selected !== sel[j]) o[j].selected = sel[j];
+          continue;
+        }
         if (dom.value !== fv[i + 1]) dom.value = fv[i + 1];
-        if (dom.checked !== fv[i + 2]) dom.checked = fv[i + 2];
+        if (dom.checked !== fv[i + 3]) dom.checked = fv[i + 3];
       }
       for (let i = 0; i < sv.length;) {
         const f = sv[i++];
@@ -7486,7 +7492,8 @@ function bailRender(f: Fiber): void {
 
 /**
  * Save the fields of fiber `f` and its subtree into `sv`, their hooks' into `hv`, the value and
- * checkedness of the form fields in it into `fv`, and the containers of the portals in it into
+ * checkedness of the inputs and textareas in it and the selectedness of its selects' options into
+ * `fv`, and the containers of the portals in it into
  * `targets`: all a render can change.
  */
 function save(f: Fiber, sv: Any[], hv: Any[], fv: Any[], targets: Any[]): void {
@@ -7497,7 +7504,8 @@ function save(f: Fiber, sv: Any[], hv: Any[], fv: Any[], targets: Any[]): void {
   else sv.push(null);
   if (f.h !== null) for (const h of f.h) hv.push(h, h.k, h.v, h.d, h.c, h.x, h.s, h.r);
   if (f.n === PORTAL) targets.push(f.d);
-  else if (f.n === HOST && (f.t === "input" || f.t === "textarea")) fv.push(f.d, f.d.value, f.d.checked);
+  else if (f.n === HOST && (f.t === "input" || f.t === "textarea")) fv.push(f.d, f.d.value, null, f.d.checked);
+  else if (f.n === HOST && f.t === "select") fv.push(f.d, null, Array.from(f.d.options, (o: Any) => o.selected), null);
   for (let ix = 0, xs = f.c; ix < xs.length; ix++) save(xs[ix]!, sv, hv, fv, targets);
 }
 
@@ -7547,7 +7555,11 @@ function undoDom(records: MutationRecord[], head: Node | null): void {
         if (t !== head || n[FIBER] !== undefined) t.insertBefore(n, r.nextSibling);
       }
     } else if (r.type === "attributes")
-      r.oldValue === null ? t.removeAttribute(r.attributeName) : t.setAttribute(r.attributeName, r.oldValue);
+      // Chrome writes a style attribute that CSSOM changed when something reads it, so one removed
+      // before that comes back empty: hasAttribute reads it first.
+      r.oldValue === null
+        ? t.hasAttribute(r.attributeName) && t.removeAttribute(r.attributeName)
+        : t.setAttribute(r.attributeName, r.oldValue);
     else t.data = r.oldValue;
   }
 }

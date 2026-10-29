@@ -25,6 +25,7 @@ import {
   lazy,
   memo,
   PureComponent,
+  startTransition,
   type ReactNode,
   StrictMode,
   Suspense,
@@ -1006,6 +1007,47 @@ export const cases: Record<string, Case> = {
     t.log("optimistic now", t.root.textContent);
     await new Promise((r) => setTimeout(r, 30));
     await t.step("done");
+  },
+
+  // A transition that suspends where content shows is undone: the select keeps the selection it
+  // had, as React never commits the transition's, until the data comes and it commits.
+  async "a transition undone keeps a select's selection"(t) {
+    let resolve!: (v: string) => void;
+    const later = new Promise<string>((r) => (resolve = r));
+    const ready = Object.assign(Promise.resolve("A"), { status: "fulfilled", value: "A" });
+    let set!: (v: string) => void;
+    function Page({ k }: { k: string }) {
+      return <i>{use(k === "a" ? ready : later)}</i>;
+    }
+    function App() {
+      const [k, setK] = useState("a");
+      set = setK;
+      return (
+        <form>
+          <select value={k} onChange={() => {}}>
+            <option value="a">a</option>
+            <option value="b">b</option>
+            <option value="c">c</option>
+            {k === "c" ? null : <option value="x">x</option>}
+          </select>
+          <Suspense fallback="loading">
+            <Page k={k} />
+          </Suspense>
+        </form>
+      );
+    }
+    const chosen = () => {
+      const s = t.$("select") as HTMLSelectElement;
+      t.log("selected", s.value, s.selectedIndex, [...s.options].map((o) => o.selected));
+    };
+    mount(t, <App />);
+    chosen();
+    startTransition(() => set("c"));
+    await t.step("waiting");
+    chosen();
+    resolve("C");
+    await t.step("done");
+    chosen();
   },
 
   // A form action's pending state and data, its result in state, and the form's reset after it.

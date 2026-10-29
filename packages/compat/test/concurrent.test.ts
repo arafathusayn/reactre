@@ -599,6 +599,84 @@ describe("updates that suspend", () => {
       fields();
     }));
 
+  test("a transition undone puts back its selects' selection", async () => {
+    // A <select> and its <option>s, as both libraries read them: the options in tree order, each
+    // option's selectedness (one per single select), value and disabledness. Both libraries make
+    // their elements through the fake document, which makes these for the time of this test.
+    class Opt extends FakeElement {
+      #on = false;
+      defaultSelected = false;
+      get selected(): boolean {
+        return this.#on;
+      }
+      set selected(v: boolean) {
+        this.#on = v;
+        const s = this.parentNode as Any;
+        if (v && s instanceof Sel && !s.multiple) for (const o of s.options) if (o !== this) o.#on = false;
+      }
+      get value(): string {
+        return this.getAttribute("value") ?? this.textContent;
+      }
+      set value(v: string) {
+        this.setAttribute("value", v);
+      }
+      get disabled(): boolean {
+        return this.hasAttribute("disabled");
+      }
+    }
+    class Sel extends FakeElement {
+      multiple = false;
+      get options(): Opt[] {
+        const out: Opt[] = [];
+        for (let c = this.firstChild; c !== null; c = c.nextSibling) if (c instanceof Opt) out.push(c);
+        return out;
+      }
+    }
+    const make = (tag: string): FakeElement =>
+      tag === "select" ? new Sel("SELECT") : tag === "option" ? new Opt("OPTION") : new FakeElement(tag.toUpperCase());
+    const docMake = Object.getOwnPropertyDescriptor(fakeDoc, "createElement")!;
+    Object.defineProperty(fakeDoc, "createElement", { configurable: true, writable: true, value: make });
+    (globalThis as Any).document.createElement = make;
+    try {
+      await same(async ({ L, log, root, flushSync, task, c }) => {
+        const d = data();
+        await d.ready("a");
+        let set: Any;
+        const chosen = () => {
+          const opts = (nodes(c).find((n) => n instanceof Sel) as Sel).options;
+          log.push("selected " + opts.map((o) => (o.selected ? o.value : "-")).join(" "));
+        };
+        const Page = logs(L, log, "Page", ({ k }) => d.read(L, k));
+        const App = () => {
+          const [k, s] = L.useState("a");
+          set = s;
+          return L.createElement(
+            "form",
+            null,
+            L.createElement(
+              "select",
+              { value: k, onChange() {} },
+              ["a", "b", "c"].map((v) => L.createElement("option", { key: v, value: v }, v)),
+              // An option the transition removes, put back as it is undone.
+              k === "c" ? null : L.createElement("option", { key: "x", value: "x" }, "x"),
+            ),
+            L.createElement(L.Suspense, { fallback: "loading" }, L.createElement(Page, { k })),
+          );
+        };
+        flushSync(() => root.render(L.createElement(App)));
+        chosen();
+        L.startTransition(() => set("c"));
+        await task();
+        chosen();
+        d.resolve("c");
+        await task();
+        chosen();
+      });
+    } finally {
+      Object.defineProperty(fakeDoc, "createElement", docMake);
+    }
+  });
+
   test("an urgent update renders a transition that waits for data again, over it", () =>
     same(async ({ L, log, root, flushSync, snap, task }) => {
       const d = data();
