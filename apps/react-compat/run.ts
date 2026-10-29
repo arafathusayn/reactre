@@ -7,7 +7,7 @@
 // both sides, so DOM behavior (events, focus, form controls) is the browser's, not a mock's.
 //
 //   bun run.ts [--runtimes reactre-compat,reactre-compat+classes,reactre-compat+classes+compiler]
-//              [--only <text>] [--verbose]
+//              [--only <text>] [--verbose] [--dump <file>]
 //
 // Runtimes: `reactre-compat` is the default build, without class components; `+classes` is the
 // build with them (@reactre/compat/classes); `+compiler` compiles the scenarios' JSX to templates
@@ -18,7 +18,8 @@
 // build differs for any reason but rendering a class (those are listed as needing classes).
 // --only runs just the scenarios whose names contain one of its comma-separated texts.
 // --verbose prints the pages' console output and both full transcripts of each differing
-// scenario.
+// scenario. --dump writes React's transcripts to a file as JSON, to read what each scenario
+// records.
 
 import { join } from "node:path";
 
@@ -80,6 +81,8 @@ const NO_CLASSES = "this build leaves class support out";
 const verbose = args.includes("--verbose");
 /** Only the scenarios whose names contain one of these comma-separated texts. */
 const only = opt("--only");
+/** A file for React's transcripts. */
+const dump = opt("--dump");
 
 // #endregion
 
@@ -126,6 +129,7 @@ try {
 
   // React's transcripts are the expected ones.
   const want = await run(await bundle("page.tsx", "react"), ssr);
+  if (dump !== undefined) await Bun.write(dump, JSON.stringify(want, null, 2));
   const names = Object.keys(want);
   const summary: string[] = [];
   for (const rt of runtimes) {

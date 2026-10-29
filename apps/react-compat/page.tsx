@@ -8,6 +8,7 @@
 import { cases, type T } from "./cases.tsx";
 import { libraries1To25 } from "./libraries-1-25.tsx";
 import { libraries26To50 } from "./libraries-26-50.tsx";
+import { libraries51To75 } from "./libraries-51-75.tsx";
 
 declare global {
   interface Window {
@@ -30,7 +31,7 @@ const settle = async (): Promise<void> => {
 /** Runs each scenario on a fresh body and collects its transcript. */
 async function main(): Promise<void> {
   const results: Record<string, string[]> = {};
-  for (const [name, run] of Object.entries({ ...cases, ...libraries1To25, ...libraries26To50 })) {
+  for (const [name, run] of Object.entries({ ...cases, ...libraries1To25, ...libraries26To50, ...libraries51To75 })) {
     // run.ts --only: just the scenarios whose names contain one of the comma-separated texts.
     if (window.__only !== undefined && !window.__only.split(",").some((s) => name.includes(s))) continue;
     const out: string[] = (results[name] = []);
