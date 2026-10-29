@@ -2344,12 +2344,24 @@ describe("errors", () => {
     await reportsSame((L) => div(L, { __html: "x" }, "y"), 60);
     await reportsSame((L) => div(L, { __html: "x" }, L.createElement("b")), 60);
     await reportsSame((L) => L.createElement("my-el", { dangerouslySetInnerHTML: "x" }), 61);
-    // Checked when the prop changes: kept as it was, children may come and go. (React then writes
-    // the children's text over the HTML; compat keeps the HTML.)
+    // Checked when the prop changes: kept as it was, children may come and go, and text children
+    // that change are written over the HTML. The HTML is written again when its text changes.
     const kept = { __html: "<i>x</i>" };
     expect(
-      await rendersSame((L) => [div(L, kept), div(L, kept, "y"), div(L, { __html: "z" }, "y")], true),
-    ).toHaveLength(1);
+      await rendersSame((L) => [
+        div(L, kept),
+        div(L, kept, "y"),
+        div(L, kept, 5),
+        div(L, kept),
+        div(L, { __html: "<i>x</i>" }),
+        div(L, { __html: "<i>w</i>" }),
+        div(L, kept, L.createElement("b")),
+        div(L, kept, L.createElement("b"), "c"),
+        div(L, { __html: "z" }, "y"),
+      ]),
+    ).toHaveLength(3);
+    // Element children with the HTML kept: React leaves them to its reconciler, under the HTML.
+    expect(await rendersSame((L) => [div(L, kept), div(L, kept, L.createElement("b"))])).toEqual([]);
     expect(await rendersSame((L) => [div(L, { __html: "x" }), div(L, "y")])).toHaveLength(1);
     // No HTML (__html null or undefined): the children render.
     expect(

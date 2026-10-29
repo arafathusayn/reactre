@@ -1865,17 +1865,20 @@ function hoistable(f: Fiber, p: Any): boolean {
 function hostChildren(f: Fiber, dom: Any, p: Any, old: Props | null): void {
   const html = p["dangerouslySetInnerHTML"];
   if (html != null) {
+    const oh = old === null ? undefined : old["dangerouslySetInnerHTML"];
     // Checked as React's setProp checks it, when it changes; not on a claimed element, as
     // React's hydration checks nothing.
-    if ((old === null || html !== old["dangerouslySetInnerHTML"]) && !(f.f & CLAIMED)) checkHTML(f.t, html, p.children);
+    if (html !== oh && !(f.f & CLAIMED)) checkHTML(f.t, html, p.children);
     const s = html.__html;
     // With __html null or undefined there is no HTML: the children render.
     if (s != null) {
       if (f.c.length) removeAll(f);
-      if (old === null || old["dangerouslySetInnerHTML"]?.__html !== s || f.tx !== null) {
+      // As React's updateProperties: the HTML is written when its text changes, and text children
+      // that change while it is kept (so not checked against it) are written over it.
+      if (oh?.__html !== s) {
         // A claimed element keeps the server's HTML, as React's production client keeps it.
         if (!(f.f & CLAIMED)) dom.innerHTML = s;
-      }
+      } else if (html === oh && p.children !== old!["children"]) textOver(dom, p.children);
       f.tx = null;
       return;
     }
@@ -1913,6 +1916,15 @@ function hostChildren(f: Fiber, dom: Any, p: Any, old: Props | null): void {
   // content as text anyway, so element children (a fallback <style>, say) are left out.
   if (f.t === "noscript") return;
   reconcile(f, ch);
+}
+
+/** React's setProp for text children: a string or number replaces the element's content. */
+function textOver(dom: Any, ch: Any): void {
+  const t = typeof ch;
+  if (t !== "string" && t !== "number" && t !== "bigint") return;
+  const fc = dom.firstChild;
+  if (fc !== null && fc === dom.lastChild && fc.nodeType === 3) fc.data = "" + ch;
+  else dom.textContent = "" + ch;
 }
 
 /**
