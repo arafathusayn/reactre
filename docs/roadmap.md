@@ -11,7 +11,30 @@ What is left before reactre and reactre-compat are ready for real use, in rough 
 
 ## 1. Place both entries properly
 
-Run the seven-entry field to stable pools: at least 5 interleaved runs and at least 4 official-layout runs, each with a different `--shift`.
+The seven-entry field is measured: 5 interleaved runs (`--batch 3`) and 4 in the official layout, each with a different `--shift`. The logs are in [`apps/jfb/logs`](../apps/jfb/logs):
+
+```sh
+cd apps/jfb
+bun pool.ts logs/f7a.log logs/f7b.log logs/f7i*.log   # interleaved: 75 samples per test and entry
+bun pool.ts logs/f7o*.log                              # official layout: 60 samples per test and entry
+```
+
+| Entry          | Interleaved, 5 runs | Official layout, 4 runs | All 9 runs |
+| -------------- | ------------------: | ----------------------: | ---------: |
+| vanillajs-lite |         1.027 (1st) |             1.011 (1st) |      1.012 |
+| reactre        |         1.029 (2nd) |             1.029 (2nd) |      1.025 |
+| thane          |               1.033 |                   1.043 |      1.029 |
+| re             |               1.035 |                   1.038 |      1.032 |
+| doohtml-dp     |               1.051 |             1.058 (6th) |      1.047 |
+| reactre-compat |         1.055 (6th) |             1.067 (7th) |      1.057 |
+| vanillajs      |         1.071 (7th) |                   1.049 |      1.049 |
+
+- **reactre: done.** It is 2nd in both pools. Run by run it placed 2nd, 2nd, 3rd, 4th and 3rd interleaved, and 4th, 2nd, 1st and 2nd in the official layout.
+- **reactre-compat: not done.** It is 6th interleaved, ahead of vanillajs, but 7th in the official layout, 0.009 behind doohtml-dp. Run by run it ranged from 1st to 7th.
+
+These runs measured the runtime as it was first committed here. The compat fixes since (`3076c60`, `a26c208`) are not in them.
+
+After a runtime change, rerun both pools, keeping the machine otherwise idle and rerunning any run that overlapped other work:
 
 ```sh
 cd apps/jfb
@@ -22,7 +45,7 @@ bun pool.ts int-*.log
 bun pool.ts off-*.log
 ```
 
-Keep the machine otherwise idle, and rerun any run that overlapped other work.
+A seven-entry run takes about 2 hours.
 
 **Done when** both pools put reactre in the top 3 and reactre-compat ahead of at least one official entry, with the logs committed so the numbers can be checked.
 
@@ -33,11 +56,29 @@ Where reactre-compat loses is script time in the measured click, for two reasons
 - **React's semantics.** Selecting a row re-renders the list's parent and compares every memoized row, and events go through synthetic events and the update queue.
 - **V8 tiering.** Functions that run once per update reach V8's compile thresholds during the measured click.
 
-Not yet tried:
+In the official-layout pool, clear is most of the gap to doohtml-dp:
 
-- **Slimmer fibers.** A row fiber carries about 22 fields, several of them unused by rows (`rx`, `tx`, `hc`, `x`). Moving cold fields into a side object would cut per-row memory on create, replace, append and clear.
-- **No per-row state on DOM elements.** Rows carry two symbol expandos (`FIBER`, `OWN`). For the hand-written @reactre/dom app, an expando slowed native clearing by 5–7% (`apps/profiling/native-clear.ts`). Measure reactre-compat with and without them first: event dispatch walks `FIBER`, and placement uses `OWN`.
-- **Fewer distinct functions on the update path**, so less code tiers up during the click: for example `flushSoon` with `runMicro`, and `rerender` into `flushWork`.
+| Test (weight)  | reactre-compat | doohtml-dp |
+| -------------- | -------------: | ---------: |
+| clear (0.42)   |           1.13 |       1.04 |
+| select (0.19)  |           1.12 |       1.05 |
+| swap (0.13)    |           1.09 |       1.01 |
+| update (0.56)  |           1.07 |       1.05 |
+| replace (0.56) |           1.02 |       1.09 |
+
+Clear alone accounts for about 0.008 of the score. Select, swap and update add more, and replace, where compat is ahead, takes about as much back. Compat's clear script took 44 to 54 ms in the measured window, against about 42 for reactre and doohtml-dp. The native removal (`apps/profiling/native-clear.ts`) took 31.0 ms on compat's rows, 30.3 on reactre's and 27.1 on vanillajs's. So most of compat's extra time is around the removal, not in it.
+
+Tried, and not kept:
+
+- **One pass in `removeAll`**, instead of one loop that counts the list's nodes and another that marks its rows dead. An A/B on clear, 12 rounds of 8 samples, showed no difference: script 41.5 against 41.7 ms, 95% interval −2.4 to 1.8.
+- **Maglev.** With `--no-maglev`, compat's clear script fell from 44.3 to 40.2 ms. But `--trace-opt` and `--trace-deopt` showed none of the runtime's functions compiled or deoptimized inside the measured clear, so the effect comes from elsewhere, perhaps code compiled during the warmups. Not a lead yet.
+
+Next, in order:
+
+1. **No per-row state on DOM elements.** Rows carry two symbol expandos, `FIBER` and `OWN`. For the hand-written @reactre/dom app, an expando slowed native clearing by 5–7%. Measure a build without `FIBER` on keyed list rows (keeping `OWN`, which `place()` needs) with `native-clear.ts` and in the clear test. A first attempt, with the variant as a copied jfb entry, timed out waiting for rows on every run, and the cause was not found: run `native-clear.ts` on each entry alone first. If it closes the gap, event dispatch needs another way to find a row's fiber, such as scanning the list as reactre does.
+2. **Profile the clear window** against reactre's, event by event, and open the traces in DevTools to see what else runs in compat's click: `bun window.ts reactre-compat,reactre 09_clear1k_x8 20 --events --save`.
+3. **Slimmer fibers.** A row fiber carries about 22 fields, several of them unused by rows (`rx`, `tx`, `hc`, `x`). Moving cold fields into a side object would cut per-row memory on create, replace, append and clear.
+4. **Fewer distinct functions on the update path**, so less code tiers up during the click: for example `flushSoon` with `runMicro`, and `rerender` into `flushWork`.
 
 Already measured and rejected: building component elements through `jsx()`, a fragment in `place()`, `insertBefore` instead of `moveBefore`, turning off the inert template document, and skipping the per-event mark.
 

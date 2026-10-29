@@ -47,4 +47,8 @@ Keep the machine otherwise idle while measuring: builds, tests or a browser runn
 
 Set `CHROME` to a Chrome or Chromium executable, or it is looked for in the usual places. Results from a different Chrome version than the official run's can differ for every entry.
 
+## Logs
+
+[`logs`](logs) holds the runs behind the standings in the [roadmap](../../docs/roadmap.md): the seven-entry field, `f7a`, `f7b` and `f7i*` interleaved with `--batch 3`, and `f7o*` in the official layout. Pool them with `bun pool.ts logs/f7o*.log`, and likewise for the interleaved runs.
+
 Profiling and A/B tools that build on this runner live in [`apps/profiling`](../profiling).
