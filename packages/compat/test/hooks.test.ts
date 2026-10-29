@@ -131,6 +131,52 @@ describe("effects", () => {
     expect(log).toEqual(["child insertion cleanup 2"]);
   });
 
+  // React's mutation phase, per component and children first: insertion cleanups, insertion
+  // effects, then layout cleanups; layout effects run after every component's (verified against
+  // React in apps/react-compat's "insertion and layout effect order").
+  test("on an update, each component's layout cleanups run right after its insertion effects", () => {
+    const log: string[] = [];
+    function Child({ n }: { n: number }) {
+      useInsertionEffect(() => {
+        log.push("child insertion " + n);
+        return () => log.push("child insertion cleanup " + n);
+      });
+      useLayoutEffect(() => {
+        log.push("child layout " + n);
+        return () => log.push("child layout cleanup " + n);
+      });
+      return null;
+    }
+    function Parent({ n }: { n: number }) {
+      useLayoutEffect(() => {
+        log.push("parent layout " + n);
+        return () => log.push("parent layout cleanup " + n);
+      });
+      useInsertionEffect(() => {
+        log.push("parent insertion " + n);
+        return () => log.push("parent insertion cleanup " + n);
+      });
+      return [h(Child, { key: "a", n }), h(Child, { key: "b", n: n * 10 })];
+    }
+    render(h(Parent, { n: 1 }));
+    log.length = 0;
+    render(h(Parent, { n: 2 }));
+    expect(log).toEqual([
+      "child insertion cleanup 1",
+      "child insertion 2",
+      "child layout cleanup 1",
+      "child insertion cleanup 10",
+      "child insertion 20",
+      "child layout cleanup 10",
+      "parent insertion cleanup 1",
+      "parent insertion 2",
+      "parent layout cleanup 1",
+      "child layout 2",
+      "child layout 20",
+      "parent layout 2",
+    ]);
+  });
+
   test("an effect without deps runs after every render, [] once, and deps when one changes by Object.is", () => {
     const log: string[] = [];
     function App({ a }: { a: number }) {

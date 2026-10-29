@@ -36,6 +36,7 @@ import {
   useEffect,
   useId,
   useImperativeHandle,
+  useInsertionEffect,
   useLayoutEffect,
   useMemo,
   useOptimistic,
@@ -379,6 +380,44 @@ export const cases: Record<string, Case> = {
     await t.step("update");
     flushSync(() => r.render(<App n={2} show={false} />));
     await t.step("hide b");
+    r.unmount();
+    await t.step("unmount");
+  },
+
+  // Insertion effects and layout cleanups run per component in the mutation phase, children
+  // first; layout effects run after all of them.
+  async "insertion and layout effect order"(t) {
+    function Child({ n }: { n: number }) {
+      useInsertionEffect(() => {
+        t.log("child insertion", n);
+        return () => t.log("child insertion cleanup", n);
+      });
+      useLayoutEffect(() => {
+        t.log("child layout", n);
+        return () => t.log("child layout cleanup", n);
+      });
+      return <i>{n}</i>;
+    }
+    function Parent({ n }: { n: number }) {
+      useInsertionEffect(() => {
+        t.log("parent insertion", n);
+        return () => t.log("parent insertion cleanup", n);
+      });
+      useLayoutEffect(() => {
+        t.log("parent layout", n);
+        return () => t.log("parent layout cleanup", n);
+      });
+      return (
+        <div>
+          <Child n={n} />
+          <Child n={n * 10} />
+        </div>
+      );
+    }
+    const r = mount(t, <Parent n={1} />);
+    await t.step("mount");
+    flushSync(() => r.render(<Parent n={2} />));
+    await t.step("update");
     r.unmount();
     await t.step("unmount");
   },

@@ -4017,23 +4017,43 @@ function commitEffects(f: Fiber): void {
   f.x = null;
   // Hidden content runs its layout effects (level 1), or all of them (2), when it shows.
   const level = hiddenCount === 0 ? 0 : hiddenLevel(f);
+  // As React's mutation phase does for each component: insertion cleanups, then insertion effects
+  // (before any layout effect reads the DOM, React's order for CSS-in-JS), then layout cleanups.
+  // Layout and passive effects wait in their queues.
+  let insertions = false,
+    layouts = false;
   for (let i = 0; i < fx.length; i += 3) {
-    const h: Hook = fx[i],
-      deps = fx[i + 2];
+    const h: Hook = fx[i];
     h.c = fx[i + 1];
-    h.d = deps;
-    // Insertion effects run at once, before any layout effect reads the DOM (React's order for
-    // CSS-in-JS); the others wait in their queues.
+    h.d = fx[i + 2];
     if (h.k === INSERTION) {
+      insertions = true;
       if (h.x !== undefined) safely(f, h.x);
-      safely(f, () => {
-        const r = h.c();
-        h.x = typeof r === "function" ? r : undefined;
-      });
     } else if (h.k === LAYOUT) {
-      if (level === 0) layoutQ.push(h);
+      if (level === 0) {
+        layouts = true;
+        layoutQ.push(h);
+      }
     } else if (level < 2) passiveQ.push(h);
   }
+  if (insertions)
+    for (let i = 0; i < fx.length; i += 3) {
+      const h: Hook = fx[i];
+      if (h.k === INSERTION)
+        safely(f, () => {
+          const r = h.c();
+          h.x = typeof r === "function" ? r : undefined;
+        });
+    }
+  if (layouts)
+    for (let i = 0; i < fx.length; i += 3) {
+      const h: Hook = fx[i];
+      if (h.k === LAYOUT && h.x !== undefined) {
+        const x = h.x;
+        h.x = undefined;
+        safely(f, x);
+      }
+    }
 }
 
 // #endregion
