@@ -25,6 +25,7 @@ import {
   forwardRef,
   Fragment,
   hydrateRoot,
+  isValidElement,
   lazy,
   memo,
   Profiler,
@@ -225,12 +226,22 @@ describe("element types", () => {
     expect(container.firstChild).toBe(i);
   });
 
-  test("an invalid element type is an error naming what it got", () => {
-    render(h("div", null, h(undefined as never)));
-    render(h("div", null, h({} as never)));
+  test("an invalid element type is an error naming what it got, with React's hints", () => {
+    const B = () => null;
+    for (const type of [undefined, {}, [], null, 5, h("b"), h(B)]) render(h("div", null, h(type as never)));
+    const invalid =
+      "Element type is invalid: expected a string (for built-in components) or a class/function (for composite components) but got: ";
+    const forgot =
+      " You likely forgot to export your component from the file it's defined in, or you might have mixed up default and named imports.";
+    const literal = " Did you accidentally export a JSX literal instead of a component?";
     expect(uncaught.map((e) => (e as Error).message)).toEqual([
-      expect.stringMatching(/^Element type is invalid: expected a string .*but got: undefined\./),
-      expect.stringMatching(/^Element type is invalid: expected a string .*but got: object\./),
+      invalid + "undefined." + forgot,
+      invalid + "object." + forgot,
+      invalid + "array." + forgot,
+      invalid + "null.",
+      invalid + "number.",
+      invalid + "<b />." + literal,
+      invalid + "<B />." + literal,
     ]);
     expect(html()).toBe("");
   });
@@ -350,6 +361,22 @@ describe("children of every shape", () => {
   test("a pending promise child suspends to the nearest boundary", () => {
     render(h(Suspense, { fallback: "loading" }, h("p", null, "a", new Promise(() => {}))));
     expect(html()).toBe("loading");
+  });
+
+  test("an element from React 18 or older is an error, as React 19 renders none", () => {
+    const old = { $$typeof: Symbol.for("react.element"), type: "b", key: null, ref: null, props: {} };
+    expect(isValidElement(old)).toBe(false);
+    render(h("p", null, old));
+    expect((uncaught[0] as Error).message).toBe(
+      'A React Element from an older version of React was rendered. This is not supported. It can happen if:\n- Multiple copies of the "react" package is used.\n- A library pre-bundled an old copy of "react" or "react/jsx-runtime".\n- A compiler tries to "inline" JSX instead of using the runtime.',
+    );
+  });
+
+  test("an object of another class is named by its tag", () => {
+    render(h("p", null, new Date(0)));
+    expect((uncaught[0] as Error).message).toBe(
+      "Objects are not valid as a React child (found: [object Date]). If you meant to render a collection of children, use an array instead.",
+    );
   });
 
   test("an object that is not an element is an error listing its keys", () => {

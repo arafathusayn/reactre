@@ -26,6 +26,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Fixed: a `<title>` rendered anywhere goes into `<head>` before the titles already there, as React places it, so the newest one sets the document's title (react-helmet-async's nested titles).
 - Fixed: a new `<img>` gets `srcSet` and `src` after its other props, as React sets them, so attributes such as `sizes` and `loading` apply before the image is requested (react-image-crop's markup).
 - Fixed: class components: `setState` in `componentWillMount` applies before the first render with no second render after it, and a class with a `getSnapshotBeforeUpdate` method gets no `componentWillMount` call, as in React.
+- Fixed: an element made by React 18 or older (`react.element`) is not a valid element and throws React 19's error when rendered. React's messages and hints are used for an invalid element type, and an object of another class rendered as a child is named by its tag, such as `[object Date]`.
 - Fixed: events follow react-dom's rules:
   - `onChangeCapture` runs in the bubble phase with `onChange`, after the other bubble handlers.
   - `onChange` fires only for text fields (React's list of input types), checkboxes, radios, selects, file inputs and custom elements. A `change` event on a text field fires it when the value moved.

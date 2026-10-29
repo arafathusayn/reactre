@@ -89,9 +89,9 @@ describe("creating elements", () => {
     expect(cloneElement(nullType, { x: undefined }).props).toEqual({ x: undefined });
   });
 
-  test("isValidElement accepts React 19's and React 18's element tags only", () => {
+  test("isValidElement accepts React 19's element tag only, as React 19's does", () => {
     expect(isValidElement(h("a"))).toBe(true);
-    expect(isValidElement({ $$typeof: Symbol.for("react.element") })).toBe(true);
+    expect(isValidElement({ $$typeof: Symbol.for("react.element") })).toBe(false);
     expect(isValidElement({ $$typeof: Symbol.for("other") })).toBe(false);
     expect(isValidElement(null)).toBe(false);
     expect(isValidElement("a")).toBe(false);

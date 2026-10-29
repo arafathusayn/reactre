@@ -211,11 +211,9 @@ export function cloneElement(el: ReactElement, config?: Props | null, ...childre
   return element(el.type, key, props);
 }
 
-/** Whether `o` is a React element, including one made by React 18's `react.element` tag. */
+/** Whether `o` is a React element. One made by React 18 or older (`react.element`) is not. */
 export function isValidElement(o: unknown): o is ReactElement {
-  return (
-    typeof o === "object" && o !== null && ((o as Any).$$typeof === ELEMENT || (o as Any).$$typeof === LEGACY_ELEMENT)
-  );
+  return typeof o === "object" && o !== null && (o as Any).$$typeof === ELEMENT;
 }
 
 // #endregion
@@ -610,9 +608,74 @@ function kindOf(type: Any): number {
       }
     }
   }
-  throw new Error(
-    `Element type is invalid: expected a string or a class/function but got: ${type === null ? "null" : typeof type}.`,
+  throw new Error(invalidType(type));
+}
+
+/** React's message for an element type it cannot render, with its hints. */
+function invalidType(type: Any): string {
+  let got: string,
+    hint =
+      type === undefined || (typeof type === "object" && type !== null && Object.keys(type).length === 0)
+        ? " You likely forgot to export your component from the file it's defined in, or you might have mixed up default and named imports."
+        : "";
+  if (type === null) got = "null";
+  else if (Array.isArray(type)) got = "array";
+  else if (type !== undefined && type.$$typeof === ELEMENT) {
+    got = "<" + (nameOfType(type.type) || "Unknown") + " />";
+    hint = " Did you accidentally export a JSX literal instead of a component?";
+  } else got = typeof type;
+  return (
+    "Element type is invalid: expected a string (for built-in components) or a class/function (for composite components) but got: " +
+    got +
+    "." +
+    hint
   );
+}
+
+/** A component type's name, as React's getComponentNameFromType gives it. */
+function nameOfType(type: Any): string | null {
+  if (type == null) return null;
+  if (typeof type === "function") return type.displayName || type.name || null;
+  if (typeof type === "string") return type;
+  switch (type) {
+    case Fragment:
+      return "Fragment";
+    case Profiler:
+      return "Profiler";
+    case StrictMode:
+      return "StrictMode";
+    case Suspense:
+      return "Suspense";
+    case SuspenseList:
+      return "SuspenseList";
+    case Activity:
+      return "Activity";
+    case ViewTransition:
+      return "ViewTransition";
+  }
+  if (typeof type === "object")
+    switch (type.$$typeof) {
+      case PORTAL_TYPE:
+        return "Portal";
+      case CONTEXT_TYPE:
+        return type.displayName || "Context";
+      case CONSUMER_TYPE:
+        return (type._context.displayName || "Context") + ".Consumer";
+      case FORWARD_TYPE: {
+        if (type.displayName) return type.displayName;
+        const inner = type.render.displayName || type.render.name || "";
+        return inner !== "" ? "ForwardRef(" + inner + ")" : "ForwardRef";
+      }
+      case MEMO_TYPE:
+        return type.displayName || nameOfType(type.type) || "Memo";
+      case LAZY_TYPE:
+        try {
+          return nameOfType(type._init(type._payload));
+        } catch {
+          return null;
+        }
+    }
+  return null;
 }
 
 // The type create() last saw, and what it is: its fiber kind and, for a function, its memo
@@ -1190,7 +1253,7 @@ function create(it: Any, p: Fiber, key: Key): Fiber {
   }
   // Elements first: a list mount creates one per row.
   const tt = it.$$typeof;
-  if (tt === ELEMENT || tt === LEGACY_ELEMENT) {
+  if (tt === ELEMENT) {
     // A block mounts as a template, except while hydrating: then it is the
     // host element it describes, so it claims the server's nodes.
     const tpl = it[TPL];
@@ -1219,8 +1282,13 @@ function create(it: Any, p: Fiber, key: Key): Fiber {
     f.p = it;
     f.d = it.containerInfo;
   } else {
+    if (tt === LEGACY_ELEMENT)
+      throw new Error(
+        'A React Element from an older version of React was rendered. This is not supported. It can happen if:\n- Multiple copies of the "react" package is used.\n- A library pre-bundled an old copy of "react" or "react/jsx-runtime".\n- A compiler tries to "inline" JSX instead of using the runtime.',
+      );
+    const tag = Object.prototype.toString.call(it);
     throw new Error(
-      `Objects are not valid as a React child (found: object with keys {${Object.keys(it).join(", ")}}). If you meant to render a collection of children, use an array instead.`,
+      `Objects are not valid as a React child (found: ${tag === "[object Object]" ? `object with keys {${Object.keys(it).join(", ")}}` : tag}). If you meant to render a collection of children, use an array instead.`,
     );
   }
   try {
