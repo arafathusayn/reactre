@@ -747,6 +747,34 @@ describe("updates that suspend", () => {
       snap("task");
     }));
 
+  test("an urgent update to the value a state has while a transition waits renders the component, and not its children", () =>
+    same(async ({ L, log, root, flushSync, snap, task }) => {
+      const d = data();
+      await d.ready("a");
+      let set: Any;
+      const Child = logs(L, log, "Child", ({ v }) => "child " + v);
+      const Page = logs(L, log, "Page", ({ k }) => d.read(L, k));
+      const App = logs(L, log, "App", () => {
+        const [k, s] = L.useState("a");
+        set = s;
+        return L.createElement(
+          "div",
+          null,
+          L.createElement(Child, { v: k }),
+          L.createElement(L.Suspense, { fallback: "loading" }, L.createElement(Page, { k })),
+        );
+      });
+      flushSync(() => root.render(L.createElement(App)));
+      // Waits for "b"'s data.
+      L.startTransition(() => set("b"));
+      await task();
+      snap("waiting");
+      flushSync(() => set("a"));
+      snap("urgent");
+      await task();
+      snap("task");
+    }));
+
   test("what a transition renders around content that suspends in a shown boundary", () =>
     same(async ({ L, log, root, flushSync, snap, task }) => {
       const d = data();

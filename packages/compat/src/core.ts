@@ -3886,7 +3886,9 @@ const HYDRATION = {
   id: treeId,
   store: storeSnapshot,
   listen: (r: RootImpl): void => {
-    beforeRender = selective;
+    // Behind bail renders waiting for the next flush (see laneSame), if any.
+    if (beforeRender === runBails) bailNext = selective;
+    else beforeRender = selective;
     listenForReplay(r);
   },
   /** Whether an event's target is in content of root `r` that has not hydrated. */
@@ -6467,7 +6469,10 @@ export function useReducer<S, A>(
       // With ./features/concurrent.ts, an update made in a transition waits for it.
       if (lanes !== null && f !== cur && lanes.set(h, a)) return;
       const next = h.r(h.v, a);
-      if (Object.is(next, h.v)) return;
+      if (Object.is(next, h.v)) {
+        if (lanes !== null && f !== cur) lanes.same(h, f);
+        return;
+      }
       h.v = next;
       // Set during its own render: runFunc runs the component again before its children.
       if (f === cur) f.f |= RERENDER;
@@ -7123,6 +7128,8 @@ interface Lanes {
    * an urgent update to state a transition waits to change, which that transition replays.
    */
   set(h: Hook, a: Any): boolean;
+  /** A state update to the value hook `h` (on fiber f) has: React renders f if a transition waits to change it. */
+  same(h: Hook, f: Fiber): void;
   /** root.render(): true when made in a transition, which renders it. */
   root(r: RootImpl, children: Any): boolean;
   /** A class's setState or forceUpdate (`fn`, on fiber f): true when made in a transition, which runs it. */
@@ -7304,6 +7311,33 @@ function laneSet(h: Hook, a: Any): boolean {
   p.u.push(a, b);
   b.h.add(h);
   return true;
+}
+
+/**
+ * An urgent update to the value state `h` has, while a transition waits to change it: React
+ * renders its component, which bails out, in the urgent render. Fiber f is queued without an
+ * update of its own; the flush renders it first (runBails), unless an update renders it anyway.
+ */
+function laneSame(h: Hook, f: Fiber): void {
+  if (!pend.has(h) || f.f & DIRTY) return;
+  schedule(f);
+  f.f &= ~DIRTY;
+  if (bails === null) {
+    bails = new Set();
+    bailNext = beforeRender;
+    beforeRender = runBails;
+  }
+  bails.add(f);
+}
+let bails: Set<Fiber> | null = null,
+  bailNext: ((q: Fiber[]) => void) | null = null;
+
+function runBails(q: Fiber[]): void {
+  const b = bails!;
+  bails = null;
+  beforeRender = bailNext;
+  for (const f of b) if (!(f.f & (DIRTY | DEAD))) bailRender(f);
+  if (beforeRender !== null) beforeRender(q);
 }
 
 /** Move batch `b`'s updates into `into`, which renders them; `into` is open for this event now. */
@@ -8097,6 +8131,7 @@ export function __installConcurrent(): void {
   pend ??= new Map();
   lanes ??= {
     set: laneSet,
+    same: laneSame,
     root: laneRoot,
     later: laneLater,
     defer: laneDefer,
