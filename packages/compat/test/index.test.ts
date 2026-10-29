@@ -5,7 +5,8 @@
 //
 // Covered here: keyed reconciliation and its DOM operation counts, batching and flushSync,
 // context through memo, effect order, event bubbling, compiled blocks hosted by components, list
-// updates from a compiled loop's report (__delta), and memo bailouts in lists.
+// updates from a compiled loop's report (__delta), memo bailouts in lists, lazy initial state, and
+// Suspense's reveal throttle.
 
 import { beforeEach, describe, expect, test } from "bun:test";
 
@@ -21,6 +22,7 @@ import {
   flushSync,
   memo,
   type Root,
+  Suspense,
   useContext,
   useEffect,
   useLayoutEffect,
@@ -691,5 +693,55 @@ describe("holes next to text", () => {
     expect(html()).toBe("<p>a</p>");
     render(h("p", null, [null, null, "c"]));
     expect(html()).toBe("<p>c</p>");
+  });
+});
+
+describe("hooks", () => {
+  test("a lazy initial state is called with no arguments, as React calls it", () => {
+    let args = -1;
+    function App() {
+      const [n] = useState((...a: unknown[]) => ((args = a.length), 1));
+      return h("p", null, n);
+    }
+    render(h(App));
+    expect(args).toBe(0);
+    expect(html()).toBe("<p>1</p>");
+  });
+});
+
+describe("suspense", () => {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  /** Renders a boundary whose child suspends until `resolve` is called; `settled` follows it. */
+  function suspend(): { resolve: () => void; settled: Promise<void> } {
+    let resolve!: () => void;
+    let ready = false;
+    const settled = new Promise<void>((r) => (resolve = r)).then(() => void (ready = true));
+    function Data() {
+      if (!ready) throw settled;
+      return h("b", null, "ready");
+    }
+    render(h(Suspense, { fallback: h("i", null, "loading") }, h(Data)));
+    return { resolve, settled };
+  }
+
+  test("content a settled promise reveals waits until 300 ms after the fallback appeared", async () => {
+    const { resolve, settled } = suspend();
+    const shown = performance.now();
+    expect(html()).toBe("<i>loading</i>");
+    resolve();
+    await settled;
+    await sleep(50);
+    expect(html()).toBe("<i>loading</i>");
+    await sleep(shown + 320 - performance.now());
+    expect(html()).toBe("<b>ready</b>");
+  });
+
+  test("content revealed 300 ms or more after the fallback shows at once", async () => {
+    const { resolve, settled } = suspend();
+    await sleep(310);
+    resolve();
+    await settled;
+    await sleep(0);
+    expect(html()).toBe("<b>ready</b>");
   });
 });
