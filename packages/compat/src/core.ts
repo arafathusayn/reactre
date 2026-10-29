@@ -4447,12 +4447,15 @@ export function __installStacks(make: (core: StackCore) => StackSupport): void {
     LAZY,
     SLOT,
     outside(fn) {
-      const prev = cur;
+      const prev = cur,
+        prevProbing = probing;
       cur = null;
+      probing = true;
       try {
         return fn();
       } finally {
         cur = prev;
+        probing = prevProbing;
       }
     },
   });
@@ -6665,8 +6668,12 @@ function readThenable(t: Any): Any {
  */
 export function use<T>(usable: PromiseLike<T> | Context<T>): T {
   if (usable !== null && typeof usable === "object") {
-    if (typeof (usable as Any).then === "function")
+    if (typeof (usable as Any).then === "function") {
+      // The stack probe calls a component without props where React's client has no
+      // dispatcher: use() throws, so the component's frame is its line (see outside).
+      if (probing) throw new TypeError("Cannot read properties of null (reading 'use')");
       return readThenable(server !== null ? server.thenable(usable) : usable);
+    }
     const tt = (usable as Any).$$typeof;
     if (tt === RECOVERABLE_TYPE) {
       // A server render leaves the nearest boundary to the client.
@@ -6680,6 +6687,9 @@ export function use<T>(usable: PromiseLike<T> | Context<T>): T {
   }
   throw new Error(prodMessage(438, String(usable)));
 }
+
+// While a component stack's probe calls a component without props (StackCore.outside).
+let probing = false;
 
 // The $$typeof of a browser() token.
 const RECOVERABLE_TYPE = Symbol.for("react.recoverable");

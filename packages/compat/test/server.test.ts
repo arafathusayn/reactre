@@ -3067,6 +3067,16 @@ describe("component stacks", () => {
       };
       return L.createElement(L.Suspense, { fallback: "f" }, L.createElement("b", null, L.createElement(Late)));
     });
+    // Called without props, as the probe calls it, Gate's first hook is use() of a promise that is
+    // not settled: React's server throws there (its #460), so the frame is that line.
+    await sameInfos((L) => {
+      const ready = Object.assign(Promise.resolve("v"), { status: "fulfilled", value: "v" });
+      const Gate = (p: Any): never => {
+        L.use(p.data ?? new Promise(() => {}));
+        throw new Error("gated");
+      };
+      return L.createElement("i", null, L.createElement(Gate, { data: ready }));
+    });
     await sameInfos((L) => {
       const Boom = (): never => {
         throw new Error("fatal");

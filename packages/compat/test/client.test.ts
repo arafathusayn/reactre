@@ -493,6 +493,25 @@ describe("component stacks", () => {
     expect(stacks[0]).toMatch(/at Titled \(.*client\.test\.ts:\d+:\d+\)/);
   });
 
+  test("a component whose first hook is use() of a promise has its frame, where use() throws", async () => {
+    const stacks = await reports((L) => {
+      const h = L.createElement;
+      const ready = Object.assign(Promise.resolve("v"), { status: "fulfilled", value: "v" });
+      // Without props, as the probe calls them: React's use() throws outside a render, settled
+      // or not.
+      function Settled() {
+        return h("b", null, L.use(ready), h(Boom));
+      }
+      function Pending(p: Any) {
+        L.use(p.data ?? new Promise(() => {}));
+        return h(Settled);
+      }
+      return h(Pending, { data: ready });
+    });
+    expect(stacks[0]).toMatch(/at Settled \(.*client\.test\.ts:\d+:\d+\)/);
+    expect(stacks[0]).toMatch(/at Pending \(.*client\.test\.ts:\d+:\d+\)/);
+  });
+
   test("a stack trace too short to reach the probe gives the component's name alone, as React's", async () => {
     const limit = Error.stackTraceLimit;
     Error.stackTraceLimit = 1;
