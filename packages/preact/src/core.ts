@@ -17,4 +17,5 @@ export {
   toChildArray,
 } from "./engine.ts";
 export { hydrate, render } from "./claim.ts";
+export { html } from "./html.ts";
 export * from "./hooks.ts";

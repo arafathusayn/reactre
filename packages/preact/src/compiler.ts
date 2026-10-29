@@ -29,6 +29,8 @@
 import { isIdent, literal, NOT_LITERAL, skipToken, split, until } from "@reactre/compiler/scan";
 import type { BunPlugin } from "bun";
 
+import { BAIL_PROPS, BAIL_TAGS, reactName, reactValue, UNCLONED } from "./rules.ts";
+
 // #region Plugin
 
 /** Options for the plugin. */
@@ -77,35 +79,9 @@ export function compileSource(source: string, loader: "jsx" | "tsx" = "tsx", opt
 
 // #endregion
 
-// #region What stays a jsx call
-
-// Form fields (value and checked are written after their children, against the live DOM),
-// templates (their children live in .content) and noscript (compat drops its children).
-const BAIL_TAGS = new Set(["input", "textarea", "select", "option", "progress", "template", "noscript"]);
-// Props with a behavior of their own in Preact's element diff, or none in a template.
-const BAIL_PROPS = new Set([
-  "ref",
-  "key",
-  "dangerouslySetInnerHTML",
-  "is",
-  "value",
-  "checked",
-  "defaultValue",
-  "defaultChecked",
-]);
-// DOM properties with no attribute behind them: set on a template's prototype, a clone would not
-// carry them, so a literal value for one is a hole, written on each use.
-const UNCLONED = new Set(
-  "muted volume playbackRate defaultPlaybackRate currentTime srcObject scrollTop scrollLeft indeterminate selectedIndex innerText outerHTML outerText nodeValue".split(
-    " ",
-  ),
-);
-
-// #endregion
-
 // #region Compiling
 
-/** A template description: [tag, props (a hole is { h: index }) or 0, ...children]. */
+/** A template description: [tag, props (a hole is [index]) or 0, ...children]. */
 type Desc = [string, Record<string, unknown> | 0, ...(string | number | Desc)[]];
 
 /** One jsx call: its helper's local name, whether it is jsxs, and its arguments as source. */
@@ -268,30 +244,6 @@ class Compiler {
     if (close !== src.length - 1) return null;
     return { helper: m[1]!, multi: this.helpers.get(m[1]!)!, args: split(src, m[0].length, close) };
   }
-}
-
-// What compat's vnode hook (src/compat.ts) does to a host element's props, done here for a template's.
-const CAMEL_PROPS =
-  /^(?:accent|alignment|arabic|baseline|cap|clip(?!PathU)|color|dominant|fill|flood|font|glyph(?!R)|horiz|image(?!S)|letter|lighting|marker(?!H|W|U)|overline|paint|pointer|shape|stop|strikethrough|stroke|text(?!L)|transform|underline|unicode|units|v|vector|vert|word|writing|x(?!C))[A-Z]/;
-
-/** A React prop name as compat renames it on an element that is not a form field. */
-function reactName(i: string): string {
-  if (i === "className") return "class";
-  if (i[0] === "o" && i[1] === "n") {
-    const l = i.toLowerCase();
-    if (l === "ondoubleclick") return "ondblclick";
-    if (l === "onfocus") return "onfocusin";
-    if (l === "onblur") return "onfocusout";
-    return l === "oninput" ? l : i;
-  }
-  return CAMEL_PROPS.test(i) ? i.replace(/[A-Z0-9]/g, "-$&").toLowerCase() : i;
-}
-
-/** A literal prop value as compat writes it; null is no prop, except on an event. */
-function reactValue(name: string, v: unknown): unknown {
-  if (name === "download" && v === true) return "";
-  if (name === "translate" && v === "no") return false;
-  return v === null && !(name[0] === "o" && name[1] === "n") ? undefined : v;
 }
 
 /** Whether a child expression renders nothing: null, undefined or a boolean literal. */

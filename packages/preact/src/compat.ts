@@ -714,6 +714,8 @@ export {
 };
 
 export { __block, __template } from "./block.ts";
+// The `html` tag with React's prop names.
+export { reactHtml as html } from "./html.ts";
 export { jsx, jsxDEV, jsxs } from "./jsx-runtime.ts";
 
 /** React's default export: `import React from "react"`. */
