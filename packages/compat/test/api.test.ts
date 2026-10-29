@@ -75,7 +75,13 @@ describe("API manifest", () => {
   test("SuspenseList is not exported, as React 19.3.1's stable react does not export it", async () => {
     // Through a variable, so the type check does not look for React's types.
     const specifier = "react";
+    // React's production build, as the files that render with React load it: whichever file
+    // loads react first in the process sets the build every later file gets.
+    const prevEnv = process.env["NODE_ENV"];
+    process.env["NODE_ENV"] = "production";
     const R = (await import(specifier)) as Record<string, unknown>;
+    if (prevEnv === undefined) delete process.env["NODE_ENV"];
+    else process.env["NODE_ENV"] = prevEnv;
     for (const k of ["SuspenseList", "unstable_SuspenseList"]) {
       expect(k in R).toBe(false);
       expect(k in Core).toBe(false);
