@@ -278,8 +278,14 @@ export class FakeEvent {
   cancelBubble = false;
   /** Set by stopImmediatePropagation: no further listener runs, on this element or any other. */
   stoppedNow = false;
-  constructor(type: string) {
+  /** A pointer event's pointer, and a mouse event's other element: what an init can give. */
+  pointerId?: number;
+  relatedTarget?: FakeNode | null;
+  /** As the DOM's: `init` gives the members an event of its kind takes (a dispatched event will do). */
+  constructor(type: string, init?: { pointerId?: number; relatedTarget?: FakeNode | null }) {
     this.type = type;
+    if (init?.pointerId !== undefined) this.pointerId = init.pointerId;
+    if (init?.relatedTarget !== undefined) this.relatedTarget = init.relatedTarget;
   }
   stopPropagation(): void {
     this.cancelBubble = true;

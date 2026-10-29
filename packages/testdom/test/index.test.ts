@@ -133,4 +133,13 @@ describe("events", () => {
     d!.dispatchEvent(new FakeEvent("x"));
     expect(log).toEqual(["a", "b1", "b2", "d1"]);
   });
+
+  test("an event made from another takes its pointer and related element, and nothing of its dispatch", () => {
+    const [a] = chain("A");
+    const first = new FakeEvent("pointerover", { pointerId: 3, relatedTarget: a! });
+    a!.dispatchEvent(first);
+    const copy = new FakeEvent(first.type, first);
+    expect([copy.pointerId, copy.relatedTarget, copy.target, copy.eventPhase]).toEqual([3, a!, null, 0]);
+    expect(new FakeEvent("x").pointerId).toBeUndefined();
+  });
 });

@@ -82,7 +82,7 @@ class Ev extends FakeEvent {
   readonly bubbles: boolean;
   readonly cancelable: boolean;
   defaultPrevented = false;
-  relatedTarget: FakeNode | null;
+  override relatedTarget: FakeNode | null;
   constructor(type: string, init: { bubbles?: boolean; cancelable?: boolean; relatedTarget?: FakeNode | null } = {}) {
     super(type);
     this.bubbles = init.bubbles ?? true;
