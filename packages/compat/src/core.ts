@@ -2934,8 +2934,8 @@ function blockHandlers(f: Fiber, prop: string, from: Any, out: Any[]): void {
 // (see pass), and the boundary recovers on its own from what goes wrong inside it. Boundaries the
 // server could not finish render on the client in a pass of their own first; then each pass
 // hydrates the boundaries the last one left, nested ones in the next. A discrete event inside a
-// dehydrated boundary hydrates it first (see replay), and an update that reaches one hydrates it
-// as it renders it. A whole document that renders on the client keeps its <html>, <head> and
+// dehydrated boundary hydrates it first (see replay), a continuous one waits for its target (see
+// keep), and an update that reaches one hydrates it first (see selective). A whole document that renders on the client keeps its <html>, <head> and
 // <body>, as React's singletons do (see adopt). All of it is in HYDRATION, which only hydrateRoot
 // reaches.
 
@@ -3182,6 +3182,8 @@ interface Dehydrated {
   s: Any;
   k: Any[];
   w: boolean;
+  /** Whether a continuous event waits for it: it hydrates before other boundaries. */
+  u?: boolean;
 }
 
 // The boundaries left dehydrated, in the order hydration met them.
@@ -3194,9 +3196,50 @@ let dehydrated: Fiber[] = [];
  */
 function boundaryHydration(f: Fiber): void {
   if (hydrating && curHost.f & CLAIMED) dehydrate(f);
-  else if (f.hc !== null) hydrateBoundary(f);
-  else if (f.n === SUSPENSE) suspense(f);
-  else activity(f);
+  else if (f.hc === null) {
+    if (f.n === SUSPENSE) suspense(f);
+    else activity(f);
+  } else if (passing || f.hc.s === null) hydrateBoundary(f);
+  // An update reached it, and could not hydrate it first (see selective): as React's
+  // retrySuspenseComponentWithoutHydrating, it renders on the client, the server's nodes going.
+  else clientRender(f);
+}
+
+// While a pass renders: a dehydrated boundary it renders hydrates.
+let passing = false;
+
+/**
+ * Before updates render: the boundaries still dehydrated below the fibers in `q` (about to render
+ * again), hydrated first with the props and context they had, in a commit of their own, as
+ * React's updateDehydratedSuspenseComponent schedules their hydration at a higher priority than
+ * the update and renders the update after. One that cannot hydrate yet (its content suspends, or
+ * the server has not finished it) renders on the client when the update reaches it.
+ */
+function selective(q: Fiber[]): void {
+  const tried: Fiber[] = [];
+  for (;;) {
+    let r: RootImpl | null = null;
+    const list: Fiber[] = [];
+    for (let i = 0; i < dehydrated.length; i++) {
+      const b = dehydrated[i]!,
+        st: Dehydrated = b.hc;
+      // Content that suspended is tried again; a boundary the server has yet to finish is not.
+      if (st === null || st.s === null || b.f & DEAD || tried.includes(b)) continue;
+      if (!st.w && st.s.data !== "$" && st.s.data !== "&") continue;
+      let p = b.r;
+      while (p !== null && !((p.f & (DIRTY | DEAD)) === DIRTY && q.includes(p))) p = p.r;
+      if (p === null) continue;
+      // One at a time, outermost first: React hydrates each in a commit of its own.
+      r = b.o;
+      list.push(b);
+      tried.push(b);
+      break;
+    }
+    if (r === null) return;
+    runPass(r, list, true);
+    flushLayout();
+    flushPassive();
+  }
 }
 
 /**
@@ -3398,8 +3441,11 @@ function pass(): void {
   dehydrated = dehydrated.filter((f) => f.hc !== null && !(f.f & DEAD));
   const due = dehydrated.filter((f) => f.hc.w);
   if (due.length === 0) return;
-  const r = due[0]!.o;
-  let list = due.filter((f) => f.o === r && unfinished(f.hc.s));
+  // A boundary a continuous event waits for first, as React hydrates it at that event's priority.
+  const urgent = due.filter((f) => f.hc.u),
+    r = (urgent[0] ?? due[0]!).o;
+  let list = urgent.filter((f) => f.o === r);
+  if (list.length === 0) list = due.filter((f) => f.o === r && unfinished(f.hc.s));
   if (list.length === 0) list = due.filter((f) => f.o === r);
   runPass(r, list, false);
   if (dehydrated.some((f) => f.hc !== null && f.hc.w)) post();
@@ -3416,8 +3462,9 @@ function runPass(r: RootImpl, list: Fiber[], sync: boolean): void {
     ph = curHost,
     pn = curNs,
     hosts: Fiber[] = [];
+  const was = flushing;
   routed = false;
-  flushing = true;
+  flushing = passing = true;
   try {
     flushLayout();
     flushPassive();
@@ -3443,12 +3490,14 @@ function runPass(r: RootImpl, list: Fiber[], sync: boolean): void {
   } finally {
     curHost = ph;
     curNs = pn;
-    flushing = false;
+    flushing = was;
+    passing = false;
   }
   const errors = hydrationErrors;
   hydrationErrors = null;
   if (errors !== null && !routed && failures === before) report(r.f, errors);
   flushWork(sync);
+  replayKept();
   release(r);
 }
 
@@ -3474,7 +3523,8 @@ function release(r: RootImpl): void {
   const i = replays.indexOf(r);
   if (i < 0) return;
   for (const t of REPLAYED.split(" ")) r.f.d.removeEventListener(t, replays[i + 1], true);
-  replays.splice(i, 2);
+  for (const t of KEPT.split(" ")) r.f.d.removeEventListener(t, replays[i + 2], true);
+  replays.splice(i, 3);
 }
 
 /** Start hydrating root fiber `f`: its cursor at the container's first node. */
@@ -3531,7 +3581,15 @@ function hydrateDone(f: Fiber, thrown: Any): Any {
     } catch (e) {
       thrown = e;
     }
-    if (html !== null) {
+    if (thrown !== null && !isThenable(thrown) && d.nodeType === 9) {
+      // The client render failed too: the root unmounts, and the document keeps its singletons,
+      // emptied, as React releases them.
+      for (let i = 0, xs = f.c; i < xs.length; i++) unmount(xs[i]!, false);
+      f.c = NO_FIBERS;
+      // No one's now: the root's placing leaves it be.
+      if (html !== null) html[OWN] = null;
+      sparingly(d);
+    } else if (html !== null) {
       const top: Node[] = [];
       for (let i = 0, xs = f.c; i < xs.length; i++) collect(xs[i]!, top);
       for (const n of top) if (n.nodeName === "HTML") adopt(n, html);
@@ -3541,6 +3599,7 @@ function hydrateDone(f: Fiber, thrown: Any): Any {
   hydrationErrors = null;
   // A root that fails for good reports its error alone, as React's does.
   if (errors !== null && (thrown === null || isThenable(thrown)) && failures === failedBefore) report(f, errors);
+  replayKept();
   release(f.o);
   if (dehydrated.length !== 0) post();
   return thrown;
@@ -3607,8 +3666,67 @@ const REPLAYED =
   "dragstart drop compositionend compositionstart keydown keypress keyup input textInput copy cut paste click change " +
   "contextmenu reset";
 
-// Each hydrating root and its replay listener, in pairs, until the root releases.
+// Each hydrating root and its replay listeners (discrete, continuous), in threes, until the root
+// releases.
 const replays: Any[] = [];
+
+// The continuous events React keeps while their target has not hydrated, the latest of each kind
+// (its queueIfContinuousEvent), then the events that drop the one kept of their kind: focus, drag
+// and mouse, and pointer and pointer capture for each pointer.
+const KEPT =
+  "focusin dragenter mouseover pointerover gotpointercapture focusout dragleave mouseout pointerout lostpointercapture";
+
+// The continuous events kept, by kind: each with its root and what blocks it.
+const kept = /* @__PURE__ */ new Map<string, [RootImpl, Any, Fiber]>();
+let replaying = false;
+
+/**
+ * A continuous event's capture at root `r`'s container, as React's dispatchEvent handles one: if
+ * its target has not hydrated, it is kept, the latest of its kind, and stopped, and what blocks
+ * it hydrates before other boundaries; else, as one that drops its kind, it drops what was kept.
+ */
+function keep(r: RootImpl, e: Any): void {
+  const at = KEPT.split(" ").indexOf(e.type),
+    i = at % 5,
+    kind = i > 2 ? i + " " + e.pointerId : "" + i,
+    b = r.f.f & DEAD ? null : blockedOn(r, e.target);
+  if (b === null || at > 4) return void kept.delete(kind);
+  kept.set(kind, [r, e, b]);
+  e.stopPropagation();
+  if (b.hc !== null && b.n !== ROOT) {
+    b.hc.u = true;
+    post();
+  }
+}
+
+/**
+ * Once something hydrates: the kept events nothing blocks any more are dispatched again, as
+ * copies, on their targets, in a task, as React's replayUnblockedEvents does; one that the
+ * boundary inside blocks now waits for it, which hydrates first.
+ */
+function replayKept(): void {
+  if (kept.size === 0 || replaying) return;
+  replaying = true;
+  afterPaint(() => {
+    replaying = false;
+    // After the commit's passive effects, as React's replay task comes after theirs.
+    flushPassive();
+    // Focus, drag and mouse, then each pointer's, then each pointer capture's, as React's order.
+    for (const [kind, k] of [...kept].sort((a, b) => a[0].charCodeAt(0) - b[0].charCodeAt(0))) {
+      const [r, e, b] = k;
+      if (b.n === ROOT ? !r.mounted : b.hc !== null && !(b.f & DEAD)) continue;
+      const next = r.f.f & DEAD ? null : blockedOn(r, e.target);
+      if (next === null) {
+        kept.delete(kind);
+        e.target.dispatchEvent(new e.constructor(e.type, e));
+      } else {
+        k[2] = next;
+        next.hc.u = true;
+        post();
+      }
+    }
+  });
+}
 
 /**
  * Make root `r` replay discrete events: a capture listener on its container for each, ahead of
@@ -3617,11 +3735,13 @@ const replays: Any[] = [];
 function listenForReplay(r: RootImpl): void {
   const el = r.f.d,
     own = r.listeners.get(el)!,
-    fn = (e: Event): void => replay(r, e);
+    fn = (e: Event): void => replay(r, e),
+    cont = (e: Event): void => keep(r, e);
   own.remove();
   r.listeners.delete(el);
-  replays.push(r, fn);
+  replays.push(r, fn, cont);
   for (const t of REPLAYED.split(" ")) el.addEventListener(t, fn, true);
+  for (const t of KEPT.split(" ")) el.addEventListener(t, cont, true);
   listenOn(el, r);
 }
 
@@ -3681,7 +3801,10 @@ const HYDRATION = {
   root: hydrateDone,
   id: treeId,
   store: storeSnapshot,
-  listen: listenForReplay,
+  listen: (r: RootImpl): void => {
+    beforeRender = selective;
+    listenForReplay(r);
+  },
   /** Whether an event's target is in content of root `r` that has not hydrated. */
   blocked: (r: RootImpl, e: Any): boolean => blockedOn(r, e.target) !== null,
 };
@@ -5164,6 +5287,8 @@ function unmount(f: Fiber, rm: boolean): void {
 let queue: Fiber[] = []; // fibers with a pending update, in the order they were scheduled
 let spareQueue: Fiber[] = []; // the other of the two swapped queue arrays (see flushWork)
 let flushing = false; // inside flushWork: updates made now join this flush
+// What runs before a batch of updates renders: hydration's, once a root hydrates (see selective).
+let beforeRender: ((q: Fiber[]) => void) | null = null;
 let batch = 0; // depth of event handlers, flushSync, batchedUpdates and act: no flush until 0
 let micro = false; // a microtask flush is queued
 let task = false; // a flush in a task of its own is queued
@@ -5308,6 +5433,8 @@ function flushWork(sync: boolean): void {
           const q = queue;
           queue = spareQueue;
           if (q.length > 1) q.sort(byDepth);
+          // On a page that hydrates: dehydrated boundaries the updates reach hydrate first.
+          if (beforeRender !== null) beforeRender(q);
           for (let ix = 0; ix < q.length; ix++) {
             const f = q[ix]!;
             // flushSync leaves an update from outside an event to its task.
@@ -6782,7 +6909,6 @@ function dispatch(e: Any, root: RootImpl, capture: boolean): void {
   const changed = !capture && names !== null && names.includes("onChange");
   batch++;
   try {
-    if (over) enterLeave(e, root, type, target);
     if (names !== null)
       for (let ix = 0, xs = names; ix < xs.length; ix++) {
         const name = xs[ix]!;
@@ -6805,6 +6931,8 @@ function dispatch(e: Any, root: RootImpl, capture: boolean): void {
         }
         syn.currentTarget = null;
       }
+    // Enter and leave after over and out, as React's plugins extract them.
+    if (over) enterLeave(e, root, type, target);
     // A form action runs after the onSubmit handlers, unless one prevented the default.
     if (!capture && e.type === "submit" && !e.defaultPrevented) submitAction(e, target);
   } finally {

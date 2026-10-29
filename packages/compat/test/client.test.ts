@@ -1397,6 +1397,66 @@ describe("hydration passes", () => {
     }
   });
 
+  test("the latest continuous event of each kind waits for its target to hydrate, which goes first, then is dispatched again", async () => {
+    const h = (L: Lib) => L.createElement;
+    const tree = (L: Lib, log: string[]) => {
+      const on = (n: string) => {
+        const props: Any = {};
+        for (const k of ["MouseOver", "MouseEnter", "MouseOut", "PointerOver", "PointerEnter", "Focus", "DragEnter"])
+          props["on" + k] = (e: Any) => void log.push(`${k} ${n}${e.pointerId === undefined ? "" : " " + e.pointerId}`);
+        return props;
+      };
+      return h(L)(
+        "main",
+        on("main"),
+        h(L)(Logs(L, log), { n: "shell" }),
+        h(L)(
+          L.Suspense,
+          { fallback: "." },
+          h(L)(
+            Logs(L, log),
+            { n: "a" },
+            h(L)("p", on("p"), "a"),
+            h(L)(L.Suspense, { fallback: "," }, h(L)(Logs(L, log), { n: "a.a" }, h(L)("b", on("b"), "in"))),
+          ),
+        ),
+        h(L)(L.Suspense, { fallback: "." }, h(L)(Logs(L, log), { n: "c" }, h(L)("i", on("i"), "c"))),
+      );
+    };
+    const html = ReactServer.renderToString(tree(React, []));
+    /** Dispatches each [type, tag, pointerId] from the first element named tag. */
+    const fire =
+      (...events: [string, string, number?][]): Step =>
+      (c, log) => {
+        for (const [type, tag, id] of events) {
+          const at = nodes(c).find((n) => n.nodeName === tag) as FakeElement;
+          log.push(`fire ${type} ${tag}`);
+          at.dispatchEvent(new FakeEvent(type, id === undefined ? undefined : { pointerId: id }));
+        }
+      };
+    // The latest of a kind replaces the one before; each pointer keeps its own. What blocks them
+    // hydrates before the other boundary, inner boundaries in turn.
+    await timeline(html, tree, {
+      sync: true,
+      now: fire(
+        ["mouseover", "P"],
+        ["mouseover", "B"],
+        ["pointerover", "P", 1],
+        ["pointerover", "B", 2],
+        ["focusin", "P"],
+        ["dragenter", "I"],
+        ["gotpointercapture", "B", 1],
+      ),
+    });
+    // One that drops its kind: nothing is dispatched again, and nothing hydrates sooner.
+    await timeline(html, tree, {
+      sync: true,
+      now: fire(["mouseover", "P"], ["mouseout", "P"], ["focusin", "P"], ["focusout", "MAIN"]),
+    });
+    // Before the shell hydrated: it waits for the shell; once all hydrated, it goes at once.
+    await timeline(html, tree, { now: fire(["mouseover", "MAIN"]), steps: [fire(["mouseover", "I"])] });
+  });
+
   test("a click inside a dehydrated boundary hydrates it, outermost first, before its handlers run", async () => {
     const h = (L: Lib) => L.createElement;
     const tree = (late: boolean) => (L: Lib, log: string[]) => {
@@ -1534,6 +1594,84 @@ describe("hydration passes", () => {
       await timeline("<textarea>a</textarea>", (L) => h(L)("textarea", props));
   });
 
+  test("an update that reaches a dehydrated boundary hydrates it first, with what it had, then renders", async () => {
+    const h = (L: Lib) => L.createElement;
+    const key = (L: Lib) => (L === React ? "react" : "compat");
+    const sets: Record<string, (v: string) => void> = {};
+    const ctxs = new Map<Lib, Any>();
+    /**
+     * A shell whose state reaches two boundaries, the logging one last: by its props, by context,
+     * or by neither (its element made once). React renders the shell again before it hydrates
+     * each boundary it reaches, so the shell does not log.
+     */
+    const tree = (by: "props" | "context" | "neither") => (L: Lib, log: string[]) => {
+      if (!ctxs.has(L)) ctxs.set(L, L.createContext("c0"));
+      const Ctx = ctxs.get(L);
+      function Leaf(p: Any) {
+        const c = L.useContext(Ctx);
+        log.push(`render leaf ${p.v} ${c}`);
+        L.useLayoutEffect(() => (log.push(`layout leaf ${p.v} ${c}`), () => void log.push("unlayout leaf")));
+        L.useEffect(() => void log.push(`passive leaf ${p.v} ${c}`));
+        return h(L)("p", null, p.v + c);
+      }
+      function App() {
+        const [v, set] = L.useState("a");
+        sets[key(L)] = set;
+        const once = L.useMemo(() => h(L)(Leaf, { v: "a" }), []);
+        const body = h(L)(
+          "main",
+          null,
+          h(L)("b", null, v),
+          h(L)(L.Suspense, { fallback: "." }, h(L)("i", null, "x")),
+          h(L)(L.Suspense, { fallback: "." }, by === "props" ? h(L)(Leaf, { v }) : once),
+        );
+        return by === "context" ? h(L)(Ctx.Provider, { value: v === "a" ? "c0" : "c1" }, body) : body;
+      }
+      return h(L)(App);
+    };
+    const update =
+      (sync: boolean): Step =>
+      (_c, log, L) => {
+        log.push("update");
+        const go = () => sets[key(L)]!("b");
+        if (sync) (L === React ? ReactDOM : L).flushSync(go);
+        else go();
+        log.push("updated");
+      };
+    for (const by of ["props", "context", "neither"] as const) {
+      const html = ReactServer.renderToString(tree(by)(React, []));
+      for (const sync of [true, false]) {
+        const r = await timeline(html, tree(by), { sync: true, now: update(sync) });
+        expect(r.kept).not.toContain("n");
+      }
+    }
+    // Content that cannot hydrate yet renders on the client when the update reaches it, as
+    // React's client render without hydrating, and nothing is reported.
+    const never = new Promise<void>(() => {});
+    const late = (L: Lib) => {
+      function Late(): never {
+        throw never;
+      }
+      function App() {
+        const [v, set] = L.useState("a");
+        sets[key(L)] = set;
+        return h(L)("main", null, h(L)("b", null, v), h(L)(L.Suspense, { fallback: "F" }, h(L)(Late, { v })));
+      }
+      return h(L)(App);
+    };
+    const served = ReactServer.renderToString(
+      h(React)(
+        "main",
+        null,
+        h(React)("b", null, "a"),
+        h(React)(React.Suspense, { fallback: "F" }, h(React)("p", null, "a")),
+      ),
+    );
+    // (Once the content is ready they differ as they do for any client render that suspended:
+    // React mounts it hidden, then reveals it.)
+    for (const sync of [true, false]) await timeline(served, late, { sync: true, now: update(sync) });
+  });
+
   // React's clearContainerSparingly reads a link's rel.
   extend(FakeElement.prototype, {
     rel: {
@@ -1568,14 +1706,14 @@ describe("hydration passes", () => {
       '<html lang="en" data-x="1"><head><noscript>n</noscript><script src="a.js"></script><title>t</title>' +
       '<link rel="stylesheet" href="s.css"></link><link rel="icon"></link><style>p{}</style></head>' +
       '<body class="s"><!--x--><p>server</p><div>d</div><script>1</script></body></html><!--after-->';
-    const run = async (L: Lib, fail: boolean, sync: boolean) => {
+    const run = async (L: Lib, throws: number, sync: boolean) => {
       const d = page(server);
       const before = [d.documentElement, d.head, d.body];
       const log: string[] = [];
       const h = L.createElement;
-      let threw = !fail;
+      let n = 0;
       function Fails(): Any {
-        if (!threw) throw ((threw = true), new Error("once"));
+        if (n++ < throws) throw new Error("boom");
         return "server";
       }
       (globalThis as Any).window.HTMLIFrameElement = class {};
@@ -1589,7 +1727,7 @@ describe("hydration passes", () => {
             h(
               "body",
               { className: "c", onClick: () => void log.push("click") },
-              h("p", null, fail ? h(Fails) : "client"),
+              h("p", null, throws ? h(Fails) : "client"),
               h("div", null, "d"),
             ),
           ),
@@ -1603,20 +1741,19 @@ describe("hydration passes", () => {
       else go();
       await settle();
       (d.body.lastChild as FakeElement).dispatchEvent(new FakeEvent("click"));
+
       return { log, markup: markup(d), kept: [d.documentElement, d.head, d.body].map((n, i) => n === before[i]) };
     };
-    // A mismatch, and an error that is not one (#423).
-    for (const [fail, sync] of [
-      [false, true],
-      [false, false],
-      [true, false],
-      [true, true],
-    ] as const) {
-      const react = await run(React, fail, sync);
-      expect(react.kept).toEqual([true, true, true]);
-      expect(react.log).toEqual([fail ? "recoverable 423 cause once" : "recoverable 418 text", "click"]);
-      expect(await run(Compat, fail, sync)).toEqual(react);
-    }
+    // A mismatch, an error that is not one (#423), and one the client render throws again: the
+    // root unmounts, and the singletons stay, emptied.
+    const logs = ["recoverable 418 text", "recoverable 423 cause boom"];
+    for (const throws of [0, 1, Infinity])
+      for (const sync of [true, false]) {
+        const react = await run(React, throws, sync);
+        expect(react.kept).toEqual([true, true, true]);
+        expect(react.log).toEqual(throws === Infinity ? ["uncaught boom"] : [logs[throws]!, "click"]);
+        expect(await run(Compat, throws, sync)).toEqual(react);
+      }
   });
 });
 
