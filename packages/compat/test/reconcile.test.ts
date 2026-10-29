@@ -246,6 +246,81 @@ describe("element types", () => {
     expect(html()).toBe("");
   });
 
+  // React's getComponentNameFromType names an element rendered as a type, for its message.
+  test("an element rendered as a type is named as React names its type", () => {
+    const Ctx = createContext(0);
+    const Theme = createContext(0);
+    Theme.displayName = "Theme";
+    const named = forwardRef(function Named() {
+      return null;
+    });
+    const shown = Object.assign(forwardRef(() => null) as object, { displayName: "Shown" });
+    const outer = Object.assign(
+      memo(() => null),
+      { displayName: "Outer" },
+    );
+    const client = Object.assign(function Client() {}, { $$typeof: Symbol.for("react.client.reference") });
+    const types: unknown[] = [
+      Fragment,
+      Profiler,
+      StrictMode,
+      Suspense,
+      SuspenseList,
+      Activity,
+      ViewTransition,
+      createPortal("x", new FakeElement("DIV") as unknown as Element),
+      Ctx,
+      Theme,
+      Ctx.Consumer,
+      Theme.Consumer,
+      named,
+      forwardRef(() => null),
+      shown,
+      memo(function Inner() {
+        return null;
+      }),
+      memo(() => null),
+      outer,
+      lazy(() => new Promise(() => {})),
+      { $$typeof: Symbol("other") },
+      client,
+    ];
+    for (const type of types) render(h("div", null, h(h(type as never) as never)));
+    const names = uncaught.map((e) => /got: <(.*) \/>/.exec((e as Error).message)?.[1]);
+    expect(names).toEqual([
+      "Fragment",
+      "Profiler",
+      "StrictMode",
+      "Suspense",
+      "SuspenseList",
+      "Activity",
+      "ViewTransition",
+      "Portal",
+      "Context",
+      "Theme",
+      "Context.Consumer",
+      "Theme.Consumer",
+      "ForwardRef(Named)",
+      "ForwardRef",
+      "Shown",
+      "Inner",
+      "Memo",
+      "Outer",
+      "Unknown",
+      "Unknown",
+      "Unknown",
+    ]);
+  });
+
+  // React calls a consumer's children with the value whatever they are.
+  test("a Consumer whose children are not a function throws, as React calls them", () => {
+    const Ctx = createContext(0);
+    render(h(Ctx.Consumer, null, "text" as never));
+    expect(uncaught).toHaveLength(1);
+    expect(uncaught[0]).toBeInstanceOf(TypeError);
+    expect(html()).toBe("");
+  });
+
   describe("Activity", () => {
     withStyle();
     test("a hidden Activity keeps its content and state, hidden with display: none", () => {

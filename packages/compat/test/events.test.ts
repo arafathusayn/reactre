@@ -254,6 +254,22 @@ describe("onChange", () => {
     expect(log).toEqual(["capture", "bubble"]);
   });
 
+  test("onChangeCapture handlers run outermost first, then the onChange handlers innermost first", () => {
+    const log: string[] = [];
+    const on = (name: string) => () => void log.push(name);
+    render(
+      h(
+        "div",
+        { onChangeCapture: on("outer capture"), onChange: on("outer") },
+        h("input", { onChangeCapture: on("inner capture"), onChange: on("inner") }),
+      ),
+    );
+    const input = child(child(container));
+    userSets(input, "value", "a");
+    fire(input, new Ev("input"));
+    expect(log).toEqual(["outer capture", "inner capture", "inner", "outer"]);
+  });
+
   test("a checkbox's onChange follows clicks that change it, after onClick", () => {
     const log: string[] = [];
     const on = (e: { type: string; target: Field }) => log.push(`${e.type} ${e.target.checked}`);
@@ -882,6 +898,45 @@ describe("resource hints", () => {
     preload("/no-as.js", {});
     preload("/f.woff2", { as: "font", integrity: "sha384-x", media: "print" });
     expect(tags()).toEqual(["link as=font crossorigin= href=/f.woff2 integrity=sha384-x media=print rel=preload"]);
+  });
+  // - an image preload with a srcset is known by its srcset and sizes, and has no href; a link
+  //   already in the document is not added again.
+  test("preload keys an image with a srcset by it, and skips a link the document has", () => {
+    const set = { as: "image", imageSrcSet: "a.png 2x", imageSizes: "100vw" };
+    preload("/a.png", set);
+    preload("/other.png", set);
+    preload("/b.png", { as: "image", imageSrcSet: "b.png 1x" });
+    const there = (g.document as Document).createElement("link") as unknown as FakeElement;
+    there.setAttribute("rel", "preload");
+    there.setAttribute("as", "image");
+    there.setAttribute("href", "/server.png");
+    head.appendChild(there);
+    preload("/server.png", { as: "image" });
+    expect(tags()).toEqual([
+      "link as=image imagesizes=100vw imagesrcset=a.png 2x rel=preload",
+      "link as=image imagesrcset=b.png 1x rel=preload",
+      "link as=image href=/server.png rel=preload",
+    ]);
+  });
+  // - a URL is matched with React's escapes: a quote, a backslash or a newline as its hex code.
+  test("preload finds a link the document has for a URL with a quote in it", () => {
+    const there = (g.document as Document).createElement("link") as unknown as FakeElement;
+    there.setAttribute("rel", "preload");
+    there.setAttribute("as", "image");
+    there.setAttribute("href", '/a"b\\c.png');
+    head.appendChild(there);
+    preload('/a"b\\c.png', { as: "image" });
+    expect(head.childNodes).toHaveLength(1);
+  });
+  // - preinitModule passes crossOrigin, integrity, nonce and fetchPriority on, and does nothing
+  //   for an `as` other than "script" or options that are not an object.
+  test("preinitModule passes its options on and skips other kinds", () => {
+    preinitModule("/o.js", { crossOrigin: "anonymous", integrity: "sha384-z", nonce: "n", fetchPriority: "low" });
+    preinitModule("/w.js", { as: "worker" });
+    preinitModule("/s.js", "script" as never);
+    expect(tags()).toEqual([
+      "script async= crossorigin= fetchpriority=low integrity=sha384-z nonce=n src=/o.js type=module",
+    ]);
   });
   // - a stylesheet goes after the last one of its precedence, or after all of them.
   test("preinit places a stylesheet after the last one of its precedence", () => {

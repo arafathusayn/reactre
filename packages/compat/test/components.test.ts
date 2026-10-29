@@ -625,6 +625,42 @@ describe("suspense", () => {
     await until(() => html() === "<i></i><b>b</b>");
     expect(log.splice(0)).toEqual(["ref", "layout"]);
   });
+
+  // While a boundary hides its content, a render of that content commits nothing: React runs
+  // its layout effects when the content shows.
+  test("content that renders while its boundary hides it runs its layout effects only when shown", async () => {
+    const log: string[] = [];
+    let resolve!: () => void;
+    let ready = false;
+    const settled = new Promise<void>((r) => (resolve = r)).then(() => void (ready = true));
+    let set!: (v: number) => void;
+    function Shown({ n }: { n: number }) {
+      useLayoutEffect(() => {
+        log.push("layout " + n);
+        return () => void log.push("cleanup " + n);
+      });
+      return h("i", null, n);
+    }
+    function Data({ n }: { n: number }) {
+      if (n > 0 && !ready) throw settled;
+      return h("b", null, n);
+    }
+    function Parent() {
+      const [n, setN] = useState(0);
+      set = setN;
+      return [h(Shown, { key: "s", n }), h(Data, { key: "d", n })];
+    }
+    render(h(Suspense, { fallback: "wait" }, h(Parent)));
+    expect(log.splice(0)).toEqual(["layout 0"]);
+    flushSync(() => set(1));
+    expect(log.splice(0)).toEqual(["cleanup 0"]);
+    flushSync(() => set(2));
+    expect(log.splice(0)).toEqual([]);
+    resolve();
+    await settled;
+    await until(() => html() === "<i>2</i><b>2</b>");
+    expect(log.splice(0)).toEqual(["layout 2"]);
+  });
 });
 
 describe("activity", () => {
@@ -762,6 +798,20 @@ describe("activity", () => {
     expect(log.splice(0)).toEqual(["u ref", "did mount", "cls ref"]);
     render(view("hidden"));
     expect(log.splice(0)).toEqual(["cls null", "will unmount", "u null"]);
+  });
+
+  // Removing a shown Activity runs its content's cleanups; removing a hidden one runs none again.
+  test("a removed Activity takes its content, cleaned up once", () => {
+    const log: string[] = [];
+    render(h(Activity, { mode: "visible" }, h(Panel, { log })));
+    render(null);
+    expect(log.splice(0)).toEqual(["layout", "passive", "layout cleanup", "passive cleanup"]);
+    render(h(Activity, { mode: "visible" }, h(Panel, { log })));
+    render(h(Activity, { mode: "hidden" }, h(Panel, { log })));
+    expect(log.splice(0)).toEqual(["layout", "passive", "layout cleanup", "passive cleanup"]);
+    render(null);
+    expect(log).toEqual([]);
+    expect(html()).toBe("");
   });
 
   // A shown Activity inside a hidden one runs nothing until the outer one shows.

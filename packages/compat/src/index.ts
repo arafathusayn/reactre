@@ -445,7 +445,6 @@ const STRUCT = 8; // host: its DOM children changed; place them
 const RERENDER = 16; // function: set state during its own render
 const FORCE = 32; // class: forceUpdate
 const FORWARD = 64; // function: forwardRef render (props, ref)
-const SHOWN = 128; // suspense: its primary content has been shown
 const HIDDEN = 256; // suspense, activity: content hidden
 const CLAIMED = 512; // host: claimed from server HTML while hydrating
 const HOIST = 1024; // host: <title>, <meta> or <link> placed in document.head
@@ -587,8 +586,6 @@ function kindOf(type: Any): number {
   if (type === Activity) return ACTIVITY;
   if (type != null) {
     switch (type.$$typeof) {
-      case TEMPLATE_TYPE:
-        return BLOCK;
       case CONTEXT_TYPE:
         return PROVIDER;
       case CONSUMER_TYPE:
@@ -632,10 +629,14 @@ function invalidType(type: Any): string {
   );
 }
 
+// A server component reference, which React gives no name.
+const CLIENT_REFERENCE = Symbol.for("react.client.reference");
+
 /** A component type's name, as React's getComponentNameFromType gives it. */
 function nameOfType(type: Any): string | null {
   if (type == null) return null;
-  if (typeof type === "function") return type.displayName || type.name || null;
+  if (typeof type === "function")
+    return type.$$typeof === CLIENT_REFERENCE ? null : type.displayName || type.name || null;
   if (typeof type === "string") return type;
   switch (type) {
     case Fragment:
@@ -1357,12 +1358,9 @@ function run(f: Fiber, old: Props | null, mount: boolean): void {
       }
       return reconcile(f, f.p.children);
     }
-    case CONSUMER: {
-      const render = f.p.children;
-      return reconcile(f, typeof render === "function" ? render(readContext(f, f.t._context)) : null);
-    }
-    case PORTAL:
-      return runPortal(f, mount);
+    case CONSUMER:
+      // As React's: the children are called whatever they are.
+      return reconcile(f, f.p.children(readContext(f, f.t._context)));
     case SUSPENSE:
       return runSuspense(f);
     case ACTIVITY:
@@ -1635,8 +1633,11 @@ function runHost(f: Fiber, old: Props | null, mount: boolean): void {
     if (oref != null && (hiddenCount === 0 || hiddenLevel(f) === 0)) detachRef(f, oref);
     if (ref != null) laterShown(f, () => attachRef(f, ref, dom));
   }
-  if (mount && p.autoFocus && typeof dom.focus === "function") laterShown(f, () => dom.focus());
+  if (mount && p.autoFocus && AUTO_FOCUS.has(f.t)) laterShown(f, () => dom.focus());
 }
+
+// The elements React focuses when they mount with autoFocus (commitMount).
+const AUTO_FOCUS = new Set(["button", "input", "select", "textarea"]);
 
 /**
  * Whether a host element is React 19 document metadata that belongs in <head>: <title>, <meta>
@@ -2199,9 +2200,6 @@ function styleProp(s: Any, k: string, v: Any): void {
 
 // #region Templates
 
-// The $$typeof of a Template, so kindOf() tells a template type from a component.
-const TEMPLATE_TYPE = Symbol.for("reactre-compat.template");
-
 // Hole kinds (Template.kinds).
 const H_ATTR = 0;
 const H_STYLE = 1;
@@ -2240,7 +2238,6 @@ function inertDocument(): Document {
  * and shared by every instance.
  */
 class Template {
-  readonly $$typeof: symbol = TEMPLATE_TYPE;
   /** The compiler's description of the tree. */
   readonly desc: TemplateNode;
   /** How many holes (one more than the highest hole index). */
@@ -2487,14 +2484,6 @@ function runBlock(f: Fiber, v: Any[], o: Any[] | null, mount: boolean): void {
       }
     }
     const dom = proto.cloneNode(true);
-    if (hydrating) {
-      // The server's node for this block is replaced, not claimed.
-      const h = curHost;
-      if (h.hc !== null) {
-        const x = cursor(h);
-        if (x !== null) h.hc = x.nextSibling;
-      }
-    }
     f.d = dom;
     f.ns = ns;
     dom[FIBER] = f;
@@ -3268,7 +3257,6 @@ function runSuspense(f: Fiber): void {
         }
         f.s = primary;
       } else reconcile(primary, f.p.children);
-      f.f |= SHOWN;
       // Resolved: the fallback goes and the kept content is shown again.
       if (f.q !== null) {
         setHidden(primary, false);
@@ -3292,14 +3280,10 @@ function runSuspense(f: Fiber): void {
       thrown = e;
     }
   }
-  // Suspended: keep shown content hidden with its state; drop content never shown.
+  // Suspended: keep the content hidden with its state.
   // The boundary itself is done; its primary stays DIRTY so the retry renders it again.
   f.f &= ~DIRTY;
   primary = f.s;
-  if (primary !== null && !(f.f & SHOWN)) {
-    unmount(primary, true);
-    primary = f.s = null;
-  }
   if (primary !== null) {
     primary.f |= DIRTY;
     setHidden(primary, true);
@@ -3691,9 +3675,14 @@ function flushWork(sync: boolean): void {
       while (queue.length || layoutQ.length) {
         while (queue.length) {
           // Effects of the last commit run before the next render, as in React: its refs and
-          // layout effects first, so its passive effects never see a ref still unset.
-          flushLayout();
-          flushPassive();
+          // layout effects first, so its passive effects never see a ref still unset. A render
+          // that threw is not committed yet: as React unwinds to the boundary within the render,
+          // the boundary renders first.
+          if (unwinding) unwinding = false;
+          else {
+            flushLayout();
+            flushPassive();
+          }
           // Two queue arrays, swapped: updates made while this one renders go
           // to the other, and neither is allocated again.
           const q = queue;
@@ -3768,6 +3757,7 @@ function rerender(f: Fiber): void {
   try {
     run(f, f.p, false);
   } catch (e) {
+    unwinding = true;
     throwTo(f, e);
   } finally {
     const host = curHost;
@@ -3783,6 +3773,8 @@ function rerender(f: Fiber): void {
 
 // Whether throwTo routed something since flushWork last looked.
 let routed = false;
+// Whether a render threw, so its boundary renders before the commit's effects run.
+let unwinding = false;
 
 // Route a value thrown while rendering (or from an effect) of f to the
 // nearest boundary above it, marking the path so a retry renders it again.
@@ -3797,10 +3789,8 @@ function throwTo(f: Fiber, e: Any): void {
     if (p.n === ROOT || (promise ? p.n === SUSPENSE : p.n === CLASS && classes !== null && classes.boundary(p))) break;
     p.f |= DIRTY;
   }
-  if (p === null) {
-    if (f.n === ROOT) p = f;
-    else throw e;
-  }
+  // Every fiber has its root above it, so only a root itself finds none.
+  if (p === null) p = f;
   p.x = e;
   schedule(p);
 }
@@ -3920,7 +3910,7 @@ function flushLayout(): void {
   const q = layoutQ;
   if (!q.length) return;
   layoutQ = [];
-  runEffects(q);
+  runEffects(q, true);
 }
 
 /** Run passive cleanups of unmounted components, then queued passive effects. */
@@ -3944,14 +3934,15 @@ function flushPassive(): void {
   const q = passiveQ;
   if (!q.length) return;
   passiveQ = [];
-  runEffects(q);
+  runEffects(q, false);
 }
 
 /**
  * Run a queue of effects as React commits them: every cleanup first, then every setup. Effects
- * of fibers that died meanwhile are skipped. A kind-0 entry is a `later` callback, run as is.
+ * of fibers that died meanwhile are skipped, and so is the layout work of content hidden
+ * meanwhile, which runs when it shows. A kind-0 entry is a `later` callback, run as is.
  */
-function runEffects(q: Hook[]): void {
+function runEffects(q: Hook[], layout: boolean): void {
   for (let ix = 0, xs = q; ix < xs.length; ix++) {
     const h = xs[ix]!;
     if (h.k !== 0 && h.x !== undefined && !(h.f.f & DEAD)) {
@@ -3962,7 +3953,7 @@ function runEffects(q: Hook[]): void {
   }
   for (let ix = 0, xs = q; ix < xs.length; ix++) {
     const h = xs[ix]!;
-    if (h.f.f & DEAD) continue;
+    if (h.f.f & DEAD || (layout && hiddenCount !== 0 && hiddenLevel(h.f) !== 0)) continue;
     const c = h.c;
     if (h.k === 0) safely(h.f, c);
     else

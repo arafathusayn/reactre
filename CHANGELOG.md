@@ -33,6 +33,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   - `cache` returns a wrapper.
   - `useId` counts across all roots, as React's one client counter does.
   - A passive cleanup that throws after its component is removed goes to the error boundary above the removed subtree, or to the root, which unmounts and calls `onUncaughtError`. An error from a sync render's passive effects renders before `flushSync` returns.
+- Fixed: a render that throws is unwound to its boundary before the commit's layout effects run, as React renders the boundary within the same render. Content that suspends again commits nothing of the render that suspended: its layout effects and refs run when it shows.
+- Fixed: `autoFocus` focuses only a `<button>`, `<input>`, `<select>` or `<textarea>`, as React does.
+- Fixed: a `<Context.Consumer>` calls its children whatever they are, so children that are not a function throw, as in React.
+- Fixed: an element rendered as a type is named in the error as React names its type, and a client reference has no name.
 - Fixed: `useActionState` queues actions as React does:
   - The first action runs inside `dispatch`; the others wait for it.
   - In a transition, `isPending` is true until the queue drains, and the state is the last action's result.

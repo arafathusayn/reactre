@@ -425,16 +425,49 @@ describe("attributes", () => {
     expect(first().hasAttribute("disabled")).toBe(false);
   });
 
+  // React focuses a button, input, select or textarea with autoFocus once it mounts (commitMount),
+  // and no other element; autoFocus is never an attribute.
+  test("autoFocus focuses a form control once, when it mounts", () => {
+    const focused: string[] = [];
+    const proto = FakeElement.prototype as unknown as { focus?: () => void };
+    proto.focus = function (this: FakeElement) {
+      focused.push(this.tagName.toLowerCase());
+    };
+    try {
+      const view = (title: string) =>
+        h(
+          "form",
+          null,
+          ["button", "input", "select", "textarea", "div", "a"].map((tag) =>
+            h(tag, { key: tag, autoFocus: true, title, href: tag === "a" ? "/x" : undefined }),
+          ),
+        );
+      render(view("a"));
+      render(view("b"));
+      expect(focused).toEqual(["button", "input", "select", "textarea"]);
+      expect(first(0).hasAttribute("autofocus")).toBe(false);
+    } finally {
+      delete proto.focus;
+    }
+  });
+
   test("download and capture take true as presence and a string as their value", () => {
     render(h("a", { download: true }));
     expect(first().getAttribute("download")).toBe("");
     render(h("a", { download: "file.txt" }));
     expect(first().getAttribute("download")).toBe("file.txt");
+    render(h("input", { capture: true }));
+    expect(first().getAttribute("capture")).toBe("");
+    render(h("input", { capture: "user" }));
+    expect(first().getAttribute("capture")).toBe("user");
   });
 
   test("data-, aria- and booleanish props write booleans as text", () => {
     render(h("div", { "data-on": false, "aria-hidden": true, draggable: false, spellCheck: true }));
     expect(attrs(first())).toEqual(["data-on=false", "aria-hidden=true", "draggable=false", "spellcheck=true"]);
+    // A function or symbol leaves a booleanish attribute out, as React's setProp does.
+    render(h("div", { "data-on": false, "aria-hidden": true, draggable: noop, spellCheck: Symbol("x") }));
+    expect(attrs(first())).toEqual(["data-on=false", "aria-hidden=true"]);
   });
 
   test("a boolean on any other attribute, and functions, symbols and null, leave it out", () => {
