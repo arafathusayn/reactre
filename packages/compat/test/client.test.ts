@@ -4,13 +4,15 @@
 // React's production client runs on the fake DOM with the few additions below (a window for its
 // selection code, localName and splitText for hydration). Each test builds one tree twice, once
 // from React and once from compat, renders each with its own library and expects the same: the
-// ids useId gives while hydrating server HTML.
+// ids useId gives while hydrating server HTML, the rows and their state when keys repeat, and the
+// component stacks errors are reported with.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { FakeElement, FakeNode, FakeText, HTML_NS, installFakeDocument } from "@reactre/testdom";
 
-import * as Compat from "../src/core.ts";
+// The default entry: class support is loaded, for error boundaries.
+import * as Compat from "../src/index.ts";
 
 // biome-ignore lint: both libraries are used through one untyped interface.
 type Any = any;
@@ -260,6 +262,305 @@ describe("useId while hydrating", () => {
     expect(ids[0]).toMatch(/^_r_[0-9a-v]+_$/);
     // The second mount after hydration: the next client ids after the first's.
     expect([n(ids[3]!) - n(ids[0]!), n(ids[2]!) - n(ids[0]!)]).toEqual([2, 1]);
+  });
+});
+
+// #endregion
+
+// #region Duplicate keys
+
+describe("duplicate keys", () => {
+  /**
+   * A list of rows with React and with compat: each row is a component with state (its mount
+   * number) and a layout effect whose cleanup logs it. render(keys) renders one row per key (a
+   * key written "k:other" is a row of another type, "k:none" one that renders nothing); each
+   * render expects both DOMs and both logs of unmounted rows to be equal. `shape` is where the rows go: straight in a <ul>, or returned
+   * by a component inside it, between two other rows.
+   */
+  function lists(shape: "host" | "component" = "host") {
+    const make = (L: Lib, flush: (fn: () => void) => void, createRoot: (c: Any) => Any) => {
+      const c = box(),
+        h = L.createElement,
+        log: string[] = [];
+      let n = 0;
+      const row = (props: Any) => {
+        const [id] = L.useState(() => ++n);
+        L.useLayoutEffect(() => () => void log.push(props.k + id), []);
+        return h("li", null, props.k + id);
+      };
+      const Row = (props: Any) => row(props),
+        Other = (props: Any) => row(props),
+        None = (props: Any) => (row(props), null);
+      const rows = (keys: string[]) =>
+        keys.map((k) => {
+          const [key, type] = k.split(":");
+          return h(type === "other" ? Other : type === "none" ? None : Row, { key, k: key });
+        });
+      const List = (props: Any) => rows(props.keys);
+      const root = createRoot(c);
+      const list = (keys: string[]) =>
+        shape === "host" ? rows(keys) : [h("li", { key: "<" }), h(List, { key: "l", keys }), h("li", { key: ">" })];
+      return { c, log, render: (keys: string[]) => flush(() => root.render(h("ul", null, list(keys)))) };
+    };
+    const r = make(React, ReactDOM.flushSync, ReactClient.createRoot),
+      p = make(Compat, Compat.flushSync, (c) => Compat.createRoot(c as unknown as Element));
+    return {
+      render(keys: string[]) {
+        r.render(keys);
+        p.render(keys);
+        expect({ dom: markup(p.c), unmounted: p.log }).toEqual({ dom: markup(r.c), unmounted: r.log });
+      },
+    };
+  }
+
+  test("a mount and an append render every row, repeated keys included", () => {
+    const l = lists();
+    l.render(["x", "x", "y", "x"]);
+    l.render(["x", "x", "y", "x", "x", "z"]);
+  });
+
+  test("a key repeated among the new rows: the first takes the old row, the others mount", () => {
+    const l = lists();
+    l.render(["a", "b", "c"]);
+    l.render(["c", "b", "b", "a"]);
+  });
+
+  test("an old key that repeats: the last old row is the one reused, the others stay in the DOM", () => {
+    const l = lists();
+    l.render(["a", "x", "y", "x"]);
+    l.render(["y", "x", "a"]);
+    l.render(["a", "y", "x", "x"]);
+  });
+
+  test("reordered and removed rows around repeated keys", () => {
+    const l = lists();
+    l.render(["a", "b", "x", "x", "c"]);
+    l.render(["c", "x", "b", "a"]);
+    l.render(["x", "y", "x", "z"]);
+    l.render(["z", "y", "x", "w", "x"]);
+  });
+
+  test("a row whose key matches in place but whose type changed is replaced in place", () => {
+    const l = lists();
+    l.render(["x", "y", "y", "q"]);
+    l.render(["x:other", "y", "z", "q"]);
+    // Matching in place runs out of new rows, then of old ones.
+    l.render(["x", "x", "y"]);
+    l.render(["x:other", "x"]);
+    l.render(["x", "x", "z"]);
+  });
+
+  test("rows that render nothing", () => {
+    const l = lists();
+    l.render(["x:none", "x:none", "y:none"]);
+    l.render(["y:none", "x:none"]);
+  });
+
+  test("rows a component returns, between other rows of the same element", () => {
+    const l = lists("component");
+    l.render(["a", "x", "y", "x"]);
+    l.render(["y", "x", "a"]);
+    l.render(["a", "b", "x", "x", "c"]);
+    l.render(["c", "x", "b", "a"]);
+  });
+});
+
+// #endregion
+
+// #region Component stacks
+
+describe("component stacks", () => {
+  /**
+   * The stack React gives, each frame's location replaced with "<anonymous>": React finds a
+   * function or class component's frame by calling it and reading the native stack trace
+   * ("at Name (file:line:col)"), where compat writes the frame React writes when it finds none
+   * ("at Name (<anonymous>)").
+   */
+  const names = (stack: string): string => stack.replace(/^( +at \S+) \(.*\)$/gm, "$1 (<anonymous>)");
+
+  // A test error's message; React's own errors are minified, compat's are not.
+  const message = (e: Any): string => (e.message.length < 20 ? e.message : "(React's error)");
+
+  /**
+   * Renders `make(L)` with React and with compat into roots with both error callbacks, and
+   * expects the same reports, component stacks included (React's with locations replaced),
+   * after `ms` more for content that waits on a promise. Returns compat's reports.
+   */
+  async function reports(make: (L: Lib) => Any, ms = 0): Promise<string[]> {
+    const run = async (L: Lib, createRoot: (c: Any, o: Any) => Any, flush: (fn: () => void) => void) => {
+      const out: string[] = [];
+      const options = {
+        onUncaughtError: (e: Any, info: Any) => void out.push(`uncaught ${message(e)}${info.componentStack}`),
+        onCaughtError: (e: Any, info: Any) =>
+          void out.push(`caught ${message(e)} by ${info.errorBoundary.constructor.name}${info.componentStack}`),
+      };
+      const root = createRoot(box(), options);
+      flush(() => root.render(make(L)));
+      await tasks();
+      await new Promise((r) => setTimeout(r, ms));
+      await tasks();
+      return out;
+    };
+    const react = await run(React, ReactClient.createRoot, ReactDOM.flushSync);
+    const compat = await run(Compat, (c, o) => Compat.createRoot(c as unknown as Element, o), Compat.flushSync);
+    expect(react.length).toBeGreaterThan(0);
+    expect(compat).toEqual(react.map(names));
+    return compat;
+  }
+
+  /** A component that throws `message` when it renders. */
+  const Boom = (props: Any) => {
+    throw new Error(props.message ?? "boom");
+  };
+
+  test("an uncaught render error: hosts, components, memo, forwardRef and arrays", async () => {
+    const stacks = await reports((L) => {
+      const h = L.createElement;
+      const Fwd = L.forwardRef(function Field(_p: Any, _r: Any) {
+        return h("label", null, h(Boom));
+      });
+      const Item = L.memo(function Item() {
+        return h("li", null, h(Fwd));
+      });
+      const List = () => [h(Item, { key: 1 })];
+      const Ctx = L.createContext(0);
+      function App() {
+        return h(Ctx.Provider, { value: 1 }, h("section", null, h(L.Fragment, null, h("ul", null, h(List)))));
+      }
+      return h(App);
+    });
+    // Each frame exactly as React writes one it found no source location for.
+    const frames = ["Boom", "label", "Field", "li", "Item", "List", "ul", "section", "App"];
+    expect(stacks).toEqual(["uncaught boom" + frames.map((n) => `\n    at ${n} (<anonymous>)`).join("")]);
+  });
+
+  test("an error boundary's report and componentDidCatch get the stack", async () => {
+    const seen: string[] = [];
+    const stacks = await reports((L) => {
+      const h = L.createElement;
+      class Boundary extends L.Component {
+        state = { failed: false };
+        static getDerivedStateFromError() {
+          return { failed: true };
+        }
+        componentDidCatch(_e: Any, info: Any) {
+          seen.push(names(info.componentStack));
+        }
+        render() {
+          return this.state.failed ? "failed" : this.props.children;
+        }
+      }
+      const Inner = () => h("p", null, h(Boom, { message: "inner" }));
+      return h("main", null, h(Boundary, null, h("div", null, h(Inner))));
+    });
+    // React's, then compat's: the stack the boundary's report got.
+    const stack = stacks[0]!.slice(stacks[0]!.indexOf("\n"));
+    expect(seen).toEqual([stack, stack]);
+  });
+
+  test("Suspense, its fallback, Activity, SuspenseList and ViewTransition name themselves", async () => {
+    await reports((L) => {
+      const h = L.createElement;
+      const never = new Promise(() => {});
+      const Wait = () => L.use(never);
+      const fallback = h(Boom, { message: "fallback" });
+      return h(L.Activity, { mode: "visible" }, h(L.ViewTransition, null, h(L.Suspense, { fallback }, h(Wait))));
+    });
+    // React's stable build has no SuspenseList to render; its describeFiber names one so.
+    const stacks: string[] = [];
+    const root = Compat.createRoot(box() as unknown as Element, {
+      onUncaughtError: (_e, info) => void stacks.push(info.componentStack!),
+    });
+    const h = Compat.createElement;
+    Compat.flushSync(() =>
+      root.render(h(Compat.Suspense, null, h("div", null, h(Compat.SuspenseList, null, h(Boom))))),
+    );
+    const frames = ["Boom", "SuspenseList", "div", "Suspense"];
+    expect(stacks).toEqual([frames.map((n) => `\n    at ${n} (<anonymous>)`).join("")]);
+  });
+
+  test("an effect's error starts at its component; a bad child type at its parent", async () => {
+    await reports((L) => {
+      const h = L.createElement;
+      function Effect() {
+        L.useLayoutEffect(() => {
+          throw new Error("effect");
+        });
+        return h("i");
+      }
+      return h("div", null, h(Effect));
+    });
+    await reports((L) => {
+      const h = L.createElement;
+      const Parent = () => h("b", null, h({}));
+      return h("div", null, h(Parent));
+    });
+  });
+
+  test("a lazy component that fails to load is named Lazy; one that loaded is its component", async () => {
+    const failed = Promise.reject(new Error("load"));
+    failed.catch(() => {});
+    const loaded = Promise.resolve({ default: Boom });
+    await loaded;
+    // Both libraries hold back a suspended boundary's retry for 300 ms after its fallback shows.
+    for (const load of [() => failed, () => loaded])
+      await reports((L) => {
+        const h = L.createElement;
+        return h(L.Suspense, { fallback: null }, h("div", null, h(L.lazy(load))));
+      }, 400);
+  });
+
+  test("a compiled template's elements are frames too", async () => {
+    const T = Compat.__template(["div", 0, ["span", 0, 0]]);
+    await reports((L) => {
+      const h = L.createElement;
+      const Row = () => (L === Compat ? Compat.__block(T, null, [h(Boom)]) : h("div", null, h("span", null, h(Boom))));
+      return h("section", null, h(Row));
+    });
+  });
+});
+
+// #endregion
+
+// #region The core entry
+
+describe("@reactre/compat/core", () => {
+  // A separate instance of the module (the query string makes one), without what the default
+  // entry installs into the shared one.
+  const tag = "core-only";
+  const core = (): Promise<typeof import("../src/core.ts")> => import(`../src/core.ts?${tag}`);
+
+  test("reports errors with an empty component stack", async () => {
+    const Core = await core();
+    const stacks: unknown[] = [];
+    const root = Core.createRoot(box() as unknown as Element, {
+      onUncaughtError: (_e, info) => void stacks.push(info.componentStack),
+    });
+    const Boom = () => {
+      throw new Error("boom");
+    };
+    Core.flushSync(() => root.render(Core.createElement("div", null, Core.createElement(Boom))));
+    expect(stacks).toEqual([""]);
+  });
+
+  test("reconciles repeated keys by its own rules: no row is left outside the list", async () => {
+    const Core = await core();
+    const c = box(),
+      h = Core.createElement,
+      root = Core.createRoot(c as unknown as Element);
+    const render = (keys: string[]) =>
+      Core.flushSync(() =>
+        root.render(
+          h(
+            "ul",
+            null,
+            keys.map((k) => h("li", { key: k }, k)),
+          ),
+        ),
+      );
+    render(["a", "x", "y", "x"]);
+    render(["y", "x", "a"]);
+    expect(markup(c)).toBe("<ul><li>y</li><li>x</li><li>a</li></ul>");
   });
 });
 

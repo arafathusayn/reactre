@@ -351,7 +351,8 @@ describe("error boundaries with componentDidCatch only", () => {
       }
       render(h(Catcher, null, h(Bomb)));
       expect(html()).toBe("<p>caught</p>");
-      expect(log).toEqual(["report bang", { componentStack: "", errorBoundary: inst }, "did catch bang"]);
+      const componentStack = "\n    at Bomb (<anonymous>)\n    at Catcher (<anonymous>)";
+      expect(log).toEqual(["report bang", { componentStack, errorBoundary: inst }, "did catch bang"]);
     } finally {
       globalThis.setTimeout = realSetTimeout;
     }

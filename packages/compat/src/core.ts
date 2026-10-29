@@ -917,6 +917,7 @@ function reconcile(p: Fiber, children: Any): void {
       }
     } catch (e) {
       // As in the general path's catch below: p re-renders on retry and its host re-places.
+      thrownIn(p, e);
       p.f |= DIRTY;
       curHost.f |= STRUCT;
       throw e;
@@ -998,6 +999,9 @@ function reconcile(p: Fiber, children: Any): void {
       // The general case: old children of the middle by key, reused where the key and type
       // match; what is left in the map afterwards is unmounted.
       const map = keyMap(old, oi, oe);
+      // Fewer keys than children: a key repeats. React's own algorithm takes the rest, when the
+      // default entry installed it (see __installFull).
+      if (map.size <= oe - oi && dupList) return dupList(p, items, old, i, oi, nc);
       moved = middle(p, items, i, ne, map, nc);
       if (map.size) {
         if (map.size === m) {
@@ -1015,6 +1019,7 @@ function reconcile(p: Fiber, children: Any): void {
   } catch (e) {
     // Keep every live fiber tracked, so the boundary that catches this can
     // retry (suspense) or unmount (errors) the whole subtree.
+    thrownIn(p, e);
     p.f |= DIRTY;
     const kept = new Set(nc);
     p.c = nc.concat(old.filter((o) => !kept.has(o) && !(o.f & DEAD)));
@@ -1151,6 +1156,108 @@ function middle(p: Fiber, items: Any[], i: number, ne: number, map: Map<Key, Fib
     }
   }
   return moved;
+}
+
+// React's handling of repeated keys (dupKeys), once the default entry installed it.
+let dupList: typeof dupKeys | null = null;
+
+/**
+ * The rest of a list whose old children repeat a key, from items[i] and old[oi] on, as React's
+ * production build reconciles it (its development build warns about the keys). Children are
+ * matched as React matches them: in place while the keys match (another type replaces the child
+ * there), then through a map of the old children left, by key, where the last child with a key
+ * hides the earlier ones. A hidden child is neither reused nor unmounted: its nodes stay where
+ * they are, outside the list, and it never renders again. Then the nodes move as React's commit
+ * moves them: children whose old order holds stay, and each new or moved one goes before the
+ * next child that stayed, or else before what follows the list.
+ */
+function dupKeys(p: Fiber, items: Any[], old: Fiber[], i: number, oi: number, nc: Fiber[]): void {
+  p.c = nc;
+  const n = items.length,
+    m = old.length,
+    placed = new Set<Fiber>();
+  // React's lastPlacedIndex: the old index of the last child that kept its place.
+  let last = oi > 0 ? old[oi - 1]!.i : -1,
+    it: Any,
+    // What follows the list: the host's next node of its own after the old children's (React's
+    // host sibling), null for the end, undefined while no old child has a node.
+    end: Any;
+  for (let j = m - 1; end === undefined && j >= 0; j--) {
+    const xs: Any[] = [];
+    collect(old[j]!, xs);
+    if (xs.length) end = next(xs[xs.length - 1].nextSibling, curHost);
+  }
+  const put = (o: Fiber | undefined, key: Key): void => {
+    if (o !== undefined && sameType(o, it)) {
+      if (o.i < last) placed.add(o);
+      else last = o.i;
+      take(o, it, nc);
+    } else {
+      const f = create(it, p, key);
+      f.i = nc.length;
+      nc.push(f);
+      placed.add(f);
+    }
+  };
+  // In place, while the keys match: a child of another type is replaced where it is.
+  for (; i < n && oi < m; i++, oi++) {
+    it = items[i];
+    if (typeof it === "object" && it !== null && it.$$typeof !== ELEMENT && isThenable(it)) it = items[i] = unwrap(it);
+    const o = old[oi]!;
+    if (it == null || typeof it === "boolean" || o.k !== keyOf(it, i)) break;
+    if (!sameType(o, it)) unmount(o, true);
+    put(o, o.k);
+  }
+  if (oi < m && i < n) {
+    const map = keyMap(old, oi, m - 1);
+    for (; oi < m; oi++) {
+      const o = old[oi]!;
+      if (map.get(o.k) !== o) {
+        // Hidden by a later child with its key: left in the DOM as it is, not ours to place.
+        o.f |= DEAD;
+        const xs: Any[] = [];
+        collect(o, xs);
+        for (const x of xs) x[OWN] = null;
+      }
+    }
+    for (; i < n; i++) {
+      it = items[i];
+      if (it == null || typeof it === "boolean") continue;
+      if (typeof it === "object" && it.$$typeof !== ELEMENT && isThenable(it)) it = items[i] = unwrap(it);
+      const key = keyOf(it, i),
+        o = map.get(key);
+      if (o !== undefined && sameType(o, it)) map.delete(key);
+      put(o, key);
+    }
+    for (const o of map.values()) unmount(o, true);
+  } else {
+    // One side ran out: the old children left go, the new ones are created.
+    for (; oi < m; oi++) unmount(old[oi]!, true);
+    for (; i < n; i++) {
+      it = items[i];
+      if (it == null || typeof it === "boolean") continue;
+      if (typeof it === "object" && it.$$typeof !== ELEMENT && isThenable(it)) it = items[i] = unwrap(it);
+      put(undefined, keyOf(it, i));
+    }
+  }
+  const h = curHost,
+    parent = h.d as Node;
+  // With no old node to go by, the host places the new ones.
+  if (end === undefined) {
+    h.f |= STRUCT;
+    return;
+  }
+  let ref: Node | null = end ?? (h.n === SLOT && h.s.parentNode !== null ? h.s : null);
+  for (let j = nc.length - 1; j >= 0; j--) {
+    const f = nc[j]!,
+      xs: Node[] = [];
+    collect(f, xs);
+    if (placed.has(f))
+      for (const x of xs)
+        if (x.parentNode === parent) move(parent, x, ref);
+        else parent.insertBefore(x, ref);
+    if (xs.length) ref = xs[0]!;
+  }
 }
 
 // Insert the nodes of host p's children from index `from` on at the end of
@@ -1350,6 +1457,7 @@ function create(it: Any, p: Fiber, key: Key): Fiber {
     else update(f, it, true);
   } catch (e) {
     // A child that fails to mount is dropped: nothing of it is committed.
+    thrownIn(f, e);
     unmount(f, true);
     throw e;
   }
@@ -2952,7 +3060,7 @@ function runRoot(f: Fiber): void {
       else {
         removeAll(f);
         const report = r.opts.onUncaughtError;
-        if (report) callReport(report, thrown, { componentStack: "" });
+        if (report) callReport(report, thrown, { componentStack: stackOf(thrown, f) });
         else reportUncaught(thrown);
       }
     }
@@ -3028,6 +3136,7 @@ function runFunc(f: Fiber, mount = false): void {
       out = ref === undefined ? fn(args) : fn(args, ref);
     } while (f.f & RERENDER);
   } catch (e) {
+    thrownIn(f, e);
     f.f |= DIRTY;
     throw e;
   } finally {
@@ -3168,6 +3277,10 @@ export interface ClassCore {
   isRendering(f: Any): boolean;
   /** Call a root's error callback; an error it throws is thrown again from a task. */
   report(report: (e: Any, info: Any) => void, e: Any, info: Any): void;
+  /** Record that `e` was thrown in f, unless something deeper already did. */
+  thrownIn(f: Any, e: Any): void;
+  /** The component stack of error `e`, from where it was thrown (else from f). */
+  componentStack(e: Any, f: Any): string;
 }
 
 /** Internal: what class support provides. */
@@ -3214,7 +3327,21 @@ export function __installClasses(make: (core: ClassCore) => ClassSupport): void 
     },
     isRendering: (f) => f === cur,
     report: callReport,
+    thrownIn: recordThrown,
+    componentStack,
   });
+}
+
+/**
+ * Internal: what the default entry (@reactre/compat, ./index.ts) adds to this module besides
+ * class support: component stacks in error reports, and React's handling of a list whose keys
+ * repeat. Apps on @reactre/compat/core leave their code out: an error is reported with an empty
+ * component stack, and repeated keys are reconciled by compat's own rules.
+ */
+export function __installFull(): void {
+  thrownIn = recordThrown;
+  stackOf = componentStack;
+  dupList = dupKeys;
 }
 
 /** The error for a class component rendered while class support is not loaded. */
@@ -4237,6 +4364,74 @@ function reportUncaught(e: Any): void {
     }, 0);
 }
 
+// Component stacks come with the default entry (see __installFull): until it installs them, a
+// throw records nothing and errors are reported with an empty stack.
+let thrownIn: (f: Fiber, e: Any) => void = () => {},
+  stackOf: (e: Any, f: Fiber | null) => string = () => "";
+
+// Where the value thrown last came from: the first fiber whose catch it passed, which is the
+// deepest (a component's render, the parent of a child that could not be created, an effect's
+// component). Only a throw writes it; componentStack reads it when the error is reported.
+// NO_PROPS is never thrown, so it stands for nothing recorded.
+let lastThrown: Any = NO_PROPS,
+  thrownBy: Fiber | null = null;
+function recordThrown(f: Fiber, e: Any): void {
+  if (e !== lastThrown) {
+    lastThrown = e;
+    thrownBy = f;
+  }
+}
+
+/**
+ * The component stack React's production build reports error `e` with: a frame per host element
+ * and component from the fiber `e` was thrown in (else from `f`) up to the root, innermost first,
+ * named as React's describeFiber names them. Each frame is React's built-in one ("\n    at Name
+ * (<anonymous>)" where the engine writes V8-style stacks): React finds a function or class
+ * component's frame by calling it and reading a native stack trace, which only an engine can
+ * write, and writes this one when it finds none.
+ */
+function componentStack(e: Any, f: Fiber | null): string {
+  if (e === lastThrown) f = thrownBy;
+  lastThrown = NO_PROPS;
+  thrownBy = null;
+  let s = "",
+    prev: Fiber | null = null;
+  for (; f !== null; prev = f, f = f.r) {
+    const n = f.n,
+      t = f.t;
+    // A compiled template's slot: the template's elements around it, which React has as hosts.
+    if (n === SLOT) for (let x = f.d; ; x = x.parentNode) if (((s += frame(x.localName)), x === f.r!.d)) break;
+    const name =
+      n === FUNC
+        ? nameOfType(f.s)
+        : n === HOST || n === CLASS || n === ACTIVITY || t === SuspenseList || t === ViewTransition
+          ? nameOfType(t)
+          : n === SUSPENSE
+            ? prev !== null && prev.k === 1
+              ? "Suspense Fallback"
+              : "Suspense"
+            : n === LAZY && prev === null
+              ? "Lazy"
+              : null;
+    if (name) s += frame(name);
+  }
+  return s;
+}
+
+// React's frame format, read once from a stack trace as React reads it: what comes before the
+// name (V8's "    at ") and after it.
+let framePrefix: string | undefined,
+  frameSuffix = "";
+function frame(name: string): string {
+  if (framePrefix === undefined) {
+    const st = String(Error().stack),
+      m = st.trim().match(/\n( *(at )?)/);
+    framePrefix = (m && m[1]) || "";
+    frameSuffix = st.includes("\n    at") ? " (<anonymous>)" : st.includes("@") ? "@unknown:0:0" : "";
+  }
+  return "\n" + framePrefix + name + frameSuffix;
+}
+
 // Parents render before children: queued fibers sort by depth, counted when
 // more than one is queued (rare) instead of stored in every fiber.
 function depth(f: Fiber): number {
@@ -4386,6 +4581,7 @@ let unwinding = false;
 // Route a value thrown while rendering (or from an effect) of f to the
 // nearest boundary above it, marking the path so a retry renders it again.
 function throwTo(f: Fiber, e: Any): void {
+  thrownIn(f, e);
   routed = true;
   const promise = isThenable(e);
   f.f |= DIRTY;

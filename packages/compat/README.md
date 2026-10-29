@@ -56,11 +56,17 @@ The plugin has an entry for each: `@reactre/plugin/rollup`, `/rolldown`, `/esbui
 | `@reactre/compat/compiler` | The compiler @reactre/plugin runs, and a Bun plugin of its own             |
 | `@reactre/compat/api`      | The keys that switch React's APIs on and off, and their rules              |
 
-`@reactre/compat` is all of React's client API. An app that renders no class component, itself or through a library, can use `@reactre/compat/core` (`compat: { classes: false }` in the plugin) and leave class support out; a class that renders there throws an error naming the fix. The compiler is optional; without it, everything still runs.
+`@reactre/compat` is all of React's client API. An app that renders no class component, itself or through a library, can use `@reactre/compat/core` (`compat: { classes: false }` in the plugin) and leave class support out; a class that renders there throws an error naming the fix. Core also leaves out what a correct app does without: errors are reported with an empty `componentStack`, and a list whose keys repeat, which React warns about, is reconciled by compat's own rules rather than React's. The compiler is optional; without it, everything still runs.
 
 An app can also switch off the React APIs it does not use, one by one, with the plugin's `compat.apis` and `compat.exclude`; see [the plugin's docs](https://www.npmjs.com/package/@reactre/plugin). Each combination keeps React's behaviour for every API it leaves on.
 
 Every change is checked against React 19 itself, scenario by scenario: the same app runs on both, and what each renders and logs must match line for line.
+
+## Where the client differs
+
+- Component stacks (`componentStack` in what `onUncaughtError`, `onCaughtError` and `componentDidCatch` get) name the frames React's production build names, in the same order and format, but each frame is the one React writes when it finds no source location: `at Name (<anonymous>)` in V8-style engines, `Name@unknown:0:0` in others. React finds a function or class component's location by calling the component and reading the engine's stack trace, so its frames for components usually end in `(file:line:col)` instead. For the same reason a component without a name has no frame where React may have one, and a component whose `displayName` differs from its function's name is named by `displayName` where React's located frame shows the function's name. An error a host element's props throw on an update starts the stack at the element's parent.
+- `onRecoverableError` is never called: hydration patches what differs from the server's HTML instead of recovering from it.
+- Repeated keys: where compat matches a list's rows against the old ones through a key map, as React does, it does what React's production build does, down to the old row React's map hides staying in the DOM, never rendered again. Before building a map, compat matches what it can cheaply (rows that line up from the end, one run of removed rows, two rows that traded places, rows inserted between unchanged ones, the changes a compiled list reports) by position. There, with a repeated key, React pairs the first new row of the key with the last old one and leaves the other old rows in the DOM, while compat pairs them in order: matching React would mean looking up every key of the rows that did not change, the work those paths exist to skip.
 
 ## Server rendering
 
@@ -81,11 +87,11 @@ Each module bundled whole, minified, for the browser in production mode, with Re
 
 | Bundle                              | Minified |    gzip |  brotli |
 | ----------------------------------- | -------: | ------: | ------: |
-| `@reactre/compat`                   |  77.4 KB | 28.4 KB | 25.2 KB |
-| `@reactre/compat/core`              |  74.2 KB | 27.2 KB | 24.2 KB |
+| `@reactre/compat`                   |  80.2 KB | 29.6 KB | 26.2 KB |
+| `@reactre/compat/core`              |  76.9 KB | 28.4 KB | 25.3 KB |
 | `react` + `react-dom/client` 19.3.1 | 214.1 KB | 66.7 KB | 57.4 KB |
 
-Class support costs about 3.3 KB minified, 1.1 KB gzipped, which apps on `@reactre/compat/core` leave out. Most of the runtime ships whatever an app imports: a counter with one `useState` and `createRoot` comes to 20.2 KB gzipped (19.0 KB on core), against 64.4 KB on React. Measured with Bun's bundler, gzip at level 9 and brotli at quality 11; Rolldown, the bundler in Vite, gives sizes within 1 KB of these.
+Class support, component stacks and React's handling of repeated keys cost an app about 5.5 KB minified, 2 KB gzipped, which apps on `@reactre/compat/core` leave out. Most of the runtime ships whatever an app imports: a counter with one `useState` and `createRoot` comes to 21.1 KB gzipped (19.1 KB on core), against 64.4 KB on React. Measured with Bun's bundler, gzip at level 9 and brotli at quality 11; Rolldown, the bundler in Vite, gives sizes within 1 KB of these.
 
 ## License
 

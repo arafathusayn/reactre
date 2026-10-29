@@ -475,20 +475,21 @@ describe("placing nodes", () => {
     expect(ops.inserts).toBe(0);
   });
 
-  test("a child that a duplicate key hid from the key map goes when its host is placed", () => {
-    // React warns that duplicate keys are unsupported, and leaves such a child's node in the
-    // DOM. Here the host's placement pass removes it, as a node of its own nothing renders.
+  test("on core, a child that a duplicate key hid from the key map goes when its host is placed", async () => {
+    // React leaves such a child's node in the DOM, and so does the default entry (client.test.ts).
+    // @reactre/compat/core leaves React's handling of repeated keys out: there the host's
+    // placement pass removes the node, as one nothing renders. A module instance of its own, so
+    // the default entry another test file loads is not installed in it.
+    const tag = "core-placement";
+    const Core: typeof import("../src/core.ts") = await import(`../src/core.ts?${tag}`);
+    const r = Core.createRoot(container as unknown as Element);
+    const k = Core.createElement;
     const List = ({ items }: { items: unknown[] }) => items;
     const Null = () => null;
-    render(
-      h(
-        "div",
-        null,
-        h(List, { items: [h("b", { key: "a" }, "a"), h("i", { key: "k" }, "1"), h("i", { key: "k" }, "2")] }),
-      ),
-    );
+    const show = (els: unknown[]) => Core.flushSync(() => r.render(k("div", null, k(List, { items: els }))));
+    show([k("b", { key: "a" }, "a"), k("i", { key: "k" }, "1"), k("i", { key: "k" }, "2")]);
     expect(html()).toBe("<div><b>a</b><i>1</i><i>2</i></div>");
-    render(h("div", null, h(List, { items: [h("b", { key: "a" }, "a"), h(Null, { key: "n" })] })));
+    show([k("b", { key: "a" }, "a"), k(Null, { key: "n" })]);
     expect(html()).toBe("<div><b>a</b></div>");
   });
 
