@@ -1156,7 +1156,7 @@ describe("components", () => {
     await sameError(() => ({ a: 1, b: 2 }));
     await sameError(() => new Map());
     await sameError((L) =>
-      L.createElement("div", null, L.createPortal?.("x", {}) ?? { $$typeof: Symbol.for("react.portal") }),
+      L.createElement("div", null, L.createPortal?.("x", { nodeType: 1 }) ?? { $$typeof: Symbol.for("react.portal") }),
     );
     await sameError((L) => L.createElement(Symbol.for("react.scope")));
   });

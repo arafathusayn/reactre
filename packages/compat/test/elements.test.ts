@@ -114,7 +114,7 @@ describe("type wrappers", () => {
     expect(ctx._currentValue).toBe(5);
     expect(ctx.Provider).toBe(ctx);
     expect(ctx.Consumer._context).toBe(ctx);
-    const box = {} as Element;
+    const box = { nodeType: 1 } as Element;
     expect(createPortal("x", box)).toEqual({
       $$typeof: Symbol.for("react.portal"),
       key: null,
@@ -207,7 +207,7 @@ describe("Children", () => {
   });
 
   test("iterables that are not arrays are children too, and portals are leaves", () => {
-    const portal = createPortal("p", {} as Element, "pk");
+    const portal = createPortal("p", { nodeType: 1 } as Element, "pk");
     expect(Children.toArray(new Set(["a", portal]))).toEqual(["a", portal]);
     expect(Children.count(new Set([1, 2, 3]))).toBe(3);
   });

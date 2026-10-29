@@ -90,7 +90,10 @@ function support(core: ClassCore): ClassSupport {
       oref = old === null ? undefined : old["ref"];
     if (ref === oref) return;
     if (oref != null && core.hiddenLevel(f) === 0) core.detachRef(f, oref);
-    if (ref != null) core.laterShown(f, () => core.attachRef(f, ref, inst));
+    if (ref != null) {
+      core.checkRef(ref);
+      core.laterShown(f, () => core.attachRef(f, ref, inst));
+    }
   }
 
   // setState callbacks, with layout effects.

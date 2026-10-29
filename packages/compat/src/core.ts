@@ -206,6 +206,8 @@ export function createElement(type: Any, config?: Props | null, ...children: Any
  * set to undefined falls back to the type's defaultProps, and `ref: undefined` keeps the old ref.
  */
 export function cloneElement(el: ReactElement, config?: Props | null, ...children: Any[]): ReactElement {
+  // React's isomorphic package keeps this message in full, even in production.
+  if (el == null) throw new Error("The argument must be a React element, but you passed " + el + ".");
   const props: Props = { ...el.props };
   let key = el.key;
   if (config != null) {
@@ -305,6 +307,7 @@ export function createContext<T>(defaultValue: T): Context<T> {
 
 /** A portal: `children` rendered into `container`, with events bubbling through the React tree. */
 export function createPortal(children: Any, container: Element | DocumentFragment, key?: string | null): Any {
+  checkContainer(container);
   return { $$typeof: PORTAL_TYPE, key: key == null ? null : "" + key, children, containerInfo: container };
 }
 
@@ -378,15 +381,20 @@ function mapInto(
     : isIterable(children)
       ? Array.from(children as Iterable<Any>)
       : null;
-  // React's Children throw this one in full, even in production; a function or a symbol is
-  // passed over.
+  // A lazy type is read through its loader and a thenable as use() reads it (so one that has
+  // not settled throws itself), as React's Children read them. Anything else that is an object
+  // throws React's error, in full, even in production; a function or a symbol is passed over.
   if (items === null) {
-    if (t === "object")
+    if (t === "object") {
+      if (children.$$typeof === LAZY_TYPE)
+        return mapInto(children._init(children._payload), out, prefix, name, fn, count);
+      if (typeof children.then === "function") return mapInto(readThenable(children), out, prefix, name, fn, count);
       throw new Error(
         "Objects are not valid as a React child (found: " +
           found(children, String(children)) +
           "). If you meant to render a collection of children, use an array instead.",
       );
+    }
     return;
   }
   // Nested levels are joined with ':'; unkeyed items are named by their index in base 36.
@@ -659,6 +667,11 @@ function prodMessage(code: number, ...args: Any[]): string {
     url +
     " for the full message or use the non-minified dev environment for full errors and additional helpful warnings."
   );
+}
+
+/** React's isValidContainer: a root or portal renders into an element, a document or a fragment. */
+function checkContainer(c: Any): void {
+  if (!c || (c.nodeType !== 1 && c.nodeType !== 9 && c.nodeType !== 11)) throw new Error(prodMessage(299));
 }
 
 /** What React's error for an object rendered as a child names: a plain object's keys, else `tag`. */
@@ -1780,6 +1793,9 @@ function runHost(f: Fiber, old: Props | null, mount: boolean): void {
     } else f.f |= CLAIMED;
     f.d = dom;
     dom[FIBER] = f;
+    // React's void elements take no children (#137): looked up only for an element given some.
+    // One that gets them on an update is caught where they change (hostChildren, place).
+    if (p.children != null && VOID.has(type)) throw new Error(prodMessage(137, type));
     if (hoistable(f, p)) {
       // React 19 document metadata: rendered anywhere, placed in <head>. A <title> goes before
       // the first one there, as in React, so the newest sets the document's title.
@@ -1805,9 +1821,13 @@ function runHost(f: Fiber, old: Props | null, mount: boolean): void {
   if (f.f & CLAIMED) {
     // Hydration: server nodes nothing claimed are a mismatch.
     f.f &= ~CLAIMED;
-    if (f.tx === null && p.dangerouslySetInnerHTML == null) (hydrating as Hydration).done(f);
+    if (f.tx === null && p.dangerouslySetInnerHTML?.__html == null) (hydrating as Hydration).done(f);
   }
-  if (f.f & STRUCT) place(f);
+  if (f.f & STRUCT) {
+    // Child nodes placed in a void element mounted without them.
+    if (!mount && VOID.has(f.t)) throw new Error(prodMessage(137, f.t));
+    place(f);
+  }
   // After the children: the options must exist before the value can select one.
   if (f.t === "select") setSelect(dom, p, old ?? NO_PROPS, mount);
   // Refs attach with layout effects (after the whole render), detach at once.
@@ -1816,6 +1836,9 @@ function runHost(f: Fiber, old: Props | null, mount: boolean): void {
   if (ref !== oref) swapRef(f, ref, oref);
   if (mount && p.autoFocus && AUTO_FOCUS.has(f.t)) laterShown(f, () => dom.focus());
 }
+
+// The elements React's client gives no children (#137), as its setInitialProperties lists them.
+const VOID = new Set("area base br col embed hr img input keygen link meta param source track wbr menuitem".split(" "));
 
 // The elements React focuses when they mount with autoFocus (commitMount).
 const AUTO_FOCUS = new Set(["button", "input", "select", "textarea"]);
@@ -1839,14 +1862,20 @@ function hoistable(f: Fiber, p: Any): boolean {
 function hostChildren(f: Fiber, dom: Any, p: Any, old: Props | null): void {
   const html = p["dangerouslySetInnerHTML"];
   if (html != null) {
-    if (f.c.length) removeAll(f);
-    const s = html.__html ?? "";
-    if (old === null || old["dangerouslySetInnerHTML"]?.__html !== s || f.tx !== null) {
-      // A claimed element keeps the server's HTML, as React's production client keeps it.
-      if (!(f.f & CLAIMED)) dom.innerHTML = s;
+    // Checked as React's setProp checks it, when it changes; not on a claimed element, as
+    // React's hydration checks nothing.
+    if ((old === null || html !== old["dangerouslySetInnerHTML"]) && !(f.f & CLAIMED)) checkHTML(f.t, html, p.children);
+    const s = html.__html;
+    // With __html null or undefined there is no HTML: the children render.
+    if (s != null) {
+      if (f.c.length) removeAll(f);
+      if (old === null || old["dangerouslySetInnerHTML"]?.__html !== s || f.tx !== null) {
+        // A claimed element keeps the server's HTML, as React's production client keeps it.
+        if (!(f.f & CLAIMED)) dom.innerHTML = s;
+      }
+      f.tx = null;
+      return;
     }
-    f.tx = null;
-    return;
   }
   // A textarea's children are its default value (see setProps), not content.
   const ch = f.t === "textarea" ? null : p.children;
@@ -1858,7 +1887,9 @@ function hostChildren(f: Fiber, dom: Any, p: Any, old: Props | null): void {
     if (f.c.length) {
       removeAll(f);
       dom.textContent = s;
-    } else if (f.tx !== s || (old !== null && old["dangerouslySetInnerHTML"] != null)) {
+    } else if (f.tx !== s || (old !== null && old["dangerouslySetInnerHTML"]?.__html != null)) {
+      // Text in a void element mounted without it.
+      if (f.tx === null && old !== null && VOID.has(f.t)) throw new Error(prodMessage(137, f.t));
       // Rewrite the one text node's data when there is one: cheaper than textContent, which
       // replaces the node.
       const fc = dom.firstChild;
@@ -1871,7 +1902,7 @@ function hostChildren(f: Fiber, dom: Any, p: Any, old: Props | null): void {
   }
   // Leaving text-only or raw HTML content: clear it before child fibers take over. While
   // hydrating the server's nodes stay, to be claimed.
-  if (f.tx !== null || (old !== null && old["dangerouslySetInnerHTML"] != null)) {
+  if (f.tx !== null || (old !== null && old["dangerouslySetInnerHTML"]?.__html != null)) {
     if (!hydrating) dom.textContent = "";
     f.tx = null;
   }
@@ -1879,6 +1910,17 @@ function hostChildren(f: Fiber, dom: Any, p: Any, old: Props | null): void {
   // content as text anyway, so element children (a fallback <style>, say) are left out.
   if (f.t === "noscript") return;
   reconcile(f, ch);
+}
+
+/**
+ * React's errors for dangerouslySetInnerHTML: on a textarea (#91) or a void element (#137), not
+ * in the form {__html} (#61), or with HTML and children both (#60).
+ */
+function checkHTML(tag: string, html: Any, children: Any): void {
+  if (tag === "textarea") throw new Error(prodMessage(91));
+  if (VOID.has(tag)) throw new Error(prodMessage(137, tag));
+  if (typeof html !== "object" || !("__html" in html)) throw new Error(prodMessage(61));
+  if (html.__html != null && children != null) throw new Error(prodMessage(60));
 }
 
 // #endregion
@@ -2013,9 +2055,16 @@ function setProps(f: Fiber, dom: Any, o: Props, p: Any, mount: boolean): void {
     const v = p.value,
       dv = p.defaultValue;
     if (mount) {
-      // React accepts the initial text as children too (a one-item array included).
-      const d = v ?? dv ?? p.children;
-      if (d != null) dom.defaultValue = toStr(Array.isArray(d) ? d[0] : d);
+      // React's initTextarea: the initial text may be children too (a one-item array included),
+      // but not with a defaultValue (#92) or as several (#93). (Raw HTML is #91, in hostChildren.)
+      let d = v ?? dv;
+      const ch = p.children;
+      if (v == null && ch != null) {
+        if (dv != null) throw new Error(prodMessage(92));
+        if (Array.isArray(ch) && ch.length > 1) throw new Error(prodMessage(93));
+        d = (Array.isArray(ch) ? ch[0] : ch) ?? "";
+      }
+      if (d != null) dom.defaultValue = toStr(d);
     } else {
       if (v != null) {
         const s = toStr(v);
@@ -2858,6 +2907,7 @@ function blockHandlers(f: Fiber, prop: string, from: Any, out: Any[]): void {
       if (s[i] === node && t.names[i] === prop) {
         const h = v[i];
         if (typeof h === "function") out.push(node, h);
+        else if (h) throw badListener(prop, h);
       }
     }
     if (node === f.d) return;
@@ -3193,6 +3243,7 @@ const roots = new Set<RootImpl>();
  * `root.render()` renders in a microtask, batched with other updates (or at once in flushSync).
  */
 export function createRoot(container: Element | DocumentFragment, options: RootOptions = {}): Root {
+  checkContainer(container);
   const r = new RootImpl(container, options);
   roots.add(r);
   return r;
@@ -3206,6 +3257,7 @@ export function createRoot(container: Element | DocumentFragment, options: RootO
  * Suspense content included.
  */
 export function hydrateRoot(container: Element | Document, children: Any, options: RootOptions = {}): Root {
+  checkContainer(container);
   const r = new RootImpl(container, options);
   roots.add(r);
   r.hydrate = HYDRATION;
@@ -3420,6 +3472,11 @@ function ComponentFn(this: Any, props: Any, context?: Any): void {
 ComponentFn.prototype.isReactComponent = {};
 // Without class support loaded, no class component can mount, so there is nothing to update.
 ComponentFn.prototype.setState = function (this: Any, partial: Any, callback?: () => void): void {
+  // React's isomorphic package keeps this message in full, even in production.
+  if (typeof partial !== "object" && typeof partial !== "function" && partial != null)
+    throw new Error(
+      "takes an object of state variables to update or a function which returns an object of state variables.",
+    );
   if (classes !== null) classes.enqueue(this, partial, callback, false);
 };
 ComponentFn.prototype.forceUpdate = function (this: Any, callback?: () => void): void {
@@ -3464,6 +3521,8 @@ export interface ClassCore {
   /** How hidden f is: 0 not, 1 or 2 inside content Suspense or Activity hid. */
   hiddenLevel(f: Any): number;
   attachRef(f: Any, ref: Any, v: Any): void;
+  /** Throw React's error for a ref that is neither a function nor an object. */
+  checkRef(ref: Any): void;
   detachRef(f: Any, ref: Any): void;
   schedule(f: Any): void;
   /** Run fn with f as the component rendering now. */
@@ -3510,6 +3569,7 @@ export function __installClasses(make: (core: ClassCore) => ClassSupport): void 
     laterShown,
     hiddenLevel,
     attachRef,
+    checkRef,
     detachRef,
     schedule,
     rendering(f, fn) {
@@ -3631,7 +3691,15 @@ function detachRef(f: Fiber, ref: Any): void {
  */
 function swapRef(f: Fiber, ref: Any, oref: Any): void {
   if (oref != null && (hiddenCount === 0 || hiddenLevel(f) === 0)) detachRef(f, oref);
-  if (ref != null) laterShown(f, () => attachRef(f, ref, f.n === HOST ? f.d : fragmentRefs!.of(f)));
+  if (ref != null) {
+    checkRef(ref);
+    laterShown(f, () => attachRef(f, ref, f.n === HOST ? f.d : fragmentRefs!.of(f)));
+  }
+}
+
+/** React's markRef: a ref is a function or an object (#284), checked where it changes. */
+function checkRef(ref: Any): void {
+  if (typeof ref !== "function" && typeof ref !== "object") throw new Error(prodMessage(284));
 }
 
 // #endregion
@@ -5541,6 +5609,7 @@ export function useOptimistic<S, A>(passthrough: S, reducer?: (s: S, a: A) => S)
     // The pending updates, each in its own box so clear() removes exactly that one.
     h.v = [];
     h.s = (a: A) => {
+      if (cur === f) throw new Error(prodMessage(479));
       const entry = { a };
       h.v = [...h.v, entry];
       schedule(f);
@@ -5630,6 +5699,7 @@ export function useActionState<S, P>(
       else succeed(node, r);
     };
     h.s = (payload: P) => {
+      if (cur === f) throw new Error(prodMessage(485));
       if (box.a === null) return;
       const outer = transition;
       const node: Any = { a: box.a, payload, t: outer !== null ? ({ done: [] } as Transition) : null };
@@ -6110,11 +6180,16 @@ function handlersOn(target: Fiber, prop: string, from: Any, path: Any[]): void {
   for (let f: Fiber | null = target; f !== null; f = f.r) {
     if (f.f & DEAD) continue;
     if (f.n === HOST) {
-      if (typeof f.p[prop] === "function") path.push(f.d, f.p[prop]);
+      const h = f.p[prop];
+      if (typeof h === "function") path.push(f.d, h);
+      else if (h) throw badListener(prop, h);
     } else if (f.b !== null) blockHandlers(f, prop, from, path);
     else if (f.n === SLOT) from = f.d;
   }
 }
+
+/** React's getListener: a handler prop that is set must be a function (#231). */
+const badListener = (prop: string, h: Any): Error => new Error(prodMessage(231, prop, typeof h));
 
 /** Reverse a path's element and handler pairs in place. */
 function reversePairs(path: Any[]): void {
@@ -6191,7 +6266,10 @@ function enterLeave(e: Any, root: RootImpl, type: string, target: Fiber): void {
     for (let ix = 0, xs = list; ix < xs.length; ix++) {
       const f = xs[ix]!;
       const fn = f.p[name];
-      if (typeof fn !== "function") continue;
+      if (typeof fn !== "function") {
+        if (fn) throw badListener(name, fn);
+        continue;
+      }
       if (syn === null) {
         syn = synthetic(e, name);
         syn.type = mouse
@@ -6244,7 +6322,9 @@ function direct(this: Any, e: Any): void {
   if (f === undefined || name === undefined || f.f & DEAD) return;
   const path: Any[] = [];
   if (e.type === "scroll" || e.type === "scrollend") {
-    if (typeof f.p[name] === "function") path.push(this, f.p[name]);
+    const h = f.p[name];
+    if (typeof h === "function") path.push(this, h);
+    else if (h) throw badListener(name, h);
   } else handlersOn(f, name, e.target, path);
   if (path.length === 0) return;
   batch++;

@@ -128,6 +128,19 @@ describe("@reactre/compat/compiler", () => {
     expect(templates(compileSource(`export const A = (p) => <div {...p}><b>x</b></div>;`))).toEqual([["b", 0, "x"]]);
   });
 
+  test("a void element given children is left to the runtime, which throws React's error for it", () => {
+    expect(templates(compileSource(`export const A = () => <p><br />x<img alt="a" /></p>;`))).toEqual([
+      ["p", 0, ["br", 0], "x", ["img", { alt: "a" }]],
+    ]);
+    expect(templates(compileSource(`export const A = () => <p><br>x</br></p>;`))).toEqual([["p", 0, 0]]);
+    expect(templates(compileSource(`export const A = ({ c }) => <p><img>{c}</img></p>;`))).toEqual([["p", 0, 0]]);
+    // The void element's children are still compiled.
+    expect(templates(compileSource(`export const A = () => <p><hr><b /></hr></p>;`))).toEqual([
+      ["b", 0],
+      ["p", 0, 0],
+    ]);
+  });
+
   // Brackets and tags inside a regex, a string and a template must not end or start a jsx call.
   test("TypeScript, strings, regexes and template literals around JSX scan correctly", () => {
     const out = compileSource(

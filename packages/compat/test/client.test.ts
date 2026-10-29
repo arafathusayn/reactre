@@ -9,7 +9,7 @@
 
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
 
-import { FakeElement, FakeNode, FakeText, HTML_NS, installFakeDocument } from "@reactre/testdom";
+import { FakeElement, FakeEvent, FakeNode, FakeText, HTML_NS, installFakeDocument } from "@reactre/testdom";
 
 // The default entry: class support is loaded, for error boundaries.
 import * as Compat from "../src/index.ts";
@@ -1136,6 +1136,242 @@ describe("errors", () => {
       expect(L.Children.toArray([() => 1, Symbol.for("x"), "a"])).toHaveLength(1);
       expect(L.Children.count(() => 1)).toBe(0);
     }
+  });
+
+  /** The root API of `L`: react-dom/client's for React. */
+  const client = (L: Lib): Any => (L === React ? ReactClient : L);
+
+  /**
+   * Renders each tree `steps(L)` gives into one root in turn, with each library, and expects the
+   * same errors reported (onUncaughtError) and, unless `errorsOnly`, the same markup after each
+   * render. Returns the errors.
+   */
+  async function rendersSame(steps: (L: Lib) => Any[], errorsOnly = false): Promise<string[]> {
+    const run = async (L: Lib) => {
+      const out: string[] = [];
+      const c = box();
+      const root = client(L).createRoot(c, { onUncaughtError: (e: Any) => void out.push(e.message) });
+      for (const tree of steps(L)) {
+        (L === React ? ReactDOM : L).flushSync(() => root.render(tree));
+        await tasks();
+        if (!errorsOnly) out.push(markup(c));
+      }
+      return out;
+    };
+    const react = await run(React);
+    expect(await run(Compat)).toEqual(react);
+    return react.filter((m) => m.startsWith("Minified"));
+  }
+
+  test("a root or portal container that is not an element, a document or a fragment (#299)", () => {
+    for (const c of [null, undefined, {}, new FakeText("x"), new FakeNode(8)]) {
+      throwsSame((L) => client(L).createRoot(c), 299);
+      throwsSame((L) => client(L).hydrateRoot(c, null), 299);
+      throwsSame((_L, D) => D.createPortal(null, c), 299);
+    }
+    // What a container may be: an element, a document (9) and a fragment (11).
+    for (const c of [box(), new FakeNode(9), new FakeNode(11)])
+      expect(Compat.createPortal(null, c as Any).containerInfo).toBe(c);
+  });
+
+  test("dangerouslySetInnerHTML not in the form {__html} (#61), or with children (#60)", async () => {
+    const div = (L: Lib, html: Any, ...children: Any[]) =>
+      L.createElement("div", { dangerouslySetInnerHTML: html }, ...children);
+    await reportsSame((L) => div(L, "<b>x</b>"), 61);
+    await reportsSame((L) => div(L, {}), 61);
+    await reportsSame((L) => div(L, 5), 61);
+    await reportsSame((L) => div(L, { __html: "x" }, "y"), 60);
+    await reportsSame((L) => div(L, { __html: "x" }, L.createElement("b")), 60);
+    await reportsSame((L) => L.createElement("my-el", { dangerouslySetInnerHTML: "x" }), 61);
+    // Checked when the prop changes: kept as it was, children may come and go. (React then writes
+    // the children's text over the HTML; compat keeps the HTML.)
+    const kept = { __html: "<i>x</i>" };
+    expect(
+      await rendersSame((L) => [div(L, kept), div(L, kept, "y"), div(L, { __html: "z" }, "y")], true),
+    ).toHaveLength(1);
+    expect(await rendersSame((L) => [div(L, { __html: "x" }), div(L, "y")])).toHaveLength(1);
+    // No HTML (__html null or undefined): the children render.
+    expect(
+      await rendersSame((L) => [
+        div(L, { __html: null }, "a"),
+        div(L, { __html: undefined }, L.createElement("b", null, "c")),
+        div(L, { __html: "<i>h</i>" }),
+        div(L, { __html: null }, L.createElement("b", null, "c")),
+        div(L, { __html: null }, L.createElement("b", null, "d"), "e"),
+        div(L, { __html: "<i>h</i>" }),
+        div(L, { __html: null }),
+      ]),
+    ).toEqual([]);
+  });
+
+  test("a textarea's dangerouslySetInnerHTML (#91), children with defaultValue (#92), several children (#93)", async () => {
+    const area = (L: Lib, props: Any, ...children: Any[]) => L.createElement("textarea", props, ...children);
+    await reportsSame((L) => area(L, { dangerouslySetInnerHTML: { __html: "x" } }), 91);
+    await reportsSame((L) => area(L, { defaultValue: "a" }, "b"), 92);
+    await reportsSame((L) => area(L, null, "a", "b"), 93);
+    await reportsSame((L) => area(L, { defaultValue: "a" }, "b", "c"), 92);
+    expect(
+      await rendersSame((L) => [area(L, null), area(L, { dangerouslySetInnerHTML: { __html: "x" } })]),
+    ).toHaveLength(1);
+    // A value wins over children; one child in an array is the text; none is empty.
+    const defaults = (make: (L: Lib) => Any) =>
+      [React, Compat].map((L) => {
+        const c = box();
+        const root = client(L).createRoot(c);
+        (L === React ? ReactDOM : L).flushSync(() => root.render(make(L)));
+        return (c.firstChild as Any).defaultValue;
+      });
+    expect(defaults((L) => area(L, { value: "v", onChange() {} }, "a", "b"))).toEqual(["v", "v"]);
+    expect(defaults((L) => area(L, null, ["a"]))).toEqual(["a", "a"]);
+    expect(defaults((L) => area(L, null, []))).toEqual(["", ""]);
+  });
+
+  test("children or dangerouslySetInnerHTML on a void element (#137)", async () => {
+    const el = (L: Lib, tag: string, props: Any, ...children: Any[]) => L.createElement(tag, props, ...children);
+    expect(await reportsSame((L) => el(L, "img", null, "x"), 137)).toContain("?args[]=img ");
+    await reportsSame((L) => el(L, "br", null, el(L, "b", null)), 137);
+    await reportsSame((L) => el(L, "hr", null, false), 137);
+    await reportsSame((L) => el(L, "input", { dangerouslySetInnerHTML: { __html: "x" } }), 137);
+    await reportsSame((L) => el(L, "meta", { name: "a", content: "b" }, "x"), 137);
+    await reportsSame((L) => el(L, "div", null, el(L, "wbr", null, [])), 137);
+    // As one gets them on an update: text, elements, raw HTML.
+    for (const next of [
+      (L: Lib) => el(L, "br", null, "x"),
+      (L: Lib) => el(L, "br", null, el(L, "b", null)),
+      (L: Lib) => el(L, "br", { dangerouslySetInnerHTML: { __html: "x" } }),
+    ])
+      expect(await rendersSame((L) => [el(L, "br", null), next(L)])).toHaveLength(1);
+    // null children are none.
+    expect(await rendersSame((L) => [el(L, "img", { alt: "a" }, null), el(L, "img", { alt: "b" }, undefined)])).toEqual(
+      [],
+    );
+  });
+
+  test("a ref that is neither a function nor an object (#284)", async () => {
+    class C extends Compat.Component {
+      override render() {
+        return null;
+      }
+    }
+    class R extends React.Component {
+      render() {
+        return null;
+      }
+    }
+    for (const ref of ["r", 5, true, Symbol.for("r")]) {
+      await reportsSame((L) => L.createElement("div", { ref }), 284);
+      await reportsSame((L) => L.createElement(L === React ? R : C, { ref }), 284);
+      await reportsSame((L) => L.createElement(L.Fragment, { ref }, "x"), 284);
+    }
+    expect(
+      await rendersSame((L) => [L.createElement("div", { ref: null }), L.createElement("div", { ref: "r" })]),
+    ).toHaveLength(1);
+  });
+
+  test("an event handler prop that is set but not a function (#231)", () => {
+    /** Renders `make(L)` with each library; expects one error from dispatching `type` on its innermost node. */
+    const firesSame = (make: (L: Lib) => Any, type: string, init: Any = {}): string =>
+      throwsSame((L) => {
+        const c = box();
+        const root = client(L).createRoot(c);
+        (L === React ? ReactDOM : L).flushSync(() => root.render(make(L)));
+        let at = c.firstChild!;
+        while (at.firstChild !== null) at = at.firstChild;
+        (at as FakeElement).dispatchEvent(Object.assign(new FakeEvent(type), init));
+      }, 231);
+    expect(firesSame((L) => L.createElement("button", { onClick: "go" }), "click")).toContain(
+      "?args[]=onClick&args[]=string ",
+    );
+    firesSame((L) => L.createElement("button", { onClickCapture: {} }), "click");
+    firesSame((L) => L.createElement("button", { onClick: true }), "click");
+    firesSame((L) => L.createElement("div", { onScroll: 1 }), "scroll");
+    firesSame((L) => L.createElement("div", { onMouseEnter: "in" }), "mouseover", { relatedTarget: null });
+    firesSame((L) => L.createElement("p", null, L.createElement("b", { onMouseEnter: 1 })), "mouseover", {
+      relatedTarget: null,
+    });
+    // A compiled block's handler.
+    firesSame(
+      (L) =>
+        L === React
+          ? L.createElement("button", { onClick: "go" })
+          : Compat.__block(Compat.__template(["button", { onClick: { h: 0 } }]), null, ["go"]),
+      "click",
+    );
+  });
+
+  test("optimistic state set, or an action dispatched, while rendering (#479, #485)", async () => {
+    // React's microtask scheduling reads window.event after the failed render.
+    (globalThis as Any).window = {};
+    try {
+      await whileRendering();
+    } finally {
+      delete (globalThis as Any).window;
+    }
+  });
+  const whileRendering = async (): Promise<void> => {
+    await reportsSame((L) => {
+      function Optimistic() {
+        const [, set] = L.useOptimistic(0);
+        set(1);
+        return null;
+      }
+      return L.createElement(Optimistic);
+    }, 479);
+    await reportsSame((L) => {
+      function Action() {
+        const [, dispatch] = L.useActionState((s: number) => s + 1, 0);
+        dispatch();
+        return null;
+      }
+      return L.createElement(Action);
+    }, 485);
+  };
+
+  test("cloneElement of null or undefined, and setState of what is not state, throw React's full messages", () => {
+    for (const v of [null, undefined])
+      expect(throwsFull((L) => L.cloneElement(v))).toBe(`The argument must be a React element, but you passed ${v}.`);
+    for (const v of [5, "s", true, Symbol.for("s")])
+      expect(throwsFull((L) => new L.Component({}).setState(v))).toBe(
+        "takes an object of state variables to update or a function which returns an object of state variables.",
+      );
+  });
+
+  test("React's Children read thenables and lazy types, throwing what they throw", () => {
+    /** What `fn` returns, as keys and types, or what it throws. */
+    const result = (fn: () => Any): Any => {
+      try {
+        return fn().map((c: Any) => (c !== null && typeof c === "object" ? [c.key, c.type] : c));
+      } catch (e) {
+        return { thrown: e };
+      }
+    };
+    const both = (make: (L: Lib) => Any) => {
+      const react = result(() => React.Children.toArray(make(React)));
+      expect(result(() => Compat.Children.toArray(make(Compat)))).toEqual(react);
+      return react;
+    };
+    const fulfilled = { then() {}, status: "fulfilled", value: "a" };
+    expect(both(() => [fulfilled, "b"])).toEqual(["a", "b"]);
+    expect(both((L) => ({ then() {}, status: "fulfilled", value: L.createElement("b", { key: "k" }) }))).toEqual([
+      [".$k", "b"],
+    ]);
+    const reason = new Error("no");
+    expect(both(() => ({ then() {}, status: "rejected", reason }))).toEqual({ thrown: reason });
+    // Read as React's use() reads one: settled at once, or thrown.
+    expect(both(() => ({ then: (ok: Any) => ok("now") }))).toEqual(["now"]);
+    expect(both(() => ({ then: (_: Any, no: Any) => no(reason) }))).toEqual({ thrown: reason });
+    const pending: Any = { then() {} };
+    expect(both(() => [pending])).toEqual({ thrown: pending });
+    expect(pending.status).toBe("pending");
+    const promise = Promise.resolve("p");
+    expect(both(() => promise)).toEqual({ thrown: promise });
+    // A lazy type is read through its loader: a loaded one gives what it loaded.
+    expect(both((L) => [L.lazy(() => ({ then: (ok: Any) => ok({ default: L.createElement("i") }) })), "z"])).toEqual([
+      [".0", "i"],
+      "z",
+    ]);
+    expect(both((L) => L.lazy(() => ({ then: (_: Any, no: Any) => no(reason) })))).toEqual({ thrown: reason });
+    for (const L of [React, Compat]) expect(L.Children.count([fulfilled, () => 1])).toBe(1);
   });
 
   /** Expects both libraries to throw one message from `fn(L)`, not a minified one; returns it. */

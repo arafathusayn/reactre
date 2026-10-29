@@ -392,8 +392,8 @@ describe("content", () => {
     expect(html()).toBe("<div><i>el</i></div>");
   });
 
-  test("an empty __html leaves the element empty", () => {
-    render(h("div", { dangerouslySetInnerHTML: {} }));
+  test("an __html of undefined leaves the element empty", () => {
+    render(h("div", { dangerouslySetInnerHTML: { __html: undefined } }));
     expect(html()).toBe("<div></div>");
   });
 

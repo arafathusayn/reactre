@@ -132,6 +132,8 @@ const BAIL_TAGS = new Set([
   "video",
   "audio",
 ]);
+// Void elements (React's list, less the ones above): any children are an error, the runtime's.
+const VOID = new Set("area base br col embed hr img keygen param source track wbr menuitem".split(" "));
 // Props that are more than an attribute: React gives each a behavior of its own (a ref gets the
 // node, autoFocus focuses on mount, `is` changes how the element is created, the default* props
 // set uncontrolled form state, action and formAction take functions), which the plain runtime has.
@@ -307,6 +309,8 @@ class Compiler {
         values.push(this.rewrite(value));
       }
     }
+    // A void element given children stays a jsx call, for the runtime to throw React's error.
+    if (children.length && VOID.has(tag)) return this.undo(values, mark);
     const desc: Desc = [tag, Object.keys(ps).length ? ps : 0];
     for (const item of children) {
       const lit = literal(item);
