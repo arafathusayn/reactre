@@ -2287,6 +2287,8 @@ interface Task {
   row: Row | null;
   /** The elements from the root to the node rendering, for errors' component stacks. */
   componentStack: StackNode | null;
+  /** The promises the suspended component used, in order: it reads them again when it retries. */
+  thenableState: Any[] | null;
 }
 
 interface Request {
@@ -2477,6 +2479,7 @@ function createRenderTask(
     treeContext,
     row,
     componentStack,
+    thenableState: null,
   };
   abortSet.add(task);
   return task;
@@ -2782,22 +2785,72 @@ const serverHooks: ServerHooks = {
     return select === undefined ? v : select(v);
   },
   browser: createRecoverableError,
+  thenable(t) {
+    // React's trackUsedThenable: the promise used at this place before is read in place of a new one.
+    const state = (thenableState ??= []);
+    const prev = state[thenableIndex++];
+    if (prev === undefined) state.push(t);
+    else if (prev !== t) {
+      t.then(noop, noop);
+      t = prev;
+    }
+    return (lastThenable = t);
+  },
 };
+
+// The promises the rendering component has used, and the next one's place. A component that
+// suspends hands them to the task that retries it (React's thenableState).
+let thenableState: Any[] | null = null;
+let thenableIndex = 0;
+let lastThenable: Any = null;
+// The promise a component suspended on through use(), and the promises it had used.
+let suspendedThenable: Any = null;
+let suspendedState: Any[] | null = null;
+
+/** The promises used before a suspension on `x`, or null when `x` did not come from use(). */
+function thenableStateAfterSuspending(x: Any): Any[] | null {
+  const state = x === suspendedThenable ? suspendedState : null;
+  suspendedThenable = suspendedState = null;
+  return state;
+}
+
+// The component __serverRender calls on each pass: each pass reads its promises from the first.
+let renderingComponent: Any = null;
+function renderPass(props: Any, secondArg: Any): Any {
+  thenableIndex = 0;
+  return renderingComponent(props, secondArg);
+}
 
 /** Call a function component with compat's hooks; `hadId` says whether it called useId. */
 let hadId = false;
 function renderWithHooks(task: Task, Component: Any, props: Any, secondArg: Any): Any {
   const prevTask = currentTask,
-    prevCount = localIdCounter;
+    prevCount = localIdCounter,
+    prevComponent = renderingComponent,
+    prevState = thenableState,
+    prevIndex = thenableIndex;
   currentTask = task;
   localIdCounter = 0;
+  renderingComponent = Component;
+  thenableState = task.thenableState;
+  task.thenableState = null;
   try {
-    const out = __serverRender(serverHooks, Component, props, secondArg);
+    const out = __serverRender(serverHooks, renderPass, props, secondArg);
     hadId = localIdCounter !== 0;
     return out;
+  } catch (x) {
+    if (x === lastThenable) {
+      suspendedThenable = x;
+      suspendedState = thenableState;
+    }
+    throw x;
   } finally {
     currentTask = prevTask;
     localIdCounter = prevCount;
+    renderingComponent = prevComponent;
+    thenableState = prevState;
+    thenableIndex = prevIndex;
+    lastThenable = null;
   }
 }
 
@@ -3504,7 +3557,7 @@ function renderChildrenArray(request: Request, task: Task, children: Any[]): voi
 }
 
 /** A task for a node that suspended: a segment of its own where the node was, rendered later. */
-function spawnNewSuspendedRenderTask(request: Request, task: Task): Task {
+function spawnNewSuspendedRenderTask(request: Request, task: Task, thenableState: Any[] | null): Task {
   const segment = task.blockedSegment;
   const newSegment = createPendingSegment(
     request,
@@ -3516,7 +3569,7 @@ function spawnNewSuspendedRenderTask(request: Request, task: Task): Task {
   );
   segment.children.push(newSegment);
   segment.lastPushedText = false;
-  return createRenderTask(
+  const newTask = createRenderTask(
     request,
     task.node,
     task.childIndex,
@@ -3531,6 +3584,8 @@ function spawnNewSuspendedRenderTask(request: Request, task: Task): Task {
     task.row,
     task.componentStack,
   );
+  newTask.thenableState = thenableState;
+  return newTask;
 }
 
 const STACK_OVERFLOW = "Maximum call stack size exceeded";
@@ -3557,7 +3612,7 @@ function renderNode(request: Request, task: Task, node: Any, childIndex: number)
     x = thrown;
     if (!request.aborted && typeof x === "object" && x !== null) {
       if (typeof x.then === "function") {
-        const newTask = spawnNewSuspendedRenderTask(request, task);
+        const newTask = spawnNewSuspendedRenderTask(request, task, thenableStateAfterSuspending(x));
         x.then(newTask.ping, newTask.ping);
         task.formatContext = prevFormat;
         task.context = prevContext;
@@ -3568,7 +3623,7 @@ function renderNode(request: Request, task: Task, node: Any, childIndex: number)
       }
       if (x.message === STACK_OVERFLOW) {
         // A deep tree: the rest renders in a task of its own, from a fresh stack.
-        request.pingedTasks.push(spawnNewSuspendedRenderTask(request, task));
+        request.pingedTasks.push(spawnNewSuspendedRenderTask(request, task, null));
         task.formatContext = prevFormat;
         task.context = prevContext;
         task.treeContext = prevTree;
@@ -3647,11 +3702,13 @@ function retryTask(request: Request, task: Task): void {
     if (typeof x === "object" && x !== null) {
       if (typeof x.then === "function") {
         segment.status = PENDING;
+        task.thenableState = thenableStateAfterSuspending(x);
         x.then(task.ping, task.ping);
         return;
       }
       if (x.message === STACK_OVERFLOW && task.node !== startNode) {
         segment.status = PENDING;
+        task.thenableState = null;
         request.pingedTasks.push(task);
         return;
       }

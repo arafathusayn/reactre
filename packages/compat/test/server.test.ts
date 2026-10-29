@@ -3060,3 +3060,57 @@ describe("stream chunks and backpressure", () => {
     expect(await run(Server, Compat)).toBe(await run(ReactNodeServer, React));
   });
 });
+
+describe("replaying promises", () => {
+  // A promise made during render: React keeps the ones a component used before it suspended and,
+  // when it renders again, reads them in place of the new ones it makes at the same positions.
+  /** A promise that resolves to `value` soon; past `limit` tries, a settled thenable, so a render that never replays still ends. */
+  const fresh = (value: Any, tries: { n: number }, limit = 4): Any =>
+    tries.n++ < limit
+      ? new Promise((resolve) => setTimeout(() => resolve(value + "@" + tries.n), 2))
+      : { status: "fulfilled", value: "gave up", then() {} };
+
+  test("a promise made during render is replayed when the component renders again", async () => {
+    await sameStream((L) => {
+      const tries = { n: 0 };
+      const One = (): Any => L.createElement("b", null, L.use(fresh("one", tries)));
+      return L.createElement("div", null, L.createElement(L.Suspense, { fallback: "f" }, L.createElement(One)));
+    });
+  });
+
+  test("each position keeps its promise: two in a row, a cached one between, and a re-render pass", async () => {
+    await sameStream((L) => {
+      const a = { n: 0 },
+        b = { n: 0 };
+      let cached: Any;
+      function Two(): Any {
+        const first = L.use(fresh("first", a));
+        const mid = L.use((cached ??= later("cached", 4)));
+        const second = L.use(fresh("second", b));
+        return L.createElement("p", null, [first, mid, second].join(" "));
+      }
+      function Again(): Any {
+        // Set during render: the component runs again in the same render, from the first promise.
+        const [n, setN] = L.useState(0);
+        if (n < 2) setN(n + 1);
+        const c = { n: 0 };
+        return L.createElement("i", null, n + ":" + L.use(n < 2 ? fresh("again", c) : fresh("again", c)));
+      }
+      return L.createElement(
+        "div",
+        null,
+        L.createElement(L.Suspense, { fallback: "f" }, L.createElement(Two)),
+        L.createElement(L.Suspense, { fallback: "g" }, L.createElement(Again)),
+      );
+    });
+  });
+
+  test("the shell's own promises, and a lazy component's, which is not replayed", async () => {
+    await sameStream((L) => {
+      const tries = { n: 0 };
+      const Shell = (): Any => L.createElement("main", null, L.use(fresh("shell", tries)));
+      const Lazy = L.lazy(() => later({ default: () => "lazy" }, 3));
+      return L.createElement(L.Fragment, null, L.createElement(Shell), L.createElement(Lazy));
+    });
+  });
+});

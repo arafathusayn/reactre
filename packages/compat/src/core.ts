@@ -4911,7 +4911,8 @@ function readThenable(t: Any): Any {
  */
 export function use<T>(usable: PromiseLike<T> | Context<T>): T {
   if (usable !== null && typeof usable === "object") {
-    if (typeof (usable as Any).then === "function") return readThenable(usable);
+    if (typeof (usable as Any).then === "function")
+      return readThenable(server !== null ? server.thenable(usable) : usable);
     const tt = (usable as Any).$$typeof;
     if (tt === RECOVERABLE_TYPE) {
       // A server render leaves the nearest boundary to the client.
@@ -5259,6 +5260,8 @@ export interface ServerHooks {
   snapshot(getServerSnapshot: Any, select: Any): Any;
   /** use(browser()): the error that leaves the nearest Suspense boundary to the client. */
   browser(token: Any): unknown;
+  /** use(promise): the promise to read, the one used at the same place before the component suspended. */
+  thenable(t: Any): Any;
 }
 
 // The server side of the hooks while a server render calls a component, else null.
