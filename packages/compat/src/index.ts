@@ -451,6 +451,7 @@ const HOIST = 1024; // host: <title>, <meta> or <link> placed in document.head
 // Places one DOM node of its own, f.d: host, text and block fibers, and a
 // function component that hosts the block it renders (see runFunc).
 const BOX = 2048;
+const LATER = 4096; // queued only from outside an event (React's default lane): flushSync leaves it
 
 // Namespaces (Fiber.ns), as indexes into NS_URI and into a template's per-namespace arrays.
 const HTML_NS = 0;
@@ -2773,7 +2774,7 @@ export interface Root {
 export interface RootOptions {
   identifierPrefix?: string;
   onUncaughtError?: (error: unknown, info: { componentStack?: string }) => void;
-  onCaughtError?: (error: unknown, info: { componentStack?: string }) => void;
+  onCaughtError?: (error: unknown, info: { componentStack?: string; errorBoundary?: unknown }) => void;
   onRecoverableError?: (error: unknown, info: { componentStack?: string }) => void;
 }
 
@@ -2895,8 +2896,8 @@ function runRoot(f: Fiber): void {
       else {
         removeAll(f);
         const report = r.opts.onUncaughtError;
-        if (report) report(thrown, { componentStack: "" });
-        else reportError(thrown);
+        if (report) callReport(report, thrown, { componentStack: "" });
+        else reportUncaught(thrown);
       }
     }
   } finally {
@@ -3101,6 +3102,8 @@ export interface ClassCore {
   rendering<T>(f: Any, fn: () => T): T;
   /** Whether f is the component rendering now. */
   isRendering(f: Any): boolean;
+  /** Call a root's error callback; an error it throws is thrown again from a task. */
+  report(report: (e: Any, info: Any) => void, e: Any, info: Any): void;
 }
 
 /** Internal: what class support provides. */
@@ -3146,6 +3149,7 @@ export function __installClasses(make: (core: ClassCore) => ClassSupport): void 
       }
     },
     isRendering: (f) => f === cur,
+    report: callReport,
   });
 }
 
@@ -3589,18 +3593,24 @@ let passiveTimer = false; // a passive-effect flush is queued after paint
 function schedule(f: Fiber): void {
   if (f.f & DEAD) return;
   f.f |= DIRTY;
-  if (!(f.f & QUEUED)) {
-    f.f |= QUEUED;
-    queue.push(f);
-  }
+  // React's lane, roughly: an update outside any event, batch or flush waits for its task, and
+  // flushSync leaves it there until a sync update reaches the same fiber.
+  let later = false;
   if (!batch && !flushing && !micro) {
     const e = (globalThis as Any).event;
     if (e !== undefined && DISCRETE.has(e.type)) flushSoon(false);
-    else if (!task) {
-      task = true;
-      afterPaint(runTask);
+    else {
+      later = true;
+      if (!task) {
+        task = true;
+        afterPaint(runTask);
+      }
     }
   }
+  if (!(f.f & QUEUED)) {
+    f.f |= later ? QUEUED | LATER : QUEUED;
+    queue.push(f);
+  } else if (!later) f.f &= ~LATER;
 }
 function runTask(): void {
   task = false;
@@ -3632,16 +3642,26 @@ function runMicro(): void {
   micro = false;
   const s = microSync;
   microSync = false;
-  try {
-    flushWork(s);
-  } catch (e) {
-    // As an error thrown in a queueMicrotask callback is: reported, not a rejection.
-    reportUncaught(e);
-  }
+  // Nothing escapes a flush: errors in renders, placement and effects go to a boundary or the root.
+  flushWork(s);
 }
 // A resolved promise's then queues a microtask in the same queue, in the same
 // order, as queueMicrotask, without leaving the engine for the browser's API.
 const RESOLVED = Promise.resolve();
+/**
+ * Call a root's error callback as React's logCaughtError and logUncaughtError do: an error it
+ * throws is thrown again from a task of its own.
+ */
+function callReport(report: (e: Any, info: Any) => void, e: Any, info: Any): void {
+  try {
+    report(e, info);
+  } catch (x) {
+    setTimeout(() => {
+      throw x;
+    }, 0);
+  }
+}
+
 /** Report an error the way an uncaught one is: reportError, or a throw from a fresh task. */
 function reportUncaught(e: Any): void {
   if (typeof reportError === "function") reportError(e);
@@ -3690,7 +3710,12 @@ function flushWork(sync: boolean): void {
           if (q.length > 1) q.sort(byDepth);
           for (let ix = 0; ix < q.length; ix++) {
             const f = q[ix]!;
-            f.f &= ~QUEUED;
+            // flushSync leaves an update from outside an event to its task.
+            if (syncOnly && f.f & LATER) {
+              held.push(f);
+              continue;
+            }
+            f.f &= ~(QUEUED | LATER);
             // Skipped when a parent's render already rendered it (DIRTY cleared) or removed it.
             if ((f.f & (DIRTY | DEAD)) === DIRTY) rerender(f);
           }
@@ -3709,6 +3734,11 @@ function flushWork(sync: boolean): void {
   }
   // Updates made by the passive effects just run (or left by a throw) get a flush of their own.
   if (queue.length) flushSoon(false);
+  // What flushSync left waits for the task it was queued for.
+  if (held.length) {
+    for (let ix = 0; ix < held.length; ix++) queue.push(held[ix]!);
+    held.length = 0;
+  }
   if ((passiveQ.length || passiveUnmountQ.length) && !passiveTimer) {
     passiveTimer = true;
     afterPaint(() => {
@@ -3763,13 +3793,24 @@ function rerender(f: Fiber): void {
     const host = curHost;
     curHost = ph;
     curNs = pn;
-    if (host.f & STRUCT) place(host);
+    // A DOM error placing the nodes goes to a boundary, as React captures a commit-phase error.
+    if (host.f & STRUCT)
+      try {
+        place(host);
+      } catch (e) {
+        throwTo(host, e);
+      }
   }
 }
 
 // #endregion
 
 // #region Errors and boundaries
+
+// Whether the flush running is flushSync's, which renders sync-lane updates only, and the fibers
+// it left queued for their task.
+let syncOnly = false;
+const held: Fiber[] = [];
 
 // Whether throwTo routed something since flushWork last looked.
 let routed = false;
@@ -3820,7 +3861,12 @@ export function flushSync<T>(fn?: () => T): T {
   } finally {
     batch--;
   }
-  flushWork(true);
+  syncOnly = true;
+  try {
+    flushWork(true);
+  } finally {
+    syncOnly = false;
+  }
   return r;
 }
 
@@ -4615,8 +4661,18 @@ function runFormAction(form: Fiber, action: Any, data: FormData): void {
 /** Reset a form when its running action finishes (forms with actions reset anyway). */
 export function requestFormReset(form: HTMLFormElement): void {
   const f = (form as Any)[FIBER] as Fiber | undefined;
-  // While an action runs the reset is due anyway when it finishes.
-  if (f === undefined || f.s === null || !f.s.pending) form.reset();
+  if (f === undefined || f.n !== HOST || f.t !== "form")
+    throw new Error("Invalid form element. requestFormReset must be passed a form that was rendered by React.");
+  // While the form's action runs, its end resets the form: one reset, as in React's one commit.
+  if (f.s !== null && f.s.pending) return;
+  // As React's state update of the form: reset at the next commit, after the transition it was
+  // made in ends.
+  const due = (): void => {
+    later(f, () => form.reset());
+    flushSoon(false);
+  };
+  if (transition !== null) transition.done.push(due);
+  else due();
 }
 
 // #endregion

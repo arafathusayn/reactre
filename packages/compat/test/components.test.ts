@@ -907,19 +907,39 @@ describe("scheduling", () => {
     expect(log).toEqual(["effect 1"]);
   });
 
-  test("an error escaping a scheduled flush is reported as an uncaught error is", async () => {
-    // The module's update queue is left in a bad state by this (see the report), so a copy.
-    const m = await isolated("flush-error");
-    const { el, flip } = brittleRoot(m);
+  test("an error placing nodes in a scheduled flush is reported as an uncaught error is", async () => {
+    const { el, flip } = brittleRoot({ createRoot, createElement: h, flushSync, useState });
     el.broken = true;
     flip();
     await nextTask();
     expect(reports).toEqual([new Error("DOM refused")]);
   });
 
-  test("without reportError, an error escaping a flush is thrown from a task of its own", async () => {
-    const m = await isolated("flush-error-no-report");
-    const { el, flip } = brittleRoot(m);
+  // React's logUncaughtError: an error onUncaughtError throws is thrown again from a task.
+  test("an error onUncaughtError throws is thrown from a task, and the root still unmounts", () => {
+    const realSetTimeout = globalThis.setTimeout;
+    const later: (() => void)[] = [];
+    globalThis.setTimeout = ((fn: () => void) => (later.push(fn), 0)) as unknown as typeof setTimeout;
+    try {
+      const r = createRoot(container as unknown as Element, {
+        onUncaughtError: () => {
+          throw new Error("report failed");
+        },
+      });
+      function Bomb(): never {
+        throw new Error("boom");
+      }
+      flushSync(() => r.render(h("div", null, h(Bomb))));
+    } finally {
+      globalThis.setTimeout = realSetTimeout;
+    }
+    expect(html()).toBe("");
+    expect(later).toHaveLength(1);
+    expect(later[0]!).toThrow("report failed");
+  });
+
+  test("without reportError, an uncaught error is thrown from a task of its own", async () => {
+    const { el, flip } = brittleRoot({ createRoot, createElement: h, flushSync, useState });
     const realSetTimeout = globalThis.setTimeout;
     const later: (() => void)[] = [];
     g.reportError = undefined;
@@ -935,10 +955,28 @@ describe("scheduling", () => {
     expect(later[0]!).toThrow("DOM refused");
   });
 
-  // After an error escapes flushWork mid-queue, the swapped-out queue array is orphaned with the
-  // fibers after the failing one still flagged QUEUED, so they never render again; and `queue`
-  // and `spareQueue` stay the same array. React captures a commit-phase error per root.
-  test.todo("an error escaping a flush leaves the other fibers queued with it able to render again");
+  // React captures a commit-phase error (captureCommitPhaseError): it goes to the boundary above,
+  // or to the root, which unmounts and reports it; the other updates of that flush still render.
+  test("an error placing nodes goes to the root, and the flush renders the other updates", () => {
+    const { el, flip } = brittleRoot({ createRoot, createElement: h, flushSync, useState });
+    let setB!: (n: number) => void;
+    function B() {
+      const [n, set] = useState(0);
+      setB = set;
+      return h("p", null, n);
+    }
+    render(h(B));
+    el.broken = true;
+    flushSync(() => {
+      flip();
+      setB(1);
+    });
+    expect(html()).toBe("<p>1</p>");
+    expect(reports).toEqual([new Error("DOM refused")]);
+    expect(el.firstChild).toBeNull();
+    flushSync(() => setB(2));
+    expect(html()).toBe("<p>2</p>");
+  });
 });
 
 /**
@@ -1007,8 +1045,25 @@ describe("batching APIs", () => {
   });
 
   // React's flushSync flushes sync-lane work only (flushSyncWork): an update from a timer waits
-  // for its own task. Compat's flushSync renders every queued update.
-  test.todo("flushSync leaves pending updates of other lanes to the scheduler");
+  // for its own task, unless a sync update reaches the same component.
+  test("flushSync leaves pending updates of other lanes to the scheduler", async () => {
+    const sets: ((n: number) => void)[] = [];
+    function Count({ tag }: { tag: string }) {
+      const [n, set] = useState(0);
+      sets.push(set);
+      return h(tag, null, n);
+    }
+    render([h(Count, { key: "a", tag: "i" }), h(Count, { key: "b", tag: "b" })]);
+    const [setA, setB] = sets;
+    setA!(1);
+    flushSync(() => setB!(1));
+    expect(html()).toBe("<i>0</i><b>1</b>");
+    await nextTask();
+    expect(html()).toBe("<i>1</i><b>1</b>");
+    setA!(2);
+    flushSync(() => setA!(3));
+    expect(html()).toBe("<i>3</i><b>1</b>");
+  });
 
   test("act renders a callback's updates and runs their effects before it returns", () => {
     const log: string[] = [];

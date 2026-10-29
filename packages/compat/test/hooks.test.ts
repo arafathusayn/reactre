@@ -1181,6 +1181,34 @@ describe("forms", () => {
     expect(form["resets"]).toBe(1);
   });
 
+  // React's requestFormReset is a state update of the form: the reset happens when it commits,
+  // after the transition it was made in ends, and only for a form React rendered.
+  test("requestFormReset resets at the next commit, or when its transition ends", async () => {
+    render(h("form", null));
+    const form = container.firstChild as FakeElement;
+    requestFormReset(form as unknown as HTMLFormElement);
+    expect(form["resets"]).toBe(undefined);
+    await nextTask();
+    expect(form["resets"]).toBe(1);
+    const d = deferred();
+    startTransition(async () => {
+      requestFormReset(form as unknown as HTMLFormElement);
+      await d.promise;
+    });
+    await nextTask();
+    expect(form["resets"]).toBe(1);
+    d.resolve();
+    await nextTask();
+    expect(form["resets"]).toBe(2);
+  });
+
+  test("requestFormReset of a form React did not render throws React's error", () => {
+    render(h("div", null));
+    const message = "Invalid form element. requestFormReset must be passed a form that was rendered by React.";
+    expect(() => requestFormReset(new FakeElement("FORM") as unknown as HTMLFormElement)).toThrow(message);
+    expect(() => requestFormReset(container.firstChild as unknown as HTMLFormElement)).toThrow(message);
+  });
+
   test("requestFormReset while the form's action runs leaves the reset to the action's end", async () => {
     const d = deferred();
     render(h("form", { action: () => d.promise }));

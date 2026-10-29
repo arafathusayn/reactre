@@ -222,11 +222,13 @@ function support(core: ClassCore): ClassSupport {
     }
     const caught = thrown;
     // Component stacks are not tracked, so the error info's stack is empty.
+    // As React's logCaughtError: the root's onCaughtError first, given the boundary, then
+    // componentDidCatch.
     core.later(f, () => {
-      if (typeof inst.componentDidCatch === "function") inst.componentDidCatch(caught, { componentStack: "" });
       const report = f.o.opts.onCaughtError;
-      if (report) report(caught, { componentStack: "" });
+      if (report) core.report(report, caught, { componentStack: "", errorBoundary: inst });
       else console.error(caught);
+      if (typeof inst.componentDidCatch === "function") inst.componentDidCatch(caught, { componentStack: "" });
     });
     // With only componentDidCatch, the boundary renders nothing until that method sets state.
     if (typeof gdsfe === "function") render(f, inst);

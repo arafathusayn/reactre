@@ -320,6 +320,45 @@ describe("error boundaries with componentDidCatch only", () => {
     bad = false;
   });
 
+  // React's logCaughtError: onCaughtError gets the boundary instance and runs before
+  // componentDidCatch; an error it throws is thrown again from a task of its own.
+  test("onCaughtError gets the boundary before componentDidCatch runs, and its own error goes to a task", () => {
+    const log: unknown[] = [];
+    const realSetTimeout = globalThis.setTimeout;
+    const later: (() => void)[] = [];
+    globalThis.setTimeout = ((fn: () => void) => (later.push(fn), 0)) as unknown as typeof setTimeout;
+    try {
+      root = createRoot(container as unknown as Element, {
+        onCaughtError: (e, info) => {
+          log.push("report " + (e as Error).message, info);
+          throw new Error("report failed");
+        },
+      });
+      let inst: unknown = null;
+      class Catcher extends Component<{ children?: unknown }, { error: string | null }> {
+        override state = { error: null as string | null };
+        override componentDidCatch(e: Error) {
+          inst = this;
+          log.push("did catch " + e.message);
+          this.setState({ error: e.message });
+        }
+        override render() {
+          return this.state.error !== null ? h("p", null, "caught") : (this.props.children as never);
+        }
+      }
+      function Bomb(): never {
+        throw new Error("bang");
+      }
+      render(h(Catcher, null, h(Bomb)));
+      expect(html()).toBe("<p>caught</p>");
+      expect(log).toEqual(["report bang", { componentStack: "", errorBoundary: inst }, "did catch bang"]);
+    } finally {
+      globalThis.setTimeout = realSetTimeout;
+    }
+    expect(later).toHaveLength(1);
+    expect(later[0]!).toThrow("report failed");
+  });
+
   test("an error in a class's own render goes to the boundary above, and the class renders again later", () => {
     let fail = true;
     class Fragile extends Component<{ n: number }> {
