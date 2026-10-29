@@ -24,6 +24,8 @@ const React: Any = await load("react");
 const ReactDOM: Any = await load("react-dom");
 const ReactServer: Any = await load("react-dom/server.browser");
 const ReactNodeServer: Any = await load("react-dom/server.node");
+// What react-dom/server resolves to under Bun.
+const ReactBunServer: Any = await load("react-dom/server.bun");
 if (prevEnv === undefined) delete process.env["NODE_ENV"];
 else process.env["NODE_ENV"] = prevEnv;
 
@@ -3257,5 +3259,43 @@ describe("formState and server actions", () => {
     const html = await sameStream(again, { formState: [42, key, "ref", null] });
     expect(html).toContain("again:2:42");
     expect(html).toContain("<!--F!-->");
+  });
+});
+
+describe("hints from async work", () => {
+  // React's Node build (and its edge build, where AsyncLocalStorage is global) finds the request
+  // of a hint made in async work the render started, and flushes it; compat does where
+  // AsyncLocalStorage exists. React's Bun build has no such storage: the hint goes nowhere.
+  const make: Make = (L) => {
+    const D = dom(L);
+    const gate = later("done", 20);
+    let started = false;
+    function Async(): Any {
+      if (!started) {
+        started = true;
+        void Promise.resolve()
+          .then(() => later(null, 2))
+          .then(() => {
+            D.preconnect("https://async.example");
+            D.preload("/async.js", { as: "script" });
+            D.preinit("/async-script.js", { as: "script" });
+          });
+      }
+      return L.createElement("b", null, L.use(gate));
+    }
+    return L.createElement(
+      "html",
+      null,
+      L.createElement("body", null, L.createElement(L.Suspense, { fallback: "f" }, L.createElement(Async))),
+    );
+  };
+
+  test("a hint made in a promise callback the render started reaches the stream", async () => {
+    const piped = await pipeAll(Server, make(Compat));
+    expect(piped).toBe(await pipeAll(ReactNodeServer, make(React)));
+    expect(piped).toContain("/async.js");
+    const streamed = await streamAll(Server, make(Compat));
+    expect(streamed).toBe(await streamAll(ReactNodeServer, make(React)));
+    expect(await streamAll(ReactBunServer, make(React))).not.toContain("/async.js");
   });
 });

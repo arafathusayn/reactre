@@ -6061,7 +6061,8 @@ interface Hinted {
   preloads: Map<string, Any>;
 }
 const hinted = new WeakMap<object, Hinted>();
-// While @reactre/compat/server renders, its resource dispatcher: hints go to the HTML it writes.
+// Once @reactre/compat/server renders, its resource dispatcher: a hint a request takes goes to the
+// HTML it writes (the dispatcher returns true); the others are the client's.
 let serverHints: Any = null;
 /** Internal (@reactre/compat/server): the server's resource dispatcher, or null. */
 export function __serverHints(d: Any): void {
@@ -6095,7 +6096,7 @@ function hintElement(d: Any, tag: string, props: Any): Any {
 }
 
 function preconnectAs(rel: string, href: string, crossOrigin: string | null | undefined): void {
-  if (serverHints) return serverHints[rel](href, crossOrigin);
+  if (serverHints?.[rel](href, crossOrigin)) return;
   const d = doc();
   if (d === null || !href) return;
   let sel = `link[rel="${rel}"][href="${escAttr(href)}"]`;
@@ -6135,7 +6136,7 @@ export function preload(href: string, opts?: Any): void {
     imageSizes: str(opts.imageSizes),
     media: str(opts.media),
   };
-  if (serverHints) return serverHints.L(href, as, o);
+  if (serverHints?.L(href, as, o)) return;
   const d = doc();
   if (d === null || !href || !as) return;
   // An image with a srcset is known by it, not by its href.
@@ -6170,7 +6171,7 @@ export function preloadModule(href: string, opts?: Any): void {
         fetchPriority: str(opts.fetchPriority),
       }
     : undefined;
-  if (serverHints) return serverHints.m(href, o);
+  if (serverHints?.m(href, o)) return;
   const d = doc();
   if (d === null || !href) return;
   const as = o?.as ?? "script";
@@ -6214,7 +6215,7 @@ export function preinitModule(href: string, opts?: Any): void {
 }
 
 function preinitStyle(href: string, precedence: string | undefined, o: Any): void {
-  if (serverHints) return serverHints.S(href, precedence, o);
+  if (serverHints?.S(href, precedence, o)) return;
   const d = doc();
   if (d === null || !href) return;
   const key = styleKey(href),
@@ -6235,7 +6236,7 @@ function preinitStyle(href: string, precedence: string | undefined, o: Any): voi
 }
 
 function preinitScript(src: string, o: Any, module: boolean): void {
-  if (serverHints) return serverHints.X(src, o, module);
+  if (serverHints?.X(src, o, module)) return;
   const d = doc();
   if (d === null || !src) return;
   const key = scriptKey(src),

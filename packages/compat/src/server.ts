@@ -1699,12 +1699,56 @@ function createRenderState(
 
 // ReactDOM's preload, preinit and the rest, while a request works (React's server dispatcher):
 // compat's react-dom functions check their options as React's do and pass what they keep here.
-// Like React's browser and Bun builds, a hint reaches the request only from code its work runs.
-// (React's Node build, and its edge build where AsyncLocalStorage exists, also take hints made
-// later in a promise callback the render started.)
+// A hint goes to the request working now, or, as in React's Node and edge builds, to the request
+// whose work started the async code that makes it: the streams' work runs in an
+// AsyncLocalStorage where one exists (a global one, as edge runtimes have, or node:async_hooks').
+// Without one, as in React's browser and Bun builds, only the work's own code reaches it.
 
 /** The request working now: hints go to it. */
 let currentRequest: Request | null = null;
+
+const AsyncStorage: Any =
+  (globalThis as Any).AsyncLocalStorage ??
+  (globalThis as Any).process?.getBuiltinModule?.("async_hooks")?.AsyncLocalStorage;
+/** The request of the async work the streams' renders start, where AsyncLocalStorage exists. */
+const requestStorage: { run(request: Request, fn: (r: Request) => void, arg: Request): void; getStore(): Any } | null =
+  AsyncStorage ? new AsyncStorage() : null;
+
+/** Run the request's work where async code it starts finds the request. */
+function runInRequest(request: Request, fn: (request: Request) => void): void {
+  requestStorage !== null ? requestStorage.run(request, fn, request) : fn(request);
+}
+
+/**
+ * Pass a hint to the request it belongs to; false when there is none (the client's functions
+ * take it). One made outside the request's work schedules a flush, as React's enqueueFlush does.
+ */
+function dispatchHint(hint: (a: Any, b: Any, c: Any) => void, a: Any, b: Any, c: Any): boolean {
+  if (currentRequest !== null) {
+    hint(a, b, c);
+    return true;
+  }
+  const request: Request | undefined = requestStorage?.getStore();
+  if (request === undefined) return false;
+  currentRequest = request;
+  try {
+    hint(a, b, c);
+  } finally {
+    currentRequest = null;
+  }
+  enqueueFlush(request);
+  return true;
+}
+
+/** Flush what a hint added, in a task of its own, unless a flush or work is pending. */
+function enqueueFlush(request: Request): void {
+  if (request.flushScheduled || request.pingedTasks.length !== 0 || request.destination === null) return;
+  request.flushScheduled = true;
+  request.scheduleWork(() => {
+    const destination = request.destination;
+    destination !== null ? flushCompletedQueues(request, destination) : (request.flushScheduled = false);
+  });
+}
 
 const credentialsOf = (options: Any): ResourceState =>
   !options || (typeof options.crossOrigin !== "string" && typeof options.integrity !== "string")
@@ -1953,6 +1997,16 @@ const serverHints = {
     queue.sheets.set(href, sheet);
   },
   X: preinitScriptAs,
+};
+
+/** What compat's react-dom functions call: true when a request took the hint. */
+const hintDispatcher = {
+  "dns-prefetch": (href: Any, crossOrigin: Any) => dispatchHint(serverHints["dns-prefetch"], href, crossOrigin, null),
+  preconnect: (href: Any, crossOrigin: Any) => dispatchHint(serverHints.preconnect, href, crossOrigin, null),
+  L: (href: Any, as: Any, options: Any) => dispatchHint(serverHints.L, href, as, options),
+  m: (href: Any, options: Any) => dispatchHint(serverHints.m, href, options, null),
+  S: (href: Any, precedence: Any, options: Any) => dispatchHint(serverHints.S, href, precedence, options),
+  X: (src: Any, options: Any, module: Any) => dispatchHint(serverHints.X, src, options, module),
 };
 
 // #endregion
@@ -2363,6 +2417,7 @@ interface RequestOptions {
 }
 
 function createRequest(children: Any, o: RequestOptions): Request {
+  __serverHints(hintDispatcher);
   const rs = createResumableState(o.options?.identifierPrefix);
   const rootContext = o.legacy
     ? formatContext(ROOT_HTML_MODE, null, 0, null)
@@ -3897,7 +3952,6 @@ function performWork(request: Request): void {
     prevRequest = currentRequest;
   currentResumableState = request.resumableState;
   currentRequest = request;
-  __serverHints(serverHints);
   try {
     const pinged = request.pingedTasks;
     let i: number;
@@ -3911,7 +3965,6 @@ function performWork(request: Request): void {
     currentResumableState = prevResumable;
     // A render inside a render's component goes back to the outer one's request.
     currentRequest = prevRequest;
-    __serverHints(prevRequest === null ? null : serverHints);
     // The context objects go back to the values they had, so client roots read their defaults.
     switchContext(prevContext);
   }
@@ -4943,7 +4996,7 @@ function startFlowing(request: Request, destination: Destination): void {
 /** Start rendering: the work in a microtask, and the request opens after the first task. */
 function startWork(request: Request): void {
   request.flushScheduled = request.destination !== null;
-  queueMicrotask(() => performWork(request));
+  queueMicrotask(() => runInRequest(request, performWork));
   request.scheduleWork(() => {
     if (request.status === OPENING) request.status = OPEN;
     safelyEmitEarlyPreloads(request, request.pendingRootTasks === 0);
