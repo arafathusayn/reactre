@@ -612,9 +612,12 @@ describe("hydration", () => {
       },
     },
   });
-  // Hydrates the container's server HTML with `el`: the first render runs before this returns.
+  // Hydrates the container's server HTML with `el`: inside flushSync, so the shell hydrates
+  // before this returns, as React's does.
   const hydrate = (el: unknown): Root =>
-    hydrateRoot(container as unknown as Element, el, { onUncaughtError: (e) => void uncaught.push(e) });
+    flushSync(() =>
+      hydrateRoot(container as unknown as Element, el, { onUncaughtError: (e) => void uncaught.push(e) }),
+    );
 
   test("matching elements and texts are claimed; comments between texts stay", () => {
     container.innerHTML = '<p class="x">a<!-- -->b</p>';
@@ -640,9 +643,11 @@ describe("hydration", () => {
     container.innerHTML = "<p>helloworld</p>";
     const p = container.firstChild;
     const seen: string[] = [];
-    hydrateRoot(container as unknown as Element, h("p", null, "hello", "world"), {
-      onRecoverableError: (e, info) => void seen.push((e as Error).message.split(" for ")[0]!, info.componentStack!),
-    });
+    flushSync(() =>
+      hydrateRoot(container as unknown as Element, h("p", null, "hello", "world"), {
+        onRecoverableError: (e, info) => void seen.push((e as Error).message.split(" for ")[0]!, info.componentStack!),
+      }),
+    );
     expect(container.firstChild).not.toBe(p);
     expect(container.firstChild!.childNodes.map((n) => (n as FakeText).data)).toEqual(["hello", "world"]);
     // The component stack is checked against React's in ./client.test.ts.
@@ -656,11 +661,11 @@ describe("hydration", () => {
     try {
       globalThis.reportError = (e) => void seen.push("reportError", (e as Error).message.slice(0, 26));
       container.innerHTML = "<p>a</p>";
-      hydrateRoot(container as unknown as Element, h("b", null, "a"));
+      flushSync(() => hydrateRoot(container as unknown as Element, h("b", null, "a")));
       (globalThis as { reportError?: unknown }).reportError = undefined;
       console.error = (e: Error) => void seen.push("console.error", e.message.slice(0, 26));
       container.innerHTML = "<p>a</p>";
-      hydrateRoot(container as unknown as Element, h("b", null, "a"));
+      flushSync(() => hydrateRoot(container as unknown as Element, h("b", null, "a")));
     } finally {
       globalThis.reportError = real;
       console.error = log;
@@ -669,35 +674,36 @@ describe("hydration", () => {
     expect(html()).toBe("<b>a</b>");
   });
 
-  // React keeps the server's HTML of a boundary that suspends while hydrating and hydrates it once
-  // the promise settles; compat drops it, shows the fallback, then renders the content.
-  test("a boundary that suspends while hydrating shows its fallback, then its content", async () => {
+  // The order of what hydrates when is compared with React's own client in client.test.ts.
+  test("a boundary that suspends while hydrating keeps the server's HTML, then hydrates it", async () => {
     container.innerHTML = "<main><!--$--><p>a</p><!--/$--><b>b</b></main>";
-    const b = container.firstChild!.childNodes[3];
+    const [, p, , b] = container.firstChild!.childNodes;
     let done = false,
       resolve!: () => void;
-    const p = new Promise<void>((r) => (resolve = r));
+    const ready = new Promise<void>((r) => (resolve = r));
     function Wait() {
-      if (!done) throw p;
+      if (!done) throw ready;
       return h("p", null, "a");
     }
     hydrate(h("main", null, h(Suspense, { fallback: h("i", null, "…") }, h(Wait)), h("b", null, "b")));
-    expect(html()).toBe("<main><i>…</i><b>b</b></main>");
-    expect(container.firstChild!.childNodes[1]).toBe(b!);
+    await new Promise((r) => setTimeout(r, 10));
+    const kept = (): boolean => container.firstChild!.childNodes[1] === p && container.firstChild!.childNodes[3] === b;
+    expect([html(), kept()]).toEqual(["<main><p>a</p><b>b</b></main>", true]);
     done = true;
     resolve();
-    await new Promise((r) => setTimeout(r, 350));
-    flushSync();
-    expect(html()).toBe("<main><p>a</p><b>b</b></main>");
+    await new Promise((r) => setTimeout(r, 10));
+    expect([html(), kept()]).toEqual(["<main><p>a</p><b>b</b></main>", true]);
   });
 
   test("a text where the server has an element does not match", () => {
     container.innerHTML = "<p><b>x</b></p>";
     const b = container.firstChild!.firstChild;
     const errors: unknown[] = [];
-    hydrateRoot(container as unknown as Element, h("p", null, "t", h("b", null, "x")), {
-      onRecoverableError: (e) => void errors.push(e),
-    });
+    flushSync(() =>
+      hydrateRoot(container as unknown as Element, h("p", null, "t", h("b", null, "x")), {
+        onRecoverableError: (e) => void errors.push(e),
+      }),
+    );
     expect(html()).toBe("<p>t<b>x</b></p>");
     expect(container.firstChild!.childNodes[1]).not.toBe(b!);
     expect(errors).toHaveLength(1);
@@ -722,7 +728,7 @@ describe("hydration", () => {
     // Added by a browser extension: not the server's, not to be removed.
     const extra = new FakeElement("ASIDE");
     doc.appendChild(extra);
-    hydrateRoot(doc as unknown as Document, h("html", null, h("body", null, h("p", null, "hi"))));
+    flushSync(() => hydrateRoot(doc as unknown as Document, h("html", null, h("body", null, h("p", null, "hi")))));
     expect(doc.childNodes).toEqual([doctype, htmlEl, extra]);
     expect(html(htmlEl)).toBe("<body><p>hi</p></body>");
   });

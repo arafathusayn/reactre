@@ -204,9 +204,9 @@ function support(core: ClassCore): ClassSupport {
           callbacks(f);
           return;
         } catch (e) {
-          // A suspension goes up to a Suspense boundary, and a hydration mismatch to what recovers
-          // from it; an error goes up past a class that is not a boundary.
-          if (isThenable(e) || e === core.MISMATCH || !boundary(f)) throw e;
+          // A suspension goes up to a Suspense boundary, and anything thrown while hydrating to
+          // what recovers from it; an error goes up past a class that is not a boundary.
+          if (isThenable(e) || core.hydrating() || !boundary(f)) throw e;
           thrown = e;
         }
       }

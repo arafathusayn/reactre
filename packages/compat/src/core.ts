@@ -36,9 +36,8 @@
 //
 // What differs from React: rendering is synchronous (no time slicing, so a transition renders at
 // once and a suspended update shows its boundary's fallback, with the old content kept hidden
-// and its state intact), and hydration runs in one pass, Suspense content included, writing the
-// client's attributes to the server's elements. The server renderer is @reactre/compat/server; the
-// hooks here serve it too (see "Server rendering" in the hooks region).
+// and its state intact). The server renderer is @reactre/compat/server; the hooks here serve it
+// too (see "Server rendering" in the hooks region).
 //
 // The file reads top down, in folding regions: elements, children utilities, fibers, child
 // reconciliation, DOM placement, host elements, compiled blocks, hydration, roots and portals,
@@ -580,7 +579,8 @@ class Fiber {
   ns = HTML_NS;
   /**
    * Hydration cursor holder: while hydrating, the next server-rendered child node this host
-   * (or root) has yet to claim; null when there is nothing to claim.
+   * (or root) has yet to claim; null when there is nothing to claim. A dehydrated Suspense
+   * boundary or Activity keeps its Dehydrated state here.
    */
   hc: Any = null;
   /** Block, or a function component hosting one: the block element last rendered. */
@@ -1486,9 +1486,10 @@ function create(it: Any, p: Fiber, key: Key): Fiber {
     else if (f.n === PORTAL) runPortal(f, true);
     else update(f, it, true);
   } catch (e) {
-    // A child that fails to mount is dropped: nothing of it is committed.
+    // A child that fails to mount is dropped: nothing of it is committed. While hydrating, the
+    // server's nodes it claimed stay, for the content to hydrate again or render on the client.
     thrownIn(f, e);
-    unmount(f, true);
+    unmount(f, !hydrating);
     throw e;
   }
   // A new node under a Fragment ref gets its instance's listeners and observers.
@@ -1775,8 +1776,9 @@ function hostNs(h: Fiber): number {
 }
 
 /**
- * Render a host element: create (or claim) its DOM element on mount, set changed props, render
- * its children with it as the current host, place them if they changed, then queue its ref.
+ * Render a host element: create its DOM element on mount (or hand a claimed server element to
+ * hydration, which renders it), set changed props, render its children with it as the current
+ * host, place them if they changed, then queue its ref.
  */
 function runHost(f: Fiber, old: Props | null, mount: boolean): void {
   const p = f.p;
@@ -1797,7 +1799,7 @@ function runHost(f: Fiber, old: Props | null, mount: boolean): void {
         if (p.multiple) dom.multiple = true;
         else if (p.size) dom.size = p.size;
       }
-    } else f.f |= CLAIMED;
+    } else return (hydrating as Hydration).host(f, dom, p);
     f.d = dom;
     dom[FIBER] = f;
     // React's void elements take no children (#137): looked up only for an element given some.
@@ -1824,11 +1826,6 @@ function runHost(f: Fiber, old: Props | null, mount: boolean): void {
   } finally {
     curHost = ph;
     curNs = pn;
-  }
-  if (f.f & CLAIMED) {
-    // Hydration: server nodes nothing claimed are a mismatch.
-    f.f &= ~CLAIMED;
-    if (f.tx === null && p.dangerouslySetInnerHTML?.__html == null) (hydrating as Hydration).done(f);
   }
   if (f.f & STRUCT) place(f);
   // After the children: the options must exist before the value can select one.
@@ -2923,17 +2920,29 @@ function blockHandlers(f: Fiber, prop: string, from: Any, out: Any[]): void {
 
 // #region Hydration
 
-// Hydration walks the server's nodes alongside the first render, as React's client does: each
-// host (and the root) keeps a cursor (Fiber.hc) at its next unclaimed child, and a host claimed
-// from the server is marked CLAIMED while its children render. A node that does not match is a
-// mismatch: React's error is queued for onRecoverableError and MISMATCH is thrown up to the
-// nearest Suspense boundary the server rendered, or the root, which renders on the client
-// instead. All of it is in HYDRATION, which only hydrateRoot reaches.
+// Hydration walks the server's nodes alongside a render, as React's client does: each host (and
+// the root) keeps a cursor (Fiber.hc) at its next unclaimed child, and a host claimed from the
+// server is marked CLAIMED while its children render. A claimed element keeps the server's
+// attributes and styles until a prop next changes: only what React's hydrateInstance applies is
+// applied (see claimProps). A node that does not match is a mismatch: React's error is queued for
+// onRecoverableError and MISMATCH is thrown up to what recovers from it, which renders on the
+// client instead.
+//
+// As in React, the shell hydrates first, in a render of its own (a task, or at once inside
+// flushSync), and leaves each Suspense boundary and Activity it meets dehydrated: the server's
+// nodes stay where they are, held by placeholder fibers, until a later pass hydrates the boundary
+// (see pass), and the boundary recovers on its own from what goes wrong inside it. Boundaries the
+// server could not finish render on the client in a pass of their own first; then each pass
+// hydrates the boundaries the last one left, nested ones in the next. A discrete event inside a
+// dehydrated boundary hydrates it first (see replay), and an update that reaches one hydrates it
+// as it renders it. A whole document that renders on the client keeps its <html>, <head> and
+// <body>, as React's singletons do (see adopt). All of it is in HYDRATION, which only hydrateRoot
+// reaches.
 
 /** What a mismatch throws, up to the boundary or root that recovers from it. */
 const MISMATCH = { hydration: "mismatch" };
 
-// The errors hydration found, each with its component stack, until the root reports them.
+// The errors hydration found, each with its component stack, until the pass reports them.
 let hydrationErrors: Any[] | null = null;
 
 /** Queue React's error for a mismatch at `f` and throw MISMATCH. */
@@ -2945,10 +2954,13 @@ function mismatch(f: Fiber, text: boolean): never {
   throw MISMATCH;
 }
 
+/** Whether comment data `d` starts a Suspense boundary ($, $!, $?, $~) or an Activity (&). */
+const opens = (d: string): boolean => d === "$" || d === "$!" || d === "$?" || d === "$~" || d === "&";
+
 /**
  * The first node from `x` on that hydration reads, as React's getNextHydratable finds it:
- * elements, texts and Suspense boundaries' start markers. Other comments (text separators, form
- * state markers, Activity's) and doctypes are passed over; a boundary's end marker ends its
+ * elements, texts and the start markers of Suspense boundaries and Activities. Other comments
+ * (text separators, form state markers) and doctypes are passed over; an end marker ends the
  * content, so null.
  */
 function hydratable(x: Any): Any {
@@ -2957,8 +2969,8 @@ function hydratable(x: Any): Any {
     if (t === 1 || t === 3) return x;
     if (t === 8) {
       const d = x.data;
-      if (d === "$" || d === "$!" || d === "$?" || d === "$~") return x;
-      if (d === "/$") return null;
+      if (opens(d)) return x;
+      if (d === "/$" || d === "/&") return null;
     }
   }
   return null;
@@ -2971,7 +2983,7 @@ const passes = (h: Fiber): boolean => h.n === ROOT || h.t === "html" || h.t === 
 const hiddenInput = (x: Any): boolean => x.nodeName === "INPUT" && x.getAttribute("type") === "hidden";
 
 // React's normalizeMarkupForTextOrAttribute: line breaks as \n, no NUL or U+FFFD.
-const normalize = (s: string): string => s.replace(/\r\n?/g, "\n").replace(/\u0000|\uFFFD/g, "");
+const normalize = (s: string): string => s.replace(/\r\n?/g, "\n").replace(/\u0000|�/g, "");
 
 /** Whether server text `server` stands for `client`, as React's checkForUnmatchedText compares. */
 const sameText = (server: string, client: string): boolean =>
@@ -3017,6 +3029,90 @@ function claimElement(f: Fiber, type: string): Any {
 }
 
 /**
+ * Render host fiber `f` on the server's element `dom`, as runHost renders a new one: it takes
+ * React's hydrateInstance's props (claimProps), its children claim the element's, and server nodes
+ * left over are a mismatch. Its ref attaches; autoFocus, an image's src and a select's value
+ * wait for an update, as in React's production client.
+ */
+function hydrateHost(f: Fiber, dom: Any, p: Any): void {
+  f.f |= CLAIMED;
+  f.d = dom;
+  dom[FIBER] = f;
+  if (p.children != null && VOID.has(f.t)) throw new Error(prodMessage(137, f.t));
+  dom[OWN] = curHost;
+  claimProps(f, dom, p);
+  const ph = curHost,
+    pn = curNs;
+  curHost = f;
+  curNs = hostNs(f);
+  try {
+    hostChildren(f, dom, p, null);
+  } finally {
+    curHost = ph;
+    curNs = pn;
+  }
+  f.f &= ~CLAIMED;
+  if (f.tx === null && p.dangerouslySetInnerHTML?.__html == null) hostDone(f);
+  if (f.f & STRUCT) place(f);
+  if (p.ref != null) swapRef(f, p.ref, undefined);
+}
+
+/**
+ * A claimed element's props, as React's production hydrateInstance applies them: no attribute or
+ * style is written, only what the element needs to work. Its event props are listened for, a
+ * function action listens for submit, and an input or textarea gets its default value and value
+ * tracker (initInput and initTextarea), the user's value and checked state left alone. A custom
+ * element's own listeners and properties wait for an update, as in React.
+ */
+function claimProps(f: Fiber, dom: Any, p: Any): void {
+  const tag: string = f.t,
+    custom = isCustom(tag);
+  for (const k in p) {
+    const v = p[k];
+    if (v == null) continue;
+    if (k.length > 2 && (k.charCodeAt(0) | 32) === 111 && (k.charCodeAt(1) | 32) === 110) {
+      if ((!custom || REACT_EVENTS.has(k)) && k.charCodeAt(0) === 111 && k.charCodeAt(2) < 91) listenFor(dom, k);
+    } else if (!custom && (k === "action" || k === "formAction") && typeof v === "function") ensure("submit", false);
+  }
+  if (tag === "input") {
+    const type = p.type,
+      v = p.value,
+      dv = p.defaultValue;
+    if (plain(type)) dom.type = type;
+    if (v != null || dv != null) {
+      if ((type === "submit" || type === "reset") && v == null) return track(dom);
+      const d = dv != null ? toStr(dv) : "";
+      dom.defaultValue = v != null ? toStr(v) : d;
+    }
+    const c = p.checked ?? p.defaultChecked;
+    // Written back as it is, as React's initInput does while hydrating.
+    // biome-ignore lint/correctness/noSelfAssign: the browser marks the field's checkedness dirty.
+    dom.checked = dom.checked;
+    dom.defaultChecked = !!c && typeof c !== "function" && typeof c !== "symbol";
+    if (plain(p.name)) dom.name = p.name;
+    track(dom);
+  } else if (tag === "textarea") {
+    let v = p.value;
+    if (v == null) {
+      let d = p.defaultValue;
+      const ch = p.children;
+      if (ch != null) {
+        if (d != null) throw new Error(prodMessage(92));
+        if (Array.isArray(ch) && ch.length > 1) throw new Error(prodMessage(93));
+        d = Array.isArray(ch) ? ch[0] : ch;
+      }
+      v = d ?? "";
+    }
+    // React's getToStringValue: functions and symbols are "", anything else as it is.
+    const d = typeof v === "function" || typeof v === "symbol" ? "" : v,
+      text = dom.textContent;
+    dom.defaultValue = d;
+    if (text === d && text !== "") dom.value = text;
+    track(dom);
+  }
+}
+
+/**
  * The server's text node for text fiber `f`, as React's canHydrateTextInstance finds it. Its text
  * must match (or the parent suppress the warning); the server's stays. An empty text is not the
  * server's: it writes none.
@@ -3045,34 +3141,132 @@ function hostDone(f: Fiber): void {
   f.hc = null;
 }
 
-/** The end marker of the server's Suspense boundary that starts at `start`, or null. */
+/** The end marker of the server's Suspense boundary or Activity that starts at `start`, or null. */
 function boundaryEnd(start: Any): Any {
   let depth = 0,
     x = start.nextSibling;
   for (; x !== null; x = x.nextSibling)
     if (x.nodeType === 8) {
       const d = x.data;
-      if (d === "/$") {
+      if (d === "/$" || d === "/&") {
         if (depth === 0) break;
         depth--;
-      } else if (d[0] === "$") depth++;
+      } else if (opens(d)) depth++;
     }
   return x;
 }
 
 /**
- * Mount Suspense boundary `f` while hydrating, as React does: it claims the boundary the server
- * rendered (else a mismatch) and hydrates its content. When that content does not match, the
- * server could not finish it (`<!--$!-->`, or `<!--$?-->` still pending), or it suspends, the
- * boundary drops the server's nodes, markers and all, and renders on the client.
+ * The start marker of the server boundary node `x` is in, among its siblings, as React's
+ * getParentHydrationBoundary finds it, or null.
  */
-function hydrateSuspense(f: Fiber): void {
+function boundaryAround(x: Any): Any {
+  let depth = 0;
+  for (x = x.previousSibling; x !== null; x = x.previousSibling)
+    if (x.nodeType === 8) {
+      const d = x.data;
+      if (opens(d)) {
+        if (depth === 0) return x;
+        depth--;
+      } else if (d === "/$" || d === "/&") depth++;
+    }
+  return null;
+}
+
+/**
+ * A dehydrated boundary, in its Fiber.hc: its start marker (null for a hidden Activity, which the
+ * server did not render), the levels of useId's tree id above it (see forkRun) and whether a pass
+ * is due for it (a boundary still streaming in waits for the server to finish it).
+ */
+interface Dehydrated {
+  s: Any;
+  k: Any[];
+  w: boolean;
+}
+
+// The boundaries left dehydrated, in the order hydration met them.
+let dehydrated: Fiber[] = [];
+
+/**
+ * Mount Suspense boundary or Activity `f` on a hydrating root: a hydration render leaves it
+ * dehydrated; one still dehydrated hydrates now (its pass, an update or an event reached it); any
+ * other mounts as on the client.
+ */
+function boundaryHydration(f: Fiber): void {
+  if (hydrating && curHost.f & CLAIMED) dehydrate(f);
+  else if (f.hc !== null) hydrateBoundary(f);
+  else if (f.n === SUSPENSE) suspense(f);
+  else activity(f);
+}
+
+/**
+ * Leave boundary `f` dehydrated, as React mounts a Suspense boundary or an Activity while
+ * hydrating: it claims the server's boundary (else a mismatch), whose nodes stay held by
+ * placeholder fibers, so they keep their place and go if the boundary unmounts first. A hidden
+ * Activity the server did not render waits for the next pass, which renders it on the client.
+ */
+function dehydrate(f: Fiber): void {
   const h = curHost,
-    hy = hydrating,
-    start = hydratable(h.hc);
-  if (start === null || start.nodeType !== 8) return mismatch(f, false);
-  const end = boundaryEnd(start);
-  if (start.data === "$!" || start.data === "$?") {
+    st: Dehydrated = { s: null, k: forks.slice(), w: true };
+  if (f.n === ACTIVITY && f.p.mode === "hidden") {
+    f.hc = st;
+    dehydrated.push(f);
+    return;
+  }
+  const start = hydratable(h.hc);
+  if (start === null || start.nodeType !== 8 || (start.data === "&") !== (f.n === ACTIVITY)) return mismatch(f, false);
+  const end = boundaryEnd(start),
+    ph: Fiber[] = [];
+  h.hc = end === null ? null : end.nextSibling;
+  for (let x = start; x !== null; x = x === end ? null : x.nextSibling) {
+    const el = x.nodeType === 1,
+      c = new Fiber(el ? HOST : TEXT, el ? x.nodeName : null, ph.length, f, f.o);
+    c.d = x;
+    if (!el) c.p = x.data;
+    c.i = ph.length;
+    x[OWN] = h;
+    ph.push(c);
+  }
+  f.c = ph;
+  st.s = start;
+  f.hc = st;
+  dehydrated.push(f);
+}
+
+/**
+ * Hydrate dehydrated boundary `f`, as React's updateDehydratedSuspenseComponent does. A boundary
+ * the server could not finish (`<!--$!-->`, or `<!--$?-->` once the document has loaded) renders
+ * on the client with React's error; one still streaming in waits for the server, through the
+ * `_reactRetry` React's streaming runtime calls (and the document's load, for `<!--$?-->`). Its
+ * content claims the server's nodes; if it suspends, the server's HTML stays and it hydrates
+ * again once the promise settles; if it does not match, or throws, the boundary renders on the
+ * client (an error other than a mismatch reported as React's #422, caused by it).
+ */
+function hydrateBoundary(f: Fiber): void {
+  const st: Dehydrated = f.hc,
+    start = st.s,
+    h = curHost;
+  if (start === null) {
+    f.hc = null;
+    return activity(f);
+  }
+  const data: string = start.data;
+  if (data === "$~" || (data === "$?" && start.ownerDocument.readyState === "loading")) {
+    st.w = false;
+    const doc = start.ownerDocument,
+      retry = (): void => wake(f, st);
+    if (data === "$~") start._reactRetry = retry;
+    else {
+      const loaded = (): void => {
+        retry();
+        doc.removeEventListener("DOMContentLoaded", loaded);
+      };
+      doc.addEventListener("DOMContentLoaded", loaded);
+      start._reactRetry = loaded;
+    }
+    return;
+  }
+  if (data !== "$" && data !== "&") {
     // React's error for a boundary the server could not finish, with the server's digest.
     const t = start.nextSibling,
       digest = t !== null && t.nodeType === 1 ? (t.getAttribute("data-dgst") ?? undefined) : undefined;
@@ -3082,101 +3276,414 @@ function hydrateSuspense(f: Fiber): void {
       e.digest = digest;
       (hydrationErrors ??= []).push(e, null);
     }
-  } else
-    try {
-      h.hc = start.nextSibling;
-      suspense(f);
-      // Server nodes the content did not claim: a mismatch at the boundary.
-      if (hydratable(h.hc) !== null) mismatch(f, false);
-      h.hc = end === null ? null : end.nextSibling;
-      return;
-    } catch (e) {
-      if (e !== MISMATCH && !isThenable(e)) throw e;
-      // Suspended: the fallback shows, and the content renders when the promise settles.
-      if (e !== MISMATCH) f.x = e;
-      if (f.s !== null) {
-        unmount(f.s, true);
-        f.s = null;
-        f.c = NO_FIBERS;
-      }
-    }
-  h.hc = end === null ? null : end.nextSibling;
-  for (let x = start; x !== null;) {
-    const next = x.nextSibling;
-    x.parentNode.removeChild(x);
-    x = x === end ? null : next;
+    return clientRender(f);
   }
-  hydrating = false;
+  const ph = f.c,
+    hy = hydrating,
+    hc = h.hc,
+    claimed = h.f & CLAIMED,
+    at = forks.length,
+    met = dehydrated.length,
+    errors = hydrationErrors === null ? 0 : hydrationErrors.length;
+  for (let i = 0; i < ph.length; i++) ph[i]!.d[OWN] = null;
+  f.c = NO_FIBERS;
+  f.hc = null;
+  hydrating = f.o.hydrate;
+  h.f |= CLAIMED;
+  h.hc = start.nextSibling;
+  for (let i = 0; i < st.k.length; i++) forks.push(st.k[i]);
+  const content = frag(f, 0);
+  let thrown: Any = null;
   try {
-    suspense(f);
-  } finally {
-    hydrating = hy;
+    reconcile(content, f.p.children);
+    // Server nodes the content did not claim: a mismatch at the boundary.
+    if (hydratable(h.hc) !== null) mismatch(f, false);
+  } catch (e) {
+    thrown = e;
+  }
+  hydrating = hy;
+  h.hc = hc;
+  forks.length = at;
+  if (!claimed) h.f &= ~CLAIMED;
+  // The boundaries it left dehydrated take its place in the list, so passes go in tree order.
+  const inner = dehydrated.splice(met);
+  dehydrated.splice(dehydrated.indexOf(f) + 1, 0, ...inner);
+  if (thrown === null) {
+    f.s = content;
+    f.c = [content];
+    h.f |= STRUCT;
+    return;
+  }
+  discard(content);
+  f.c = ph;
+  if (isThenable(thrown)) {
+    // Suspended: the server's HTML stays until the content can hydrate.
+    if (hydrationErrors !== null) hydrationErrors.length = errors;
+    for (let i = 0; i < ph.length; i++) ph[i]!.d[OWN] = h;
+    f.hc = st;
+    st.w = false;
+    const ping = (): void => wake(f, st);
+    thrown.then(ping, ping);
+    return;
+  }
+  if (thrown !== MISMATCH) recover(thrown, f, 422);
+  clientRender(f);
+}
+
+/** A boundary that waited (for the server, or for a promise) is due for a pass again. */
+function wake(f: Fiber, st: Dehydrated): void {
+  if (f.hc === st && !st.w) {
+    st.w = true;
+    post();
   }
 }
 
+/** Render dehydrated boundary `f` on the client: the server's nodes go, and its content mounts. */
+function clientRender(f: Fiber): void {
+  for (let i = 0, xs = f.c; i < xs.length; i++) unmount(xs[i]!, true);
+  f.c = NO_FIBERS;
+  f.hc = null;
+  if (f.n === SUSPENSE) suspense(f);
+  else activity(f);
+}
+
 /**
- * After a hydrating root's first render (or its throw): a mismatch renders the root on the
- * client, as React does, and so does a suspension or an error, the server's nodes going first.
- * Then the errors hydration found go to onRecoverableError with the layout effects, unless the
- * root failed. Returns what the root still has to handle.
+ * Queue React's #422 (a boundary) or #423 (the root) for an error thrown while hydrating, caused
+ * by it, with the component stack of where it was thrown.
+ */
+function recover(e: Any, f: Fiber, code: number): void {
+  (hydrationErrors ??= []).push(new Error(prodMessage(code), { cause: e }), stackOf(e, f, code === 423));
+  // At the root, React also builds the error's own stack, for an error update it then drops.
+  if (code === 423) stackOf(e, f);
+}
+
+/**
+ * Drop the fibers of a hydration render that did not finish: nothing of it was committed, so no
+ * cleanup or ref runs, and the server's nodes stay.
+ */
+function discard(f: Fiber): void {
+  f.f |= DEAD;
+  if (f.n === HOST) {
+    if (f.d[FIBER] === f) f.d[FIBER] = undefined;
+  } else if (f.n === ACTIVITY && f.f & HIDDEN) hiddenCount--;
+  for (let i = 0, xs = f.c; i < xs.length; i++) discard(xs[i]!);
+}
+
+// Whether a pass is posted, and the class error boundaries' count of errors caught when the
+// root's hydration render began (see failures).
+let posted = false,
+  failedBefore = 0;
+
+/** Post a pass for the boundaries due for one, after paint. */
+function post(): void {
+  if (!posted) {
+    posted = true;
+    afterPaint(pass);
+  }
+}
+
+/** Whether boundary marker `s` stands for content the server could not finish. */
+const unfinished = (s: Any): boolean =>
+  s !== null && (s.data === "$!" || (s.data === "$?" && s.ownerDocument.readyState !== "loading"));
+
+/**
+ * A pass over dehydrated boundaries, as React renders their lanes: at idle priority, after any
+ * other work waiting. Boundaries the server could not finish render first, in a pass of their
+ * own (React's default lane); then every boundary due hydrates in one (its offscreen lane), and
+ * the boundaries inside them in the next. One root per pass.
+ */
+function pass(): void {
+  posted = false;
+  if (flushing || task || micro || queue.length !== 0) return post();
+  dehydrated = dehydrated.filter((f) => f.hc !== null && !(f.f & DEAD));
+  const due = dehydrated.filter((f) => f.hc.w);
+  if (due.length === 0) return;
+  const r = due[0]!.o;
+  let list = due.filter((f) => f.o === r && unfinished(f.hc.s));
+  if (list.length === 0) list = due.filter((f) => f.o === r);
+  runPass(r, list, false);
+  if (dehydrated.some((f) => f.hc !== null && f.hc.w)) post();
+}
+
+/**
+ * Render `list`'s boundaries of root `r` as one commit: the last commit's effects first, then
+ * each boundary in its place, then their layout effects and, after them, what they recovered
+ * from, unless an error boundary caught an error in the pass, as React drops those then. `sync`
+ * runs the passive effects too, as React's sync lane does.
+ */
+function runPass(r: RootImpl, list: Fiber[], sync: boolean): void {
+  const before = failures,
+    ph = curHost,
+    pn = curNs,
+    hosts: Fiber[] = [];
+  routed = false;
+  flushing = true;
+  try {
+    flushLayout();
+    flushPassive();
+    for (let i = 0; i < list.length; i++) {
+      const f = list[i]!;
+      // A boundary hydrated meanwhile (an update reached it) or gone is passed over.
+      if (f.hc === null || f.f & DEAD) continue;
+      // Rendered in its place, as rerender does, but placed only once every boundary rendered,
+      // as React commits the pass: a node one inserts goes where the others' then are.
+      let h = f.r!;
+      while (h.n !== HOST && h.n !== ROOT && h.n !== PORTAL && h.n !== SLOT) h = h.r!;
+      curHost = h;
+      curNs = hostNs(h);
+      try {
+        run(f, f.p, false);
+      } catch (e) {
+        unwinding = true;
+        throwTo(f, e);
+      }
+      hosts.push(h);
+    }
+    for (let i = 0; i < hosts.length; i++) if (hosts[i]!.f & STRUCT) place(hosts[i]!);
+  } finally {
+    curHost = ph;
+    curNs = pn;
+    flushing = false;
+  }
+  const errors = hydrationErrors;
+  hydrationErrors = null;
+  if (errors !== null && !routed && failures === before) report(r.f, errors);
+  flushWork(sync);
+  release(r);
+}
+
+/** Report `errors` to root fiber `f`'s onRecoverableError, with the layout effects queued now. */
+function report(f: Fiber, errors: Any[]): void {
+  later(f, () => {
+    const report = f.o.opts.onRecoverableError;
+    for (let i = 0; i < errors.length; i += 2) {
+      if (report) callReport(report, errors[i], { componentStack: errors[i + 1] });
+      else if (typeof reportError === "function") reportError(errors[i]);
+      else console.error(errors[i]);
+    }
+  });
+}
+
+/**
+ * Once root `r` has hydrated its shell and has nothing dehydrated left, it hydrates no more: its
+ * renders and events no longer look here, and it stops listening for events to replay.
+ */
+function release(r: RootImpl): void {
+  if (!r.mounted || dehydrated.some((f) => f.o === r && f.hc !== null && !(f.f & DEAD))) return;
+  r.hydrate = false;
+  const i = replays.indexOf(r);
+  if (i < 0) return;
+  for (const t of REPLAYED.split(" ")) r.f.d.removeEventListener(t, replays[i + 1], true);
+  replays.splice(i, 2);
+}
+
+/** Start hydrating root fiber `f`: its cursor at the container's first node. */
+function hydrateBegin(f: Fiber): void {
+  f.hc = f.d.firstChild;
+  f.f |= CLAIMED;
+  failedBefore = failures;
+}
+
+/** Element `p`'s first child named `name`, or null. */
+function child(p: Any, name: string): Any {
+  let x = p.firstChild;
+  while (x !== null && x.nodeName !== name) x = x.nextSibling;
+  return x;
+}
+
+/**
+ * After a hydrating root's first render (or its throw). A suspension keeps the server's HTML and
+ * hydrates the root again once it settles. A mismatch renders the root on the client, as React
+ * does, the server's nodes going first, and so does any other error, reported as React's #423,
+ * caused by it. Then what hydration recovered from goes to onRecoverableError with the layout
+ * effects, unless the root failed or an error boundary caught an error, and the boundaries left
+ * dehydrated get their pass. Returns what the root still has to handle.
  */
 function hydrateDone(f: Fiber, thrown: Any): Any {
   f.f &= ~CLAIMED;
   f.hc = null;
+  if (thrown !== null && isThenable(thrown)) {
+    for (let i = 0, xs = f.c; i < xs.length; i++) discard(xs[i]!);
+    f.c = NO_FIBERS;
+    // The server's nodes are no one's again: nothing places or removes them.
+    f.f &= ~STRUCT;
+    f.o.mounted = false;
+    hydrationErrors = null;
+    return thrown;
+  }
   if (thrown !== null) {
-    removeAll(f);
-    // A whole document keeps its doctype and the nodes of others (a browser extension's).
-    if (f.d.nodeType !== 9) f.d.textContent = "";
-    if (thrown === MISMATCH) {
-      hydrating = false;
-      thrown = null;
-      try {
-        reconcile(f, f.p);
-      } catch (e) {
-        thrown = e;
-      }
+    if (thrown !== MISMATCH) recover(thrown, f, 423);
+    const d = f.d;
+    let html: Any = null;
+    if (d.nodeType === 9) {
+      // A whole document keeps its <html>, <head> and <body>, as React's singletons do.
+      for (let i = 0, xs = f.c; i < xs.length; i++) unmount(xs[i]!, false);
+      f.c = NO_FIBERS;
+      html = sparingly(d);
+    } else {
+      removeAll(f);
+      d.textContent = "";
+    }
+    hydrating = false;
+    thrown = null;
+    try {
+      reconcile(f, f.p);
+    } catch (e) {
+      thrown = e;
+    }
+    if (html !== null) {
+      const top: Node[] = [];
+      for (let i = 0, xs = f.c; i < xs.length; i++) collect(xs[i]!, top);
+      for (const n of top) if (n.nodeName === "HTML") adopt(n, html);
     }
   }
   const errors = hydrationErrors;
   hydrationErrors = null;
   // A root that fails for good reports its error alone, as React's does.
-  if (errors !== null && (thrown === null || isThenable(thrown)))
-    later(f, () => {
-      const report = f.o.opts.onRecoverableError;
-      for (let i = 0; i < errors.length; i += 2) {
-        if (report) callReport(report, errors[i], { componentStack: errors[i + 1] });
-        else if (typeof reportError === "function") reportError(errors[i]);
-        else console.error(errors[i]);
-      }
-    });
+  if (errors !== null && (thrown === null || isThenable(thrown)) && failures === failedBefore) report(f, errors);
+  release(f.o);
+  if (dehydrated.length !== 0) post();
   return thrown;
 }
 
 /**
- * useSyncExternalStore's snapshot while hydrating: the server's, as React's client reads it.
- * Without getServerSnapshot, React's #407 is the cause of the error the boundary or root that
- * renders on the client reports (#422, #423), and that client render reads getSnapshot.
+ * React's clearContainerSparingly: empty document or singleton `c` but for the doctype, <html>,
+ * <head> and <body> (each emptied the same way), scripts, styles and stylesheet links. Returns
+ * the <html> it kept.
  */
-function storeSnapshot(f: Fiber, getServerSnapshot: (() => Any) | undefined): Any {
+function sparingly(c: Any): Any {
+  let html: Any = null,
+    x = c.firstChild;
+  if (x !== null && x.nodeType === 10) x = x.nextSibling;
+  while (x !== null) {
+    const n = x,
+      name = n.nodeName;
+    x = x.nextSibling;
+    if (name === "HTML" || name === "HEAD" || name === "BODY") {
+      if (name === "HTML") html = n;
+      sparingly(n);
+    } else if (name !== "SCRIPT" && name !== "STYLE" && (name !== "LINK" || n.rel.toLowerCase() !== "stylesheet"))
+      c.removeChild(n);
+  }
+  return html;
+}
+
+/**
+ * The client's singleton element `n` (<html>, or a <head> or <body> in it) takes over the
+ * server's `o`, as React's singletons acquire theirs: `o` loses its attributes and gets the
+ * client's props, `n`'s nodes join it after what it kept, and its fiber renders on it.
+ */
+function adopt(n: Any, o: Any): void {
+  const f: Fiber = n[FIBER];
+  for (const a = o.attributes; a.length;) o.removeAttributeNode(a[0]);
+  setProps(f, o, NO_PROPS, f.p, true);
+  f.d = o;
+  o[FIBER] = f;
+  o[OWN] = n[OWN];
+  for (let x = n.firstChild; x !== null;) {
+    const next = x.nextSibling,
+      name = x.nodeName;
+    const s = name === "HEAD" || name === "BODY" ? child(o, name) : null;
+    if (s !== null) adopt(x, s);
+    else o.appendChild(x);
+    x = next;
+  }
+}
+
+/**
+ * useSyncExternalStore's snapshot while hydrating: the server's, as React's client reads it.
+ * Without getServerSnapshot, React's #407, which the boundary or root that recovers reports as
+ * the cause of its #422 or #423; that client render reads getSnapshot.
+ */
+function storeSnapshot(getServerSnapshot: (() => Any) | undefined): Any {
   if (getServerSnapshot !== undefined) return getServerSnapshot();
-  // The Suspense boundary or root that recovers from a mismatch here.
-  let p = f.r!;
-  while (p.n !== SUSPENSE && p.n !== ROOT) p = p.r!;
-  const e = new Error(prodMessage(p.n === ROOT ? 423 : 422), { cause: new Error(prodMessage(407)) });
-  (hydrationErrors ??= []).push(e, stackOf(e, f));
-  throw MISMATCH;
+  throw new Error(prodMessage(407));
+}
+
+// The events React replays (its discreteReplayableEvents): one inside a dehydrated boundary, or
+// on a root that has not hydrated its shell, hydrates it first.
+const REPLAYED =
+  "mousedown mouseup touchcancel touchend touchstart auxclick dblclick pointercancel pointerdown pointerup dragend " +
+  "dragstart drop compositionend compositionstart keydown keypress keyup input textInput copy cut paste click change " +
+  "contextmenu reset";
+
+// Each hydrating root and its replay listener, in pairs, until the root releases.
+const replays: Any[] = [];
+
+/**
+ * Make root `r` replay discrete events: a capture listener on its container for each, ahead of
+ * the root's own listeners, which go back after it.
+ */
+function listenForReplay(r: RootImpl): void {
+  const el = r.f.d,
+    own = r.listeners.get(el)!,
+    fn = (e: Event): void => replay(r, e);
+  own.remove();
+  r.listeners.delete(el);
+  replays.push(r, fn);
+  for (const t of REPLAYED.split(" ")) el.addEventListener(t, fn, true);
+  listenOn(el, r);
+}
+
+/**
+ * A discrete event's capture at root `r`'s container, as React's dispatchEvent handles one that
+ * is blocked: what blocks it (the root's shell, else the dehydrated boundary its target is in)
+ * hydrates at once, outermost first, and the event goes on to the root's handlers once nothing
+ * does. Content that cannot hydrate yet (it suspends, or waits for the server) stops the event.
+ */
+function replay(r: RootImpl, e: Any): void {
+  let b = r.f.f & DEAD ? null : blockedOn(r, e.target);
+  if (b === null) return;
+  for (;;) {
+    if (b.n === ROOT) {
+      b.f &= ~LATER;
+      flushSync();
+    } else if (!flushing) runPass(r, [b], true);
+    const next = blockedOn(r, e.target);
+    if (next === b) return void e.stopPropagation();
+    if (next === null) break;
+    b = next;
+  }
+  // The capture handlers, from here: the root's capture listeners hydration just added do not
+  // run for an event already at the container, and one it had already sees it dispatched.
+  dispatch(e, r, true);
+}
+
+/**
+ * What keeps an event at `target` from root `r`'s handlers, as React's findInstanceBlockingEvent
+ * finds it: the root, before its shell hydrated, or the outermost dehydrated boundary the target
+ * is in. Null when nothing does.
+ */
+function blockedOn(r: RootImpl, target: Any): Fiber | null {
+  if (!r.mounted) return r.f;
+  // The node on the target's path just below the nearest element the root rendered, or its
+  // container.
+  let x = target,
+    up = x == null || (x[FIBER] !== undefined && x[FIBER].o === r) ? null : x.parentNode;
+  for (; up != null && up !== r.f.d && !(up[FIBER] !== undefined && up[FIBER].o === r); up = up.parentNode) x = up;
+  if (up == null) return null;
+  for (let m = boundaryAround(x); m !== null; m = boundaryAround(m))
+    for (let i = 0; i < dehydrated.length; i++) {
+      const f = dehydrated[i]!;
+      if (f.hc !== null && f.hc.s === m && !(f.f & DEAD)) return f;
+    }
+  return null;
 }
 
 /** What hydration does, which hydrateRoot hands its root (see `hydrating`). */
 const HYDRATION = {
   fork: forkRun,
   element: claimElement,
+  host: hydrateHost,
   text: claimText,
-  done: hostDone,
-  suspense: hydrateSuspense,
+  boundary: boundaryHydration,
+  begin: hydrateBegin,
   root: hydrateDone,
   id: treeId,
   store: storeSnapshot,
+  listen: listenForReplay,
+  /** Whether an event's target is in content of root `r` that has not hydrated. */
+  blocked: (r: RootImpl, e: Any): boolean => blockedOn(r, e.target) !== null,
 };
 type Hydration = typeof HYDRATION;
 
@@ -3212,7 +3719,10 @@ class RootImpl implements Root {
   /** identifierPrefix, for useId. */
   readonly prefix: string;
   readonly opts: RootOptions;
-  /** Whether the first render hydrates the container's server HTML: what hydration does if so. */
+  /**
+   * What hydration does, while the root hydrates: from hydrateRoot until its shell and every
+   * boundary it left dehydrated have hydrated (or rendered on the client). Else false.
+   */
   hydrate: Hydration | false = false;
   /** Whether the first render has started (it clears or hydrates the container once). */
   mounted = false;
@@ -3269,20 +3779,19 @@ export function createRoot(container: Element | DocumentFragment, options: RootO
 }
 
 /**
- * A root that adopts the server-rendered HTML in `container`: the first render claims the
- * server's nodes in order, as React's client does. Where they do not match, the nearest Suspense
- * boundary the server rendered (else the root) renders on the client instead, and
- * onRecoverableError hears of it. Unlike React, the first render runs before hydrateRoot returns,
- * Suspense content included.
+ * A root that adopts the server-rendered HTML in `container`: its first render claims the
+ * server's nodes in order, as React's client does, in a task (at once inside flushSync), and
+ * each Suspense boundary in a later pass (see the hydration region). Where they do not match, the
+ * nearest Suspense boundary the server rendered (else the root) renders on the client instead,
+ * and onRecoverableError hears of it.
  */
 export function hydrateRoot(container: Element | Document, children: Any, options: RootOptions = {}): Root {
   checkContainer(container);
   const r = new RootImpl(container, options);
   roots.add(r);
   r.hydrate = HYDRATION;
+  HYDRATION.listen(r);
   r.render(children);
-  // Hydrate now, so the server's nodes are claimed before code after this call can change them.
-  flushWork(true);
   return r;
 }
 
@@ -3302,11 +3811,8 @@ function runRoot(f: Fiber): void {
   f.x = null;
   if (!r.mounted) {
     r.mounted = true;
-    if (r.hydrate) {
-      hydrating = r.hydrate;
-      f.hc = f.d.firstChild;
-      f.f |= CLAIMED;
-    } else f.d.textContent = "";
+    if (r.hydrate) (hydrating = r.hydrate).begin(f);
+    else f.d.textContent = "";
   }
   try {
     if (thrown === null) {
@@ -3565,8 +4071,11 @@ export interface ClassCore {
   readonly RERENDER: number;
   readonly DEAD: number;
   readonly NO_CONTEXT: object;
-  /** What a hydration mismatch throws: it goes past error boundaries to the boundary or root that recovers. */
-  readonly MISMATCH: object;
+  /**
+   * Whether a hydration render is running: what it throws goes past error boundaries to the
+   * Suspense boundary or root that recovers, as in React.
+   */
+  hydrating(): boolean;
   reconcile(f: Any, children: Any): void;
   removeAll(f: Any): void;
   readContext(f: Any, ctx: Any): Any;
@@ -3616,7 +4125,7 @@ export function __installClasses(make: (core: ClassCore) => ClassSupport): void 
     RERENDER,
     DEAD,
     NO_CONTEXT,
-    MISMATCH,
+    hydrating: () => hydrating !== false,
     reconcile,
     removeAll: (f) => removeAll(f),
     readContext,
@@ -3639,9 +4148,16 @@ export function __installClasses(make: (core: ClassCore) => ClassSupport): void 
     isRendering: (f) => f === cur,
     report: callReport,
     thrownIn: (f, e) => thrownIn(f, e),
-    componentStack: (e, f) => stackOf(e, f),
+    // Class support asks for a stack only for an error a boundary caught: counted for hydration.
+    componentStack: (e, f) => (failures++, stackOf(e, f)),
   });
 }
+
+/**
+ * How many errors class error boundaries have caught: a hydration pass in which one did reports
+ * nothing it recovered from, as React drops those of a render that errored.
+ */
+let failures = 0;
 
 /** Internal: what component stacks (./features/stacks.ts) read of the runtime. */
 export interface StackCore {
@@ -3660,8 +4176,11 @@ export interface StackCore {
 export interface StackSupport {
   /** Record that `e` was thrown in f, unless something deeper already did. */
   thrownIn(f: Any, e: Any): void;
-  /** The component stack of error `e`, from where it was thrown (else from f). */
-  componentStack(e: Any, f: Any): string;
+  /**
+   * The component stack of error `e`, from where it was thrown (else from f). `keep` keeps where
+   * `e` was thrown, for another stack of it.
+   */
+  componentStack(e: Any, f: Any, keep?: boolean): string;
 }
 
 /**
@@ -4282,7 +4801,8 @@ function frag(p: Fiber, k: Key): Fiber {
  * in f.x) shows the fallback until it settles, then the boundary renders again.
  */
 function runSuspense(f: Fiber): void {
-  if (hydrating && f.s === null) hydrating.suspense(f);
+  // On a root that hydrates, a mount (or a boundary still dehydrated) is hydration's.
+  if (f.s === null && f.o.hydrate) f.o.hydrate.boundary(f);
   else suspense(f);
 }
 
@@ -4320,9 +4840,8 @@ function suspense(f: Fiber): void {
       }
       return;
     } catch (e) {
-      // Errors pass through to an error boundary; only promises suspend. While hydrating, what
-      // the boundary does next is hydrateSuspense's to decide.
-      if (!isThenable(e) || hydrating) throw e;
+      // Errors pass through to an error boundary; only promises suspend.
+      if (!isThenable(e)) throw e;
       thrown = e;
     }
   }
@@ -4384,6 +4903,12 @@ function retry(f: Fiber): () => void {
  * lifecycles until it is shown: hiding cleans up what ran, showing runs it all once.
  */
 function runActivity(f: Fiber): void {
+  // On a root that hydrates, a mount (or an Activity still dehydrated) is hydration's.
+  if (f.s === null && f.o.hydrate) f.o.hydrate.boundary(f);
+  else activity(f);
+}
+
+function activity(f: Fiber): void {
   const hide = f.p.mode === "hidden";
   let inner: Fiber | null = f.s;
   const mounting = inner === null;
@@ -4744,7 +5269,7 @@ function reportUncaught(e: Any): void {
 // Component stacks come with ./features/stacks.ts (see __installStacks): until it installs them,
 // a throw records nothing and errors are reported with an empty stack.
 let thrownIn: (f: Fiber, e: Any) => void = () => {},
-  stackOf: (e: Any, f: Fiber | null) => string = () => "";
+  stackOf: (e: Any, f: Fiber | null, keep?: boolean) => string = () => "";
 
 // Parents render before children: queued fibers sort by depth, counted when
 // more than one is queued (rare) instead of stored in every fiber.
@@ -5430,7 +5955,7 @@ export function useSyncExternalStore<T>(
   }
   // While hydrating, the server snapshot (hydrating.store throws #407 without one), as React's
   // client reads it: one test per call, as React's isHydrating.
-  const v = hydrating ? hydrating.store(f, getServerSnapshot) : getSnapshot();
+  const v = hydrating ? hydrating.store(getServerSnapshot) : getSnapshot();
   box.v = v;
   box.g = getSnapshot;
   effect(PASSIVE, () => {
@@ -6239,6 +6764,8 @@ function dispatch(e: Any, root: RootImpl, capture: boolean): void {
     if (seen.includes(root)) return;
     seen.push(root);
   } else e[mark] = [root];
+  // A target in content the root has not hydrated reaches no handler, as in React.
+  if (root.hydrate && root.hydrate.blocked(root, e)) return;
   // The nearest element this root rendered (text nodes and foreign nodes have no fiber).
   let node = e.target;
   while (node != null && !(node[FIBER] !== undefined && node[FIBER].o === root)) node = node.parentNode;

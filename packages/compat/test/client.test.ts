@@ -139,12 +139,10 @@ describe("useId while hydrating", () => {
     const b = box();
     b.innerHTML = html;
     const before = nodes(b);
-    Compat.hydrateRoot(b as unknown as Element, make(Compat, compatIds), options);
+    Compat.flushSync(() => Compat.hydrateRoot(b as unknown as Element, make(Compat, compatIds), options));
     await tasks();
     expect(reactIds.length).toBeGreaterThan(0);
-    // Sorted: React hydrates a Suspense boundary's content in a later pass, compat in this one.
-    // The markup below holds each id where its component put it.
-    expect(compatIds.toSorted()).toEqual(reactIds.toSorted());
+    expect(compatIds).toEqual(reactIds);
     expect(markup(b)).toBe(markup(a));
     expect(nodes(b)).toEqual(before);
   }
@@ -269,7 +267,7 @@ describe("useId while hydrating", () => {
     const html = ReactServer.renderToString(React.createElement(Ids(React, [])));
     const c = box();
     c.innerHTML = html;
-    const root = Compat.hydrateRoot(c as unknown as Element, Compat.createElement(A));
+    const root = Compat.flushSync(() => Compat.hydrateRoot(c as unknown as Element, Compat.createElement(A)));
     // The server's id, from the tree.
     expect(ids[1]).toBe(/id="([^"]+)"/.exec(html)![1]!);
     Compat.flushSync(() => root.render([Compat.createElement(A, { key: 1 }), Compat.createElement(A, { key: 2 })]));
@@ -636,7 +634,9 @@ describe("hydration mismatches", () => {
       };
     };
     const react = await run(React, (c, el, o) => ReactDOM.flushSync(() => ReactClient.hydrateRoot(c, el, o)));
-    const { messages, ...compat } = await run(Compat, (c, el, o) => Compat.hydrateRoot(c, el, o));
+    const { messages, ...compat } = await run(Compat, (c, el, o) =>
+      Compat.flushSync(() => Compat.hydrateRoot(c, el, o)),
+    );
     expect({ ...compat, messages }).toEqual(react);
     return compat;
   }
@@ -989,6 +989,634 @@ describe("hydration mismatches", () => {
     await tasks();
     expect(errors).toEqual(["423 cause 407"]);
     expect(markup(c)).toBe("<p>1</p>");
+  });
+});
+
+// #endregion
+
+// #region Hydration passes
+
+describe("hydration passes", () => {
+  // React's client, outside flushSync, reads window.event for an update's lane; Activity hides
+  // content with a style declaration, here one that writes the element's style attribute.
+  beforeEach(() => void ((globalThis as Any).window = { event: undefined }));
+  afterEach(() => void delete (globalThis as Any).window);
+  const styles = new WeakMap<object, Any>();
+  extend(FakeElement.prototype, {
+    style: {
+      get(this: FakeElement) {
+        let s = styles.get(this);
+        if (s !== undefined) return s;
+        const el = this,
+          props = new Map<string, string>();
+        for (const part of (el.getAttribute("style") ?? "").split(";")) {
+          const at = part.indexOf(":");
+          if (at > 0) props.set(part.slice(0, at).trim(), part.slice(at + 1).trim());
+        }
+        const write = (k: string, v: string): void => {
+          if (v === "") props.delete(k);
+          else props.set(k, v);
+          el.setAttribute("style", [...props].map(([n, x]) => `${n}:${x}`).join(";"));
+        };
+        s = new Proxy(
+          {},
+          {
+            get: (_, k: string) =>
+              k === "setProperty"
+                ? (n: string, v: string, important?: string) => write(n, v + (important ? " !" + important : ""))
+                : k === "removeProperty"
+                  ? (n: string) => write(n, "")
+                  : (props.get(k) ?? ""),
+            set: (_, k: string, v: string) => (write(k, "" + v), true),
+          },
+        );
+        styles.set(this, s);
+        return s;
+      },
+    },
+  });
+
+  /** An error's code (with #418's first argument) or message. */
+  const short = (e: Any): string => {
+    const m = /^Minified React error #(\d+);[^?]*(?:\?args\[\]=(\w+))?/.exec(e?.message ?? "");
+    return m ? m[1] + (m[2] ? " " + m[2] : "") : String(e?.message ?? e);
+  };
+  /** Long enough for each library's tasks: React's scheduler and compat's passes. */
+  const settle = async (): Promise<void> => {
+    for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 0));
+  };
+
+  type Step = (c: Any, log: string[], L: Lib) => unknown;
+
+  /**
+   * Hydrates `html` with `client(L, log)` on React's client and on compat's, outside flushSync
+   * unless `sync`, runs `now` as hydrateRoot returns, then each step after the work before it
+   * settled, and expects the same of
+   * both: the log, in order, of what the tree logs, what the root's callbacks get (component
+   * stacks to their first frame), "returned" when hydrateRoot returns and the markup after each
+   * step, and which of the server's nodes stayed (Y) or were replaced (n).
+   */
+  async function timeline(
+    html: string,
+    client: (L: Lib, log: string[]) => Any,
+    { sync = false, now, steps = [] }: { sync?: boolean; now?: Step; steps?: Step[] } = {},
+  ): Promise<{ log: string[]; kept: string }> {
+    const run = async (L: Lib) => {
+      const c = box();
+      c.innerHTML = html;
+      const before = nodes(c);
+      const log: string[] = [];
+      const options = {
+        onRecoverableError: (e: Any, info: Any) =>
+          void log.push(
+            `recoverable ${short(e)}${e.cause === undefined ? "" : " cause " + short(e.cause)} ${info.componentStack?.split("\n")[1]?.trim()}`,
+          ),
+        onCaughtError: (e: Any) => void log.push("caught " + short(e)),
+        onUncaughtError: (e: Any) => void log.push("uncaught " + short(e)),
+      };
+      const hydrate = () => (L === React ? ReactClient : L).hydrateRoot(c, client(L, log), options);
+      if (sync) (L === React ? ReactDOM : L).flushSync(hydrate);
+      else hydrate();
+      log.push("returned");
+      if (now) now(c, log, L);
+      for (const step of [() => {}, ...steps]) {
+        await step(c, log, L);
+        await settle();
+        log.push(markup(c));
+      }
+      return {
+        log,
+        kept: nodes(c)
+          .map((n) => (before.includes(n) ? "Y" : "n"))
+          .join(""),
+      };
+    };
+    const react = await run(React);
+    const compat = await run(Compat);
+    expect(compat).toEqual(react);
+    return compat;
+  }
+
+  /** A component that logs its renders and its layout and passive effects (and their cleanups). */
+  const Logs = (L: Lib, log: string[]) =>
+    function Logs(props: Any) {
+      log.push("render " + props.n);
+      L.useLayoutEffect(() => (log.push("layout " + props.n), () => void log.push("unlayout " + props.n)), []);
+      L.useEffect(() => void log.push("passive " + props.n), []);
+      return props.children ?? null;
+    };
+
+  test("the shell hydrates in a task, then each level of Suspense boundaries in a pass of its own", async () => {
+    const tree = (L: Lib, log: string[]) => {
+      const h = L.createElement,
+        E = Logs(L, log);
+      return h(
+        "main",
+        null,
+        h(E, { n: "shell" }),
+        h(
+          L.Suspense,
+          { fallback: "." },
+          h("p", null, h(E, { n: "a" }), h(L.Suspense, { fallback: "," }, h(E, { n: "a.a" }, h("i", null, "in")))),
+        ),
+        h(L.Suspense, { fallback: "." }, h(E, { n: "b" }, h("p", null, "b"))),
+        h(E, { n: "shell 2" }),
+      );
+    };
+    const html = ReactServer.renderToString(tree(React, []));
+    const r = await timeline(html, tree);
+    expect(r.log.slice(0, 2)).toEqual(["returned", "render shell"]);
+    expect(r.log.indexOf("render a")).toBeGreaterThan(r.log.indexOf("passive shell 2"));
+    expect(r.log.indexOf("render a.a")).toBeGreaterThan(r.log.indexOf("passive b"));
+    expect(r.kept).not.toContain("n");
+    // Inside flushSync the shell hydrates before hydrateRoot returns; the boundaries still wait.
+    const s = await timeline(html, tree, { sync: true });
+    expect(s.log.indexOf("returned")).toBe(s.log.indexOf("passive shell 2") + 1);
+  });
+
+  test("a boundary the server could not finish renders on the client first, in a pass of its own", async () => {
+    function Fails(): never {
+      throw new Error("server only");
+    }
+    const server = (L: Lib, inner: Any) =>
+      L.createElement(
+        "main",
+        null,
+        L.createElement(L.Suspense, { fallback: "." }, L.createElement("p", null, "a")),
+        L.createElement(L.Suspense, { fallback: "!" }, L.createElement("p", null, inner)),
+      );
+    const html = ReactServer.renderToString(server(React, React.createElement(Fails)));
+    const client = (L: Lib, log: string[]) => {
+      const E = Logs(L, log);
+      return L.createElement(
+        "main",
+        null,
+        L.createElement(E, { n: "shell" }),
+        L.createElement(L.Suspense, { fallback: "." }, L.createElement(E, { n: "a" }, L.createElement("p", null, "a"))),
+        L.createElement(L.Suspense, { fallback: "!" }, L.createElement(E, { n: "b" }, L.createElement("p", null, "b"))),
+      );
+    };
+    const r = await timeline(html, client);
+    expect(r.log.indexOf("recoverable 419 undefined")).toBeLessThan(r.log.indexOf("render a"));
+    await timeline(html, client, { sync: true });
+  });
+
+  test("a mismatch is reported with the layout effects of the pass it was found in", async () => {
+    const h = (L: Lib) => L.createElement;
+    const r = await timeline(
+      ReactServer.renderToString(
+        h(React)("main", null, h(React)("b"), h(React)(React.Suspense, { fallback: "." }, h(React)("p", null, "a"))),
+      ),
+      (L, log) =>
+        h(L)(
+          "main",
+          null,
+          h(L)(Logs(L, log), { n: "shell" }),
+          h(L)("b"),
+          h(L)(L.Suspense, { fallback: "." }, h(L)(Logs(L, log), { n: "a" }, h(L)("span", null, "a"))),
+        ),
+    );
+    expect(r.log).toContain("recoverable 418 HTML at span (<anonymous>)");
+    expect(r.kept).toBe("YYnn");
+    // In the shell: the root renders on the client, boundaries and all, in that render.
+    await timeline(
+      ReactServer.renderToString(
+        h(React)("main", null, h(React)("b"), h(React)(React.Suspense, { fallback: "." }, h(React)("p", null, "a"))),
+      ),
+      (L, log) =>
+        h(L)(
+          "main",
+          null,
+          h(L)(Logs(L, log), { n: "shell" }),
+          h(L)("i"),
+          h(L)(L.Suspense, { fallback: "." }, h(L)(Logs(L, log), { n: "a" }, h(L)("p", null, "a"))),
+        ),
+    );
+  });
+
+  test("content that suspends while hydrating keeps the server's HTML, and hydrates once ready", async () => {
+    const h = (L: Lib) => L.createElement;
+    const html = ReactServer.renderToString(
+      h(React)(
+        "main",
+        null,
+        h(React)(React.Suspense, { fallback: "…" }, h(React)("p", null, "a"), h(React)("p", null, "b")),
+      ),
+    );
+    const go: Record<string, () => void> = {};
+    const r = await timeline(
+      html,
+      (L, log) => {
+        let ready = false;
+        const p = new Promise<void>((r) => (go[L === React ? "react" : "compat"] = r)).then(() => void (ready = true));
+        function Late() {
+          log.push("render late " + ready);
+          if (!ready) throw p;
+          return h(L)("p", null, "b");
+        }
+        return h(L)(
+          "main",
+          null,
+          h(L)(Logs(L, log), { n: "shell" }),
+          h(L)(L.Suspense, { fallback: "…" }, h(L)(Logs(L, log), { n: "a" }, h(L)("p", null, "a")), h(L)(Late)),
+        );
+      },
+      { steps: [(_c, log, L) => (log.push("resolve"), go[L === React ? "react" : "compat"]!())] },
+    );
+    expect(r.kept).not.toContain("n");
+    expect(r.log.filter((l) => l.startsWith("render late"))).toEqual(["render late false", "render late true"]);
+    const key = (L: Lib) => (L === React ? "react" : "compat");
+    /** Content that suspends until `go[key(L)]` runs. */
+    const late = (L: Lib, log: string[]) => {
+      let ready = false;
+      const p = new Promise<void>((r) => (go[key(L)] = r)).then(() => void (ready = true));
+      return function Late() {
+        log.push("render late " + ready);
+        if (!ready) throw p;
+        return h(L)("p", null, "b");
+      };
+    };
+    const resolve: Step = (_c, log, L) => (log.push("resolve"), go[key(L)]!());
+    // In the shell, with no boundary above it: the root waits, keeping the server's HTML. (Its
+    // renders are not logged: React renders a suspended shell once more, hydrating or not.)
+    const flat = ReactServer.renderToString(h(React)("main", null, h(React)("p", null, "a"), h(React)("p", null, "b")));
+    const shell = await timeline(flat, (L) => h(L)("main", null, h(L)("p", null, "a"), h(L)(late(L, []))), {
+      steps: [resolve],
+    });
+    expect(shell.kept).not.toContain("n");
+    // An Activity that mounts while a boundary waits mounts as on the client.
+    const toggles: Record<string, () => void> = {};
+    await timeline(
+      html,
+      (L, log) => {
+        function Toggle() {
+          const [on, set] = L.useState(false);
+          toggles[key(L)] = () => set(true);
+          return on ? h(L)(L.Activity, { mode: "visible" }, h(L)("i", null, "x")) : null;
+        }
+        return h(L)(
+          "main",
+          null,
+          h(L)(Logs(L, log), { n: "shell" }),
+          h(L)(L.Suspense, { fallback: "…" }, h(L)("p", null, "a"), h(L)(late(L, log))),
+          h(L)(Toggle),
+        );
+      },
+      { steps: [(_c, log, L) => (log.push("toggle"), toggles[key(L)]!()), resolve] },
+    );
+  });
+
+  test("a boundary still streaming in waits for the server, through _reactRetry and the document's load", async () => {
+    const h = (L: Lib) => L.createElement;
+    const loaded: Any[] = [];
+    Object.defineProperties(fakeDoc, {
+      readyState: { configurable: true, writable: true, value: "loading" },
+      addEventListener: { configurable: true, value: (type: string, fn: Any) => void loaded.push(type, fn) },
+      removeEventListener: {
+        configurable: true,
+        value: (_type: string, fn: Any) => void loaded.splice(loaded.indexOf(fn) - 1, 2),
+      },
+    });
+    const client = (L: Lib, log: string[]) =>
+      h(L)(
+        "main",
+        null,
+        h(L)(Logs(L, log), { n: "shell" }),
+        h(L)(L.Suspense, { fallback: "…" }, h(L)(Logs(L, log), { n: "b" }, h(L)("p", null, "b"))),
+      );
+    /** What React's streaming runtime does as the boundary's content arrives ($RV), or fails ($RX). */
+    const arrive = (c: Any, as: string) => {
+      const start = c.firstChild.firstChild;
+      while (start.nextSibling.nodeType !== 8) c.firstChild.removeChild(start.nextSibling);
+      if (as === "$") c.firstChild.insertBefore(new FakeElement("P"), start.nextSibling).appendChild(new FakeText("b"));
+      start.data = as;
+      return start._reactRetry;
+    };
+    const pending = '<main><!--$?--><template id="B:0"></template>…<!--/$--></main>';
+    // While the document loads, nothing hydrates until the content arrives.
+    const r = await timeline(pending, client, {
+      steps: [
+        (c, log) => void log.push("retry " + typeof c.firstChild.firstChild._reactRetry, "listeners " + loaded.length),
+        (c) => arrive(c, "$")(),
+      ],
+    });
+    expect(r.log).toContain("render b");
+    expect(loaded).toHaveLength(0);
+    // The document loads first: the boundary renders on the client.
+    await timeline(pending, client, {
+      steps: [() => ((fakeDoc.readyState = "complete"), loaded[1]()), () => void (fakeDoc.readyState = "loading")],
+    });
+    // The server fails it ($RX).
+    await timeline(pending, client, { steps: [(c) => arrive(c, "$!")()] });
+    // `<!--$~-->`: complete, waiting to be revealed, which calls _reactRetry.
+    await timeline("<main><!--$~--><p>b</p><!--/$--></main>", client, {
+      steps: [(c) => void (c.firstChild.firstChild.data = "$"), (c) => c.firstChild.firstChild._reactRetry()],
+    });
+    // Once the document has loaded, a boundary still pending renders on the client at once.
+    fakeDoc.readyState = "complete";
+    await timeline(pending, client);
+    delete fakeDoc.readyState;
+  });
+
+  test("an Activity hydrates in a pass of its own and recovers on its own; a hidden one renders on the client", async () => {
+    const h = (L: Lib) => L.createElement;
+    const html = ReactServer.renderToString(
+      h(React)(
+        "main",
+        null,
+        h(React)(React.Activity, { mode: "visible" }, h(React)("p", null, "a")),
+        h(React)(React.Activity, { mode: "hidden" }, h(React)("p", null, "h")),
+        h(React)(React.Suspense, { fallback: "." }, h(React)("p", null, "c")),
+      ),
+    );
+    const client = (tag: string) => (L: Lib, log: string[]) =>
+      h(L)(
+        "main",
+        null,
+        h(L)(Logs(L, log), { n: "shell" }),
+        h(L)(L.Activity, { mode: "visible" }, h(L)(Logs(L, log), { n: "a" }, h(L)(tag, null, "a"))),
+        h(L)(L.Activity, { mode: "hidden" }, h(L)(Logs(L, log), { n: "h" }, h(L)("p", null, "h"))),
+        h(L)(L.Suspense, { fallback: "." }, h(L)(Logs(L, log), { n: "c" }, h(L)("p", null, "c"))),
+      );
+    // The hidden Activity's nodes are new, put where React puts them: before the next host node.
+    expect((await timeline(html, client("p"))).kept).toBe("YYYYYYnnYYY");
+    expect((await timeline(html, client("i"))).log).toContain("recoverable 418 HTML at i (<anonymous>)");
+  });
+
+  test("an error thrown while hydrating renders the root or the boundary on the client, reported as #423 or #422", async () => {
+    const h = (L: Lib) => L.createElement;
+    const flat = ReactServer.renderToString(h(React)("main", null, h(React)("p", null, "a")));
+    const boundary = ReactServer.renderToString(
+      h(React)("main", null, h(React)(React.Suspense, { fallback: "." }, h(React)("p", null, "a"))),
+    );
+    /** A boundary that renders "caught" for any error below it. */
+    const Catch = (L: Lib) =>
+      class Catch extends L.Component<Any, Any> {
+        state = { e: null };
+        static getDerivedStateFromError(e: Any) {
+          return { e };
+        }
+        render() {
+          return this.state.e ? "caught" : this.props.children;
+        }
+      };
+    /**
+     * A client tree whose Boom throws on its first `throws` renders (every render, for
+     * Infinity). It logs each call, those that build component stacks included, unless `quiet`.
+     */
+    const client =
+      (where: "shell" | "boundary", catches: "none" | "inside" | "outside", throws: number, quiet = false) =>
+      (L: Lib, log: string[]) => {
+        let n = 0;
+        function Boom(props: Any) {
+          if (!quiet || props.n) log.push("boom");
+          if (n++ < throws) throw new Error("boom");
+          return h(L)("p", null, "a");
+        }
+        const C = Catch(L);
+        let tree = h(L)(Boom, { n: 1 });
+        if (catches === "inside") tree = h(L)(C, null, tree);
+        if (where === "boundary") tree = h(L)(L.Suspense, { fallback: "." }, tree);
+        if (catches === "outside") tree = h(L)(C, null, tree);
+        return h(L)("main", null, h(L)(Logs(L, log), { n: "shell" }), tree);
+      };
+    const root = await timeline(flat, client("shell", "none", 1));
+    expect(root.log).toContain("recoverable 423 cause boom at Boom (<anonymous>)");
+    expect(root.kept).toBe("nnn");
+    await timeline(flat, client("shell", "inside", 1));
+    await timeline(flat, client("shell", "outside", 1));
+    for (const catches of ["none", "inside", "outside"] as const) {
+      const once = await timeline(boundary, client("boundary", catches, 1));
+      expect(once.log).toContain("recoverable 422 cause boom at Boom (<anonymous>)");
+    }
+    // An error the client render throws again: an error boundary catches it, and the pass reports
+    // nothing it recovered from; with none, it is uncaught.
+    for (const catches of ["none", "inside", "outside"] as const) {
+      await timeline(flat, client("shell", catches, Infinity, true));
+      await timeline(boundary, client("boundary", catches, Infinity, true));
+    }
+  });
+
+  test("a click inside a dehydrated boundary hydrates it, outermost first, before its handlers run", async () => {
+    const h = (L: Lib) => L.createElement;
+    const tree = (late: boolean) => (L: Lib, log: string[]) => {
+      // Content that suspends while it hydrates, until the step that resolves it.
+      let ready = !late;
+      const p = new Promise<void>((r) => (go[L === React ? "react" : "compat"] = r)).then(() => void (ready = true));
+      function Late(props: Any) {
+        if (!ready) throw p;
+        return props.children;
+      }
+      const on = (n: string) => ({
+        onClick: () => void log.push("click " + n),
+        onWheel: () => void log.push("wheel " + n),
+      });
+      return h(L)(
+        "main",
+        { onClickCapture: () => void log.push("capture main"), ...on("main") },
+        h(L)(Logs(L, log), { n: "shell" }),
+        h(L)(
+          L.Suspense,
+          { fallback: "." },
+          h(L)(
+            Logs(L, log),
+            { n: "a" },
+            h(L)(
+              "p",
+              on("p"),
+              "a",
+              h(L)(
+                L.Suspense,
+                { fallback: "," },
+                h(L)(Late, null, h(L)(Logs(L, log), { n: "a.a" }, h(L)("b", on("b"), "in"))),
+              ),
+            ),
+            h(L)(L.Suspense, { fallback: "," }, h(L)("u", null, "u")),
+            h(L)("i", on("i"), "i"),
+          ),
+        ),
+        h(L)(L.Suspense, { fallback: "." }, h(L)(Logs(L, log), { n: "c" }, h(L)("p", null, "c"))),
+      );
+    };
+    const go: Record<string, () => void> = {};
+    const html = ReactServer.renderToString(tree(false)(React, []));
+    /** Dispatches `type` from the first element named `tag` in `c`, logging around it. */
+    const fire =
+      (tag: string, type = "click"): Step =>
+      (c, log) => {
+        const at = nodes(c).find((n) => n.nodeName === tag) as FakeElement;
+        log.push("fire " + type + " " + tag);
+        at.dispatchEvent(new FakeEvent(type));
+        log.push("fired");
+      };
+    // Each boundary the target is in hydrates, outermost first, its passive effects included,
+    // then the handlers run; the other boundary waits for its pass.
+    const r = await timeline(html, tree(false), { sync: true, now: fire("B") });
+    expect(r.log.indexOf("click b")).toBeGreaterThan(r.log.indexOf("passive a.a"));
+    expect(r.log.indexOf("render c")).toBeGreaterThan(r.log.indexOf("fired"));
+    // Past a boundary nested in the one it is in, only the outer one hydrates.
+    await timeline(html, tree(false), { sync: true, now: fire("I") });
+    // Before the shell hydrated, it hydrates first; after, on the shell, nothing has to.
+    await timeline(html, tree(false), { now: fire("MAIN") });
+    await timeline(html, tree(false), { sync: true, now: fire("MAIN") });
+    // A node no root rendered, in the shell: the shell's handlers get it at once.
+    await timeline(html, tree(false), {
+      sync: true,
+      now: (c, log) => {
+        const stray = new FakeElement("S");
+        c.firstChild.appendChild(stray);
+        const e = new FakeEvent("click");
+        e.target = stray;
+        (c.firstChild as FakeElement).dispatchEvent(e);
+        log.push("fired");
+      },
+    });
+    // Once it all hydrated, a click is dispatched as any.
+    await timeline(html, tree(false), { steps: [fire("B")] });
+    // An event React does not replay reaches no handler while its target is dehydrated.
+    await timeline(html, tree(false), { sync: true, now: fire("B", "wheel"), steps: [fire("B", "wheel")] });
+    // Content that cannot hydrate yet stops the click, and hydrates once it can.
+    await timeline(html, tree(true), {
+      sync: true,
+      now: fire("B"),
+      steps: [(_c, log, L) => (log.push("resolve"), go[L === React ? "react" : "compat"]!()), fire("B")],
+    });
+  });
+
+  test("a claimed element keeps the server's attributes until a prop changes; fields take what React's hydrateInstance writes", () => {
+    const server =
+      '<div title="server" class="s" style="color:red" data-x="1">t</div>' +
+      '<input name="sn" value="sv" checked=""/><input type="checkbox" checked=""/><input type="submit"/>' +
+      '<textarea>tx</textarea><textarea>old</textarea><my-el foo="1" class="s"></my-el>';
+    const tree = (L: Lib, n: number) => {
+      const h = L.createElement;
+      return h(
+        L.Fragment,
+        null,
+        h("div", { title: "client" + n, className: "c", style: { color: "blue" } }, "t"),
+        h("input", { name: "cn", defaultValue: "cv", defaultChecked: false, onChange: () => {} }),
+        h("input", { type: "checkbox", checked: n > 0, onChange: () => {} }),
+        h("input", { type: "submit" }),
+        h("textarea", { defaultValue: "tx" }),
+        h("textarea", { value: "new", onChange: () => {} }),
+        h("my-el", { foo: 2, className: "c" }),
+      );
+    };
+    // The markup, and the fields' properties. React's updateInput clears a field's name before
+    // it writes or removes it: in a browser, where name reflects the attribute, that is no change.
+    const snap = (c: FakeElement) =>
+      markup(c) +
+      JSON.stringify(
+        nodes(c)
+          .filter((n: Any) => n.nodeName === "INPUT" || n.nodeName === "TEXTAREA" || n.nodeName === "MY-EL")
+          .map((n: Any) => [n.value, n.defaultValue, n.checked, n.defaultChecked, n.name || null, n.foo]),
+      );
+    const run = (L: Lib) => {
+      const c = box();
+      c.innerHTML = server;
+      const sync = (L === React ? ReactDOM : L).flushSync;
+      let root: Any;
+      sync(() => void (root = (L === React ? ReactClient : L).hydrateRoot(c, tree(L, 0))));
+      const out = [snap(c)];
+      sync(() => root.render(tree(L, 1)));
+      out.push(snap(c));
+      return out;
+    };
+    const react = run(React);
+    // The server's attributes stay; the changed title is written, the rest is not.
+    expect(react[1]).toContain('<div class="s" title="client1" style="color:red" data-x="1">');
+    expect(run(Compat)).toEqual(react);
+  });
+
+  test("a claimed textarea takes its children as its value, and throws React's errors for both or several", async () => {
+    const h = (L: Lib) => L.createElement;
+    for (const props of [{ children: ["a"] }, { children: "a", defaultValue: "a" }, { children: ["a", "b"] }])
+      await timeline("<textarea>a</textarea>", (L) => h(L)("textarea", props));
+  });
+
+  // React's clearContainerSparingly reads a link's rel.
+  extend(FakeElement.prototype, {
+    rel: {
+      get(this: FakeElement) {
+        return this.getAttribute("rel") ?? "";
+      },
+    },
+  });
+
+  test("a whole document that renders on the client keeps its <html>, <head> and <body>, as React's singletons do", async () => {
+    // A document: its doctype and the server's markup, and what React reads of one.
+    const page = (inner: string): Any => {
+      const d: Any = new FakeElement("#document");
+      Object.defineProperty(d, "nodeType", { value: 9 });
+      d.isDocument = true;
+      d.appendChild(new FakeNode(10));
+      const tmp = new FakeElement("DIV");
+      tmp.innerHTML = inner;
+      for (const n of [...tmp.childNodes]) d.appendChild(n);
+      const named = (p: Any, name: string): Any => (p?.childNodes ?? []).find((n: Any) => n.nodeName === name) ?? null;
+      Object.defineProperties(d, {
+        documentElement: { get: () => named(d, "HTML") },
+        head: { get: () => named(named(d, "HTML"), "HEAD") },
+        body: { get: () => named(named(d, "HTML"), "BODY") },
+      });
+      for (const k of ["createElement", "createTextNode"]) d[k] = (document as Any)[k].bind(document);
+      d.defaultView = { document: d, HTMLIFrameElement: class {}, getSelection: () => null };
+      return d;
+    };
+    // What the client renders drops all but its scripts, styles and stylesheets.
+    const server =
+      '<html lang="en" data-x="1"><head><noscript>n</noscript><script src="a.js"></script><title>t</title>' +
+      '<link rel="stylesheet" href="s.css"></link><link rel="icon"></link><style>p{}</style></head>' +
+      '<body class="s"><!--x--><p>server</p><div>d</div><script>1</script></body></html><!--after-->';
+    const run = async (L: Lib, fail: boolean, sync: boolean) => {
+      const d = page(server);
+      const before = [d.documentElement, d.head, d.body];
+      const log: string[] = [];
+      const h = L.createElement;
+      let threw = !fail;
+      function Fails(): Any {
+        if (!threw) throw ((threw = true), new Error("once"));
+        return "server";
+      }
+      (globalThis as Any).window.HTMLIFrameElement = class {};
+      const go = () =>
+        (L === React ? ReactClient : L).hydrateRoot(
+          d,
+          h(
+            "html",
+            { lang: "fr" },
+            h("head", null, h("style", null, "p{}")),
+            h(
+              "body",
+              { className: "c", onClick: () => void log.push("click") },
+              h("p", null, fail ? h(Fails) : "client"),
+              h("div", null, "d"),
+            ),
+          ),
+          {
+            onRecoverableError: (e: Any) =>
+              void log.push("recoverable " + short(e) + (e.cause ? " cause " + short(e.cause) : "")),
+            onUncaughtError: (e: Any) => void log.push("uncaught " + short(e)),
+          },
+        );
+      if (sync) (L === React ? ReactDOM : L).flushSync(go);
+      else go();
+      await settle();
+      (d.body.lastChild as FakeElement).dispatchEvent(new FakeEvent("click"));
+      return { log, markup: markup(d), kept: [d.documentElement, d.head, d.body].map((n, i) => n === before[i]) };
+    };
+    // A mismatch, and an error that is not one (#423).
+    for (const [fail, sync] of [
+      [false, true],
+      [false, false],
+      [true, false],
+      [true, true],
+    ] as const) {
+      const react = await run(React, fail, sync);
+      expect(react.kept).toEqual([true, true, true]);
+      expect(react.log).toEqual([fail ? "recoverable 423 cause once" : "recoverable 418 text", "click"]);
+      expect(await run(Compat, fail, sync)).toEqual(react);
+    }
   });
 });
 

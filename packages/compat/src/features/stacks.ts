@@ -137,10 +137,12 @@ function stacks(core: StackCore) {
      * was thrown in (else from `f`) up to the root, innermost first, as React's describeFiber
      * writes them.
      */
-    componentStack(e: Any, f: Any): string {
+    componentStack(e: Any, f: Any, keep?: boolean): string {
       if (e === lastThrown) f = thrownBy;
-      lastThrown = stacks;
-      thrownBy = null;
+      if (!keep) {
+        lastThrown = stacks;
+        thrownBy = null;
+      }
       // With no component rendering, so a component's first hook throws as it does in React.
       return core.outside(() => describe(f));
     },

@@ -209,7 +209,7 @@ class Widget extends El {
     this.listens.push(["add", type, fn, capture]);
     super.addEventListener(type, fn);
   }
-  removeEventListener(type: string, fn: unknown, capture?: unknown): void {
+  override removeEventListener(type: string, fn: unknown, capture?: unknown): void {
     this.listens.push(["remove", type, fn, capture]);
   }
 }
@@ -919,16 +919,21 @@ describe("hydration", () => {
       span = make("span");
     p.appendChild(span);
     container.appendChild(p);
-    hydrateRoot(container as unknown as Element, h("p", { title: "t" }, h("span")));
+    flushSync(() => hydrateRoot(container as unknown as Element, h("p", { title: "t" }, h("span"))));
     expect(first()).toBe(p);
     expect(first(0)).toBe(span);
-    expect(p.getAttribute("title")).toBe("t");
+    // The server's attributes stay until a prop next changes, as in React.
+    expect(p.getAttribute("title")).toBeNull();
     // An extra child: the root renders on the client, with new nodes.
     p.appendChild(make("em"));
     const errors: unknown[] = [];
     const c2 = make("div");
     c2.appendChild(p);
-    hydrateRoot(c2 as unknown as Element, h("p", null, h("span")), { onRecoverableError: (e) => void errors.push(e) });
+    flushSync(() =>
+      hydrateRoot(c2 as unknown as Element, h("p", null, h("span")), {
+        onRecoverableError: (e) => void errors.push(e),
+      }),
+    );
     expect(c2.firstChild).not.toBe(p);
     expect(html(c2)).toBe("<p><span></span></p>");
     expect(errors).toHaveLength(1);
@@ -939,7 +944,7 @@ describe("hydration", () => {
       text = new FakeText("hi");
     p.appendChild(text);
     container.appendChild(p);
-    hydrateRoot(container as unknown as Element, h("p", null, "hi"));
+    flushSync(() => hydrateRoot(container as unknown as Element, h("p", null, "hi")));
     expect(first().firstChild).toBe(text);
   });
 
@@ -949,7 +954,9 @@ describe("hydration", () => {
     b.appendChild(new FakeText("x"));
     div.appendChild(b);
     container.appendChild(div);
-    hydrateRoot(container as unknown as Element, h("div", { dangerouslySetInnerHTML: { __html: "<b>x</b>" } }));
+    flushSync(() =>
+      hydrateRoot(container as unknown as Element, h("div", { dangerouslySetInnerHTML: { __html: "<b>x</b>" } })),
+    );
     expect(div.htmlWrites).toBe(0);
     expect(first(0)).toBe(b);
   });
