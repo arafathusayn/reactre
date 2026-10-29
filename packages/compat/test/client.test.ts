@@ -3247,6 +3247,25 @@ describe("the render loop", () => {
     expect(refs[1]).toEqual(refs[0]!);
     expect(refs[0]).toEqual(["ref 0 true", "ref 0 false", "ref 1 true"]);
   });
+
+  test("the retry computes again the useMemo values the failed render computed", async () => {
+    const h = (L: Lib) => L.createElement;
+    await stepsSame((L, log) => {
+      let set: Any = null,
+        calls = 0;
+      const Once = named(log, "Once", () => {
+        const [n, s] = L.useState(0);
+        set = s;
+        // Changed deps (computed in the failed render), unchanged deps and none.
+        const a = L.useMemo(() => (log.push("memo a " + n), n), [n]);
+        const b = L.useMemo(() => (log.push("memo b"), 1), []);
+        const c = L.useMemo(() => (log.push("memo c " + n), n));
+        if (n && calls++ === 0) throw new Error("once");
+        return a + b + c;
+      });
+      return [(root, flush) => flush(() => root.render(h(L)(Once))), (_, flush) => flush(() => set(1))];
+    });
+  });
 });
 
 // #endregion

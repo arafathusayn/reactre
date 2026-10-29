@@ -5762,6 +5762,7 @@ function flushWork(sync: boolean): void {
     }
   } finally {
     flushing = false;
+    if (memos !== null) memos.length = 0;
   }
   // A transition waiting for data renders again after a commit (see waiting).
   if (waiting && committed) lanes!.wake();
@@ -5898,6 +5899,7 @@ function safely(f: Fiber, fn: () => void): void {
 export function __installRetry(): void {
   renderThrew = (f, e) => noted(f, e, true);
   childThrew = (f, e) => noted(f, e, false);
+  memos ??= [];
   retries ??= {
     begin() {
       firstErrors = [];
@@ -5913,6 +5915,27 @@ export function __installRetry(): void {
     forShow,
     discard: discardAll,
   };
+}
+
+/**
+ * The useMemo hooks computed in this flush, with what each held before, in fives (fiber, hook,
+ * value, deps, set), once ./features/retry.ts installed the retry; null without it.
+ */
+let memos: Any[] | null = null;
+
+/** Put back, newest first, what the memos computed in this flush under fiber `f` held before. */
+function forget(f: Fiber): void {
+  const m = memos!;
+  for (let i = m.length - 5; i >= 0; i -= 5) {
+    let x: Fiber | null = m[i];
+    while (x !== null && x !== f) x = x.r;
+    if (x === null) continue;
+    const h = m[i + 1];
+    h.v = m[i + 2];
+    h.d = m[i + 3];
+    h.s = m[i + 4];
+    m.splice(i, 5);
+  }
 }
 
 /** What the render loop calls of the retries, when they are installed. */
@@ -5976,6 +5999,9 @@ function failed(f: Fiber, e: Any): Any[] | null {
 function retryRender(f: Fiber, errors: Any[], fn: () => void): Any {
   const l = layoutQ.length,
     p = passiveQ.length;
+  // As React renders again from the committed hooks, the memos the failed render computed in what
+  // the retry renders hold what they held before it, so the retry computes them again.
+  forget(f);
   // A host or Fragment with a callback queued (its ref, which the commit attaches) never held its
   // ref: the retry renders it from props without one, so it detaches nothing it never attached.
   const unheld: Any[] = [];
@@ -6499,6 +6525,8 @@ export function useRef<T>(init?: T): RefObject<T> {
 export function useMemo<T>(compute: () => T, deps?: readonly unknown[]): T {
   const h = hook();
   if (h.s === null || deps == null || depsChanged(h.d, deps)) {
+    // With ./features/retry.ts, what it held before, for a retry to compute it again (see memos).
+    if (memos !== null) memos.push(cur!, h, h.v, h.d, h.s);
     h.s = 1;
     h.v = compute();
     h.d = deps ?? null;

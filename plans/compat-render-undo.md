@@ -2,13 +2,13 @@
 
 Items 25 to 29 of [compat-remaining.md](compat-remaining.md) have one cause. React renders into a work-in-progress tree and commits it at the end, so a render it abandons leaves the screen and the committed tree untouched. Compat writes the DOM and its one fiber tree as it renders. To match React on these items, compat has to put back what a render changed, as it already does for transitions (the lanes module, [compat-concurrent.md](compat-concurrent.md)).
 
-| #   | What React does                                                                | What compat needs                                                    |
-| --- | ------------------------------------------------------------------------------ | -------------------------------------------------------------------- |
-| 25  | The retry renders again after any render error, not only a component's own     | The state from before the render, to render again from it            |
-| 26  | An update's retry renders the whole root again                                 | The same, for the root                                               |
-| 27  | The retry computes `useMemo` again                                             | Which memos the failed pass computed: a marker on every recompute    |
-| 28  | A hydration error renders the root again, client-side, before it recovers      | The state from before the hydrating pass                             |
-| 29  | An update outside a transition that suspends with no boundary keeps the screen | The undo started before the render, since the suspension comes later |
+| #   | What React does                                                                | What compat needs                                                                                               |
+| --- | ------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
+| 25  | The retry renders again after any render error, not only a component's own     | The state from before the render, to render again from it                                                       |
+| 26  | An update's retry renders the whole root again                                 | The same, for the root                                                                                          |
+| 27  | The retry computes `useMemo` again                                             | Closed without an undo: the retry module notes what each memo held before it computed, and a retry puts it back |
+| 28  | A hydration error renders the root again, client-side, before it recovers      | The state from before the hydrating pass                                                                        |
+| 29  | An update outside a transition that suspends with no boundary keeps the screen | The undo started before the render, since the suspension comes later                                            |
 
 ## What the transition undo costs, and why it cannot simply run for every render
 
