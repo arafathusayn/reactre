@@ -211,6 +211,18 @@ describe.each(Object.keys(bundlers))("%s", (name) => {
     expect(await app.stream()).toBe(expected);
   }, 60_000);
 
+  test("compat: class support off keeps component stacks, and a class throws its clear error", async () => {
+    const file = join(out, `${name}-no-classes.js`);
+    await bundle(FIXTURES + "compat/no-classes.jsx", file, { compat: { classes: false } });
+    installFakeDocument();
+    const app = (await import(file)) as { reports(el: unknown): string[] };
+    const [boom, stack, legacy] = app.reports(new FakeElement("DIV"));
+    expect(boom).toBe("boom");
+    // Boom's own frame, found as React finds it, in the bundle (the template's <section> follows).
+    expect(stack).toMatch(/^\n {4}at Boom \(.*no-classes\.js:\d+:\d+\)\n/);
+    expect(legacy).toContain("Legacy is a class component, and this build leaves class support out");
+  }, 60_000);
+
   test("compat: switched-off APIs throw when called, and the rest runs", async () => {
     const file = join(out, `${name}-narrow.js`);
     await bundle(FIXTURES + "compat/narrow.jsx", file, { compat: { exclude: ["useEffect", "@suspense"] } });

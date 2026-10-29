@@ -4,8 +4,9 @@
 //
 //   - core (the default): .jsx and .tsx files are compiled by @reactre/compiler into templates and
 //     the code that updates them, as the Bun plugin compiles them.
-//   - compat: `react`, `react-dom` and their subpaths resolve to @reactre/compat (or, with `classes: false`,
-//     @reactre/compat/core), and `react-dom/server` and `react-dom/static` (with their .browser, .edge, .node
+//   - compat: `react`, `react-dom` and their subpaths resolve to @reactre/compat (or, with anything
+//     switched off, class support included, a module built on @reactre/compat/core for the
+//     options; see ./api.ts), and `react-dom/server` and `react-dom/static` (with their .browser, .edge, .node
 //     and .bun forms) to @reactre/compat/server, in the app and in its dependencies, and the
 //     app's .jsx and .tsx files are compiled by @reactre/compat/compiler, whose host element
 //     trees become templates. Server Components stay on React: a Vite environment named `rsc`,
@@ -33,7 +34,7 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { enabledApis, KEYS } from "@reactre/compat/api";
+import { BEHAVIOURS, enabledApis, KEYS } from "@reactre/compat/api";
 import { compileJs as compileCompat } from "@reactre/compat/compiler";
 import { compileJs as compileCore, ReactreCompileError } from "@reactre/compiler";
 import { createUnplugin, type UnpluginInstance, type UnpluginOptions } from "unplugin";
@@ -46,9 +47,8 @@ import { transpile } from "./transpile.ts";
 /** Options for compat mode. */
 export interface CompatOptions {
   /**
-   * Include class components. Default true: `react` resolves to @reactre/compat, React's whole
-   * client API. `false` resolves it to @reactre/compat/core, which leaves class support out, for
-   * an app that renders no class component itself or through a library.
+   * Include class components. Default true. `false` leaves class support out, for an app that
+   * renders no class component itself or through a library; the same as excluding `"@classes"`.
    */
   readonly classes?: boolean;
   /** Compile the app's host element trees to templates with @reactre/compat/compiler. Default true. */
@@ -61,7 +61,9 @@ export interface CompatOptions {
   readonly apis?: "all" | readonly string[];
   /**
    * APIs to switch off, as keys or groups. The build fails where code uses one; at run time each
-   * is a function that throws, naming the fix.
+   * is a function that throws, naming the fix. The behaviours `"componentStack"` (React's
+   * component stack in error reports) and `"repeatedKeys"` (React's handling of a list whose keys
+   * repeat) are on unless listed here.
    */
   readonly exclude?: readonly string[];
 }
@@ -83,11 +85,11 @@ export interface ReactreOptions {
 
 // #region The plugin
 
-/** @reactre/compat's client entries, which the module written for an app's options imports. */
-const COMPAT = /^@reactre\/compat(?:\/core)?$/;
+/** @reactre/compat's client entries and feature modules, which the module written for an app's options imports. */
+const COMPAT = /^@reactre\/compat(?:\/core|\/features\/[a-z]+)?$/;
 
 /** The requests the plugin resolves: `react`, `react-dom` and their subpaths, and compat's client entries. */
-const REQUEST = /^(?:react(?:-dom)?(?:\/.*)?|@reactre\/compat(?:\/core)?)$/;
+const REQUEST = /^(?:react(?:-dom)?(?:\/.*)?|@reactre\/compat(?:\/core|\/features\/[a-z]+)?)$/;
 
 /** The modules the API scan reads. */
 const SCRIPT = /\.[cm]?[jt]sx?(?:$|\?)/;
@@ -113,20 +115,23 @@ export const reactre: UnpluginInstance<ReactreOptions | undefined, boolean> = cr
 >((options = {}, meta) => {
   const compat = options.compat === true ? {} : options.compat === false ? undefined : options.compat;
   const compile = compat === undefined || compat.compile !== false;
-  // The APIs that are on. Class support off is @reactre/compat/core; anything else off is a module
-  // written for the options (./api.ts).
+  // The APIs and behaviours that are on. All of them is @reactre/compat; anything off, class
+  // support included, is a module written for the options (./api.ts), built on
+  // @reactre/compat/core with the feature modules of what is on.
   const on =
     compat === undefined
-      ? new Set(KEYS)
+      ? new Set([...KEYS, ...BEHAVIOURS])
       : enabledApis(compat.apis ?? "all", [
           ...(compat.exclude ?? []),
           ...(compat.classes === false ? ["Component"] : []),
         ]);
+  const custom = [...KEYS, ...BEHAVIOURS].some((k) => !on.has(k));
+  // An API off, other than class support (whose Component stays, throwing when a class renders):
+  // the build scans for its uses.
   const narrowed = KEYS.some((k) => !on.has(k) && k !== "Component" && k !== "PureComponent");
-  const pkg = on.has("Component") ? "@reactre/compat" : "@reactre/compat/core";
   let entry: string | undefined;
   /** What `react` resolves to: the package entry, or the module written for the options. */
-  const client = (): string => (narrowed ? (entry ??= writeEntry(root, entrySource(on))) : pkg);
+  const client = (): string => (custom ? (entry ??= writeEntry(root, entrySource(on))) : "@reactre/compat");
   /** What a request for `react`, one of its subpaths, or a compat entry resolves to. */
   const target = (id: string): string => (SERVER.test(id) ? "@reactre/compat/server" : COMPAT.test(id) ? id : client());
   /** Throws where `code` uses an API the options switch off. */

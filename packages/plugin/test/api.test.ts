@@ -6,7 +6,7 @@ import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { KEYS } from "@reactre/compat/api";
+import { BEHAVIOURS, KEYS } from "@reactre/compat/api";
 
 import { entrySource, offError, usedApis, writeEntry } from "../src/api.ts";
 
@@ -56,11 +56,14 @@ describe("usedApis: what a module reads from React's client modules", () => {
 });
 
 describe("the module written for the options", () => {
-  const on = new Set(KEYS.filter((k) => k !== "useEffect" && k !== "lazy"));
+  const on = new Set([...KEYS, ...BEHAVIOURS].filter((k) => k !== "useEffect" && k !== "lazy"));
 
   test("imports what is on, stubs what is off, and keeps every name in the default object", () => {
     const src = entrySource(on);
-    expect(src).toContain('export * from "@reactre/compat";');
+    expect(src).toContain(
+      'import "@reactre/compat/features/classes";\nimport "@reactre/compat/features/stacks";\n' +
+        'import "@reactre/compat/features/keys";\nexport * from "@reactre/compat/core";',
+    );
     expect(src).toContain('export const useEffect = /* @__PURE__ */ off("useEffect");');
     expect(src).toContain('export const lazy = /* @__PURE__ */ off("lazy");');
     expect(src).not.toMatch(/import \{[^}]*\buseEffect\b/);
@@ -68,9 +71,10 @@ describe("the module written for the options", () => {
     expect(src).toContain("Switched off: lazy, useEffect.");
   });
 
-  test("class support off builds on @reactre/compat/core, whose Component it keeps", () => {
+  test("class support off leaves its module out and keeps core's Component", () => {
     const src = entrySource(new Set([...on].filter((k) => k !== "Component" && k !== "PureComponent")));
-    expect(src).toContain('export * from "@reactre/compat/core";');
+    expect(src).not.toContain("features/classes");
+    expect(src).toContain("Switched off: Component, PureComponent, lazy, useEffect.");
     expect(src).toMatch(/import \{[^}]*\bComponent, PureComponent\b/);
     expect(src).not.toContain('off("Component")');
   });

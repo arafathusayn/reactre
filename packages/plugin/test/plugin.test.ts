@@ -3,6 +3,7 @@
 // ./bundlers.test.ts.
 
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 import { baseFor, reactre, type ReactreOptions } from "../src/index.ts";
@@ -80,11 +81,10 @@ describe("transform", () => {
 });
 
 describe("compat: where react resolves", () => {
-  test("Vite: react to compat, its server renderer to @reactre/compat/server, with or without classes", async () => {
+  test("Vite: react to compat, its server renderer to @reactre/compat/server", async () => {
     for (const [options, client] of [
       [{ compat: true }, "@reactre/compat"],
       [{ compat: { classes: true } }, "@reactre/compat"],
-      [{ compat: { classes: false } }, "@reactre/compat/core"],
     ] as const) {
       const plugin = raw("vite", options);
       for (const [id, target] of targets(client)) {
@@ -160,10 +160,32 @@ describe("compat: where react resolves", () => {
     // Options naming no key, or turning both roots off, fail when the plugin is made.
     expect(() => raw("vite", { compat: { exclude: ["useEfect"] } })).toThrow('"useEfect" is not an API key');
     expect(() => raw("vite", { compat: { apis: ["useState"] } })).toThrow("needs createRoot or hydrateRoot");
-    // Class support alone off is @reactre/compat/core, with no module written and no scan.
-    expect((await resolveWith(raw("vite", { compat: { exclude: ["@classes"] } }), "react")).asked).toBe(
-      "@reactre/compat/core",
-    );
+  });
+
+  test("class support or a behaviour off: a module built on core with the features that are on, and no scan", async () => {
+    const root = new URL("..", import.meta.url).pathname;
+    const written = async (options: Any): Promise<string> => {
+      const plugin = raw("vite", options);
+      // No API is off, so no scan joins: the plugin is one, not a list.
+      expect(plugin.name).toBe("@reactre/plugin");
+      plugin.vite.configResolved({ root });
+      const { asked } = await resolveWith(plugin, "react");
+      expect(asked).toMatch(/node_modules\/\.cache\/reactre\/compat-[0-9a-f]{12}\.js$/);
+      // Its imports of compat's feature modules resolve as react does.
+      expect((await resolveWith(plugin, "@reactre/compat/features/stacks")).asked).toBe(
+        "@reactre/compat/features/stacks",
+      );
+      return readFileSync(asked!, "utf8");
+    };
+    for (const options of [{ compat: { classes: false } }, { compat: { exclude: ["@classes"] } }]) {
+      const src = await written(options);
+      expect(src).toContain('import "@reactre/compat/features/stacks";\nimport "@reactre/compat/features/keys";\n');
+      expect(src).not.toContain("features/classes");
+      expect(src).toContain('export * from "@reactre/compat/core";');
+    }
+    const src = await written({ compat: { exclude: ["componentStack"] } });
+    expect(src).toContain('import "@reactre/compat/features/classes";\nimport "@reactre/compat/features/keys";\n');
+    expect(src).not.toContain("features/stacks");
   });
 
   test("esbuild: its own resolve, not registered for a react-server build", async () => {

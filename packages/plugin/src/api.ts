@@ -6,6 +6,8 @@
 //   - The module is a real file, written under the app's node_modules/.cache, so every bundler and
 //     Vite's dependency optimizer load it as they load any dependency. Its name carries a hash of
 //     its contents, so options that change write a new file instead of editing one in use.
+//   - It builds on @reactre/compat/core and imports the module of each key that has one and is on
+//     (class support, component stacks, React's handling of repeated keys), which installs it.
 //   - It imports only the names that are on, so a bundler can leave out what only the others
 //     reach. A switched-off name is still exported, as a function that throws: a library's
 //     `typeof React.x === "function"` check passes and the failure names the fix.
@@ -17,22 +19,24 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { ALWAYS, KEYS } from "@reactre/compat/api";
+import { ALWAYS, BEHAVIOURS, KEYS, MODULES } from "@reactre/compat/api";
 import { parseSync } from "oxc-parser";
 
 /** A request for the client side of React: `react`, `react-dom` and their subpaths, not the server's. */
 const CLIENT = /^react(?:-dom)?(?:\/(?!server|static).*)?$/;
 
-/** The class keys: off, the module builds on @reactre/compat/core, whose Component throws. */
+/** The class keys: off, class support is not loaded, and core's own Component throws when a class renders. */
 const CLASSES = new Set(["Component", "PureComponent"]);
 
 /** The source of the module `react` resolves to, with the keys in `on` and the rest switched off. */
 export function entrySource(on: ReadonlySet<string>): string {
-  const from = on.has("Component") ? "@reactre/compat" : "@reactre/compat/core";
+  const from = "@reactre/compat/core";
   const imported = [...ALWAYS, ...KEYS.filter((k) => on.has(k) || CLASSES.has(k))];
   const off = KEYS.filter((k) => !on.has(k) && !CLASSES.has(k));
+  const modules = Object.keys(MODULES).filter((k) => on.has(k));
   return (
-    `// Written by @reactre/plugin from the app's compat options. Switched off: ${KEYS.filter((k) => !on.has(k)).join(", ")}.\n` +
+    `// Written by @reactre/plugin from the app's compat options. Switched off: ${[...KEYS, ...BEHAVIOURS].filter((k) => !on.has(k)).join(", ")}.\n` +
+    modules.map((k) => `import "${MODULES[k]}";\n`).join("") +
     `export * from "${from}";\n` +
     `import { ${imported.join(", ")} } from "${from}";\n` +
     `function off(name) {\n` +
