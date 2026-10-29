@@ -2060,6 +2060,43 @@ describe("errors", () => {
     expect(log).toEqual(["reached 200", "dom 200"]);
   });
 
+  test("#185 counts the commits of each root: two roots updating each other take turns, unlimited", async () => {
+    // React's nestedUpdateCount starts over when the root that commits is another: two roots
+    // whose layout effects update each other never reach the limit, however many turns they take.
+    // A root that updates itself still throws.
+    const run = async (L: Lib, createRoot: (c: Any, o?: Any) => Any, flush: (fn: () => void) => void) => {
+      const log: string[] = [],
+        setters: Record<string, (n: number) => void> = {};
+      function Ping(props: { name: string; peer: string; limit: number }) {
+        const [n, set] = L.useState(0);
+        setters[props.name] = set;
+        L.useLayoutEffect(() => {
+          if (n > 0 && n < props.limit) setters[props.peer]!(n + 1);
+        });
+        log.push(props.name + " " + n);
+        return n;
+      }
+      const roots = { a: createRoot(box()), b: createRoot(box()) };
+      for (const [name, peer] of [
+        ["a", "b"],
+        ["b", "a"],
+      ] as const)
+        flush(() => roots[name].render(L.createElement(Ping, { name, peer, limit: 70 })));
+      flush(() => setters["a"]!(1));
+      await tasks();
+      const self = createRoot(box(), { onUncaughtError: (e: Any) => void log.push("uncaught " + e.message.slice(0, 25)) });
+      flush(() => self.render(L.createElement(Ping, { name: "s", peer: "s", limit: 1000 })));
+      flush(() => setters["s"]!(1));
+      await tasks();
+      return log;
+    };
+    const react = await run(React, ReactClient.createRoot, ReactDOM.flushSync);
+    const compat = await run(Compat, (c, o) => Compat.createRoot(c as unknown as Element, o), Compat.flushSync);
+    expect(compat).toEqual(react);
+    expect(react).toContain("b 70");
+    expect(react.at(-1)).toBe("uncaught Minified React error #185");
+  });
+
   test("hooks that differ from the last render's (#300, #310, #311, #467)", async () => {
     // The renders that fail log nothing: React calls a component whose render failed again
     // (it replays the failed work and retries the render) more times than compat does before

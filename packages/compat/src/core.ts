@@ -5297,6 +5297,22 @@ let passiveTimer = false; // a passive-effect flush is queued after paint
 // or componentDidUpdate setting state on every commit). Past React's limit, the next update
 // throws #185 (see schedule).
 let nested = 0;
+// React's rootWithNestedUpdates: the root those commits left their updates in. A commit that
+// leaves its update in another root (or in several) starts the count over, so React counts the
+// commits of each root, and two roots updating each other take turns without a limit.
+let nestedRoot: RootImpl | null = null;
+
+/**
+ * The count after a commit that left the updates now queued: one more when they are all in the
+ * root the last such commit left its own in, else 1. Only commits that leave an update call it.
+ */
+function nestedCount(): number {
+  let r: RootImpl | null = queue[0]!.o;
+  for (let ix = 1; ix < queue.length && r !== null; ix++) if (queue[ix]!.o !== r) r = null;
+  const n = r !== null && r === nestedRoot ? nested + 1 : 1;
+  nestedRoot = r;
+  return n;
+}
 
 /**
  * Mark `f` for re-render and queue it once. Outside a batch or a flush, a flush is queued as
@@ -5455,12 +5471,12 @@ function flushWork(sync: boolean): void {
         // would before the next render anyway. A sync flush's last commit counts below.
         if (queue.length) {
           flushPassive();
-          nested++;
+          nested = nestedCount();
         } else if (!sync) nested = 0;
       }
       if (!sync) break;
       flushPassive();
-      nested = queue.length ? nested + 1 : 0;
+      nested = queue.length ? nestedCount() : 0;
       // An error a passive effect threw renders now, as React flushes the sync lane it is on.
       if (!routed || !queue.length) break;
     }
