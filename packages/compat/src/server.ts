@@ -2,8 +2,9 @@
 //
 // renderToString, renderToStaticMarkup, renderToReadableStream and renderToPipeableStream write
 // the HTML React's own server writes, byte for byte: text separators, Suspense markers and
-// streaming instructions, hoisted <title>, <meta> and <link> tags, image preloads, stylesheet
-// precedence, form actions, useId's server ids, and the rest.
+// streaming instructions, hoisted <title>, <meta> and <link> tags, image preloads, resource
+// hints (preload, preinit, ...), stylesheet precedence, form actions, useId's server ids, and
+// the rest.
 //
 // Key design decisions:
 //
@@ -28,8 +29,7 @@
 //      same text in 2048- or 4096-byte views; only the chunk boundaries differ.
 //
 // What differs from React (see the README for the full list): a promise created during render
-// (uncached) is not replayed on retry, so `use()` of one suspends again; ReactDOM's resource hint
-// functions (preload, preinit, ...) write nothing during a server render; `onHeaders`,
+// (uncached) is not replayed on retry, so `use()` of one suspends again; `onHeaders`,
 // `formState`, `unstable_externalRuntimeSrc` and the prerender and resume APIs are not supported
 // (the latter throw); error messages are React's full (development) messages rather than
 // minified codes.
@@ -38,7 +38,14 @@
 // resources), format and tree contexts, the request and its tasks, rendering, the work loop,
 // flushing, and the public API.
 
-import { __serverRender, Children, type ReactElement, type ServerHooks, version as compatVersion } from "./core.ts";
+import {
+  __serverHints,
+  __serverRender,
+  Children,
+  type ReactElement,
+  type ServerHooks,
+  version as compatVersion,
+} from "./core.ts";
 
 // `Any` stands for React's untyped values (props, children, element types), as in index.ts.
 // biome-ignore lint: elements, props and React's internal records are untyped.
@@ -1086,8 +1093,9 @@ function pushStartInstance(
           return pushLinkImpl(target, props);
         // A stylesheet with a precedence: a resource, written once, in precedence order.
         let queue = state.styles.get(precedence);
-        if (!rs.styleResources.has(href)) {
-          rs.styleResources.add(href);
+        const resourceState = rs.styleResources.get(href);
+        if (resourceState !== null) {
+          rs.styleResources.set(href, null);
           if (!queue) {
             queue = { precedence: escapeText(precedence), rules: [], hrefs: [], sheets: new Map() };
             state.styles.set(precedence, queue);
@@ -1096,6 +1104,7 @@ function pushStartInstance(
             state: 0,
             props: { ...props, "data-precedence": props["precedence"], precedence: null },
           };
+          if (resourceState) adoptPreload(resource, resourceState, state.preloads.stylesheets.get(href));
           queue.sheets.set(href, resource);
           if (hoistableState) hoistableState.stylesheets.add(resource);
         } else if (queue) {
@@ -1126,12 +1135,21 @@ function pushStartInstance(
         return pushScriptImpl(target, props);
       // An async script with a src: a resource, written once, in the head.
       const key = props["src"];
-      const resources = props["type"] === "module" ? rs.moduleScriptResources : rs.scriptResources;
-      if (!resources.has(key)) {
-        resources.add(key);
+      const module = props["type"] === "module";
+      const resources = module ? rs.moduleScriptResources : rs.scriptResources;
+      const resourceState = resources.get(key);
+      if (resourceState !== null) {
+        resources.set(key, null);
+        let scriptProps = props;
+        if (resourceState) {
+          // A preload of the script lends its credentials, and is no longer written.
+          if (resourceState.length === 2) adoptPreloadCredentials((scriptProps = { ...props }), resourceState);
+          const preload = (module ? state.preloads.moduleScripts : state.preloads.scripts).get(key);
+          if (preload) preload.length = 0;
+        }
         const resource: string[] = [];
         state.scripts.add(resource);
-        pushScriptImpl(resource, props);
+        pushScriptImpl(resource, scriptProps);
       }
       if (textEmbedded) target.push("<!-- -->");
       return null;
@@ -1160,8 +1178,8 @@ function pushStartInstance(
       }
       // A style with a precedence and href: its rules join its precedence's style tag.
       let queue = state.styles.get(precedence);
-      if (!rs.styleResources.has(href)) {
-        rs.styleResources.add(href);
+      if (rs.styleResources.get(href) !== null) {
+        rs.styleResources.set(href, null);
         if (!queue) {
           queue = { precedence: escapeText(precedence), rules: [], hrefs: [], sheets: new Map() };
           state.styles.set(precedence, queue);
@@ -1241,7 +1259,7 @@ function pushStartInstance(
         if (hoistableState !== null && ctx.tagScope & 64) hoistableState.suspenseyImages = true;
         const sizes = typeof props["sizes"] === "string" ? props["sizes"] : undefined;
         const key = srcSet ? srcSet + "\n" + (sizes || "") : src;
-        const promotable = state.imagePreloads;
+        const promotable = state.preloads.images;
         let resource = promotable.get(key);
         if (resource) {
           if (props["fetchPriority"] === "high" || state.highImagePreloads.size < 10) {
@@ -1413,12 +1431,23 @@ interface ResumableState {
   instructions: number;
   hasBody: boolean;
   hasHtml: boolean;
-  /** The images, stylesheets and async scripts written already, by key. */
+  /** The resources hinted or written, by key (for preloads of other types, by type, then URL). */
+  unknownResources: Map<string, Set<string>>;
+  dnsResources: Set<string>;
+  connectResources: { default: Set<string>; anonymous: Set<string>; credentials: Set<string> };
   imageResources: Set<string>;
-  styleResources: Set<string>;
-  scriptResources: Set<string>;
-  moduleScriptResources: Set<string>;
+  styleResources: Map<string, ResourceState>;
+  scriptResources: Map<string, ResourceState>;
+  moduleUnknownResources: Map<string, Set<string>>;
+  moduleScriptResources: Map<string, ResourceState>;
 }
+
+/**
+ * A stylesheet or script resource: null once it is written (or loads otherwise), else a preload's
+ * credentials, [crossOrigin, integrity], or none ([]), for the element that loads it to adopt.
+ */
+type ResourceState = string[] | null;
+const PRELOAD_NO_CREDS: string[] = [];
 
 function createResumableState(identifierPrefix: string | undefined): ResumableState {
   return {
@@ -1427,10 +1456,14 @@ function createResumableState(identifierPrefix: string | undefined): ResumableSt
     instructions: 0,
     hasBody: false,
     hasHtml: false,
+    unknownResources: new Map(),
+    dnsResources: new Set(),
+    connectResources: { default: new Set(), anonymous: new Set(), credentials: new Set() },
     imageResources: new Set(),
-    styleResources: new Set(),
-    scriptResources: new Set(),
-    moduleScriptResources: new Set(),
+    styleResources: new Map(),
+    scriptResources: new Map(),
+    moduleUnknownResources: new Map(),
+    moduleScriptResources: new Map(),
   };
 }
 
@@ -1454,8 +1487,16 @@ interface RenderState {
   bootstrapScripts: Set<string[]>;
   scripts: Set<string[]>;
   bulkPreloads: Set<string[]>;
-  /** Image preloads past the first ten, by key: a later high-priority use promotes one. */
-  imagePreloads: Map<string, string[]>;
+  /**
+   * Preloads by URL, emptied when the resource itself is written; images past the first ten, by
+   * key, which a later high-priority use promotes.
+   */
+  preloads: {
+    images: Map<string, string[]>;
+    stylesheets: Map<string, string[]>;
+    scripts: Map<string, string[]>;
+    moduleScripts: Map<string, string[]>;
+  };
   nonce: { script: string | undefined; style: string | undefined };
   stylesToHoist: boolean;
   /** "<!DOCTYPE html>" for streams; renderToString writes none. */
@@ -1546,7 +1587,7 @@ function createRenderState(
     bootstrapScripts: new Set(),
     scripts: new Set(),
     bulkPreloads: new Set(),
-    imagePreloads: new Map(),
+    preloads: { images: new Map(), stylesheets: new Map(), scripts: new Map(), moduleScripts: new Map() },
     nonce: { script: nonceScript, style: nonceStyle },
     stylesToHoist: false,
     doctype: legacy ? "" : "<!DOCTYPE html>",
@@ -1567,8 +1608,8 @@ function createRenderState(
         props["crossOrigin"] = crossOrigin =
           config.crossOrigin == null ? undefined : config.crossOrigin === "use-credentials" ? "use-credentials" : "";
       }
-      rs.scriptResources.add(src);
-      rs.moduleScriptResources.add(src);
+      rs.scriptResources.set(src, null);
+      rs.moduleScriptResources.set(src, null);
       const link: string[] = [];
       pushLinkImpl(link, props);
       state.bootstrapScripts.add(link);
@@ -1586,6 +1627,159 @@ function createRenderState(
 }
 
 // #endregion
+
+// #endregion
+
+// #region Resource hints
+
+// ReactDOM's preload, preinit and the rest, while a request works (React's server dispatcher):
+// compat's react-dom functions check their options as React's do and pass what they keep here.
+// Like React's browser and Bun builds, a hint reaches the request only from code its work runs.
+// (React's Node build, and its edge build where AsyncLocalStorage exists, also take hints made
+// later in a promise callback the render started.)
+
+/** The request working now: hints go to it. */
+let currentRequest: Request | null = null;
+
+const credentialsOf = (options: Any): ResourceState =>
+  !options || (typeof options.crossOrigin !== "string" && typeof options.integrity !== "string")
+    ? PRELOAD_NO_CREDS
+    : [options.crossOrigin, options.integrity];
+
+function adoptPreloadCredentials(props: Props, state: string[]): void {
+  if (props["crossOrigin"] == null) props["crossOrigin"] = state[0];
+  if (props["integrity"] == null) props["integrity"] = state[1];
+}
+
+/** A stylesheet that was preloaded: its preload goes unwritten, or it was written already. */
+function adoptPreload(sheet: Stylesheet, state: string[], preload: string[] | undefined): void {
+  if (state.length === 2) adoptPreloadCredentials(sheet.props, state);
+  if (preload && preload.length > 0) preload.length = 0;
+  else sheet.state = 1;
+}
+
+/** A preload of another type: once per type and URL. Whether it was new. */
+function addUnknown(resources: Map<string, Set<string>>, as: string, href: string): boolean {
+  let hrefs = resources.get(as);
+  if (hrefs === undefined) resources.set(as, (hrefs = new Set()));
+  else if (hrefs.has(href)) return false;
+  hrefs.add(href);
+  return true;
+}
+
+function linkOf(props: Props): string[] {
+  const link: string[] = [];
+  pushLinkImpl(link, props);
+  return link;
+}
+
+/** preinit's script or preinitModule's: written once, adopting a preload's credentials. */
+function preinitScriptAs(src: string, options: Any, module: boolean): void {
+  const request = currentRequest!;
+  const resources = module ? request.resumableState.moduleScriptResources : request.resumableState.scriptResources;
+  const resourceState = resources.get(src);
+  if (!src || resourceState === null) return;
+  resources.set(src, null);
+  const props: Props = module ? { src, type: "module", async: true, ...options } : { src, async: true, ...options };
+  const state = request.renderState;
+  if (resourceState) {
+    if (resourceState.length === 2) adoptPreloadCredentials(props, resourceState);
+    const preload = (module ? state.preloads.moduleScripts : state.preloads.scripts).get(src);
+    if (preload) preload.length = 0;
+  }
+  const script: string[] = [];
+  state.scripts.add(script);
+  pushScriptImpl(script, props);
+}
+
+const serverHints = {
+  "dns-prefetch"(href: string): void {
+    const request = currentRequest!,
+      dns = request.resumableState.dnsResources;
+    if (!href || dns.has(href)) return;
+    dns.add(href);
+    request.renderState.preconnects.add(linkOf({ href, rel: "dns-prefetch" }));
+  },
+  preconnect(href: string, crossOrigin: string | null | undefined): void {
+    const request = currentRequest!,
+      connect = request.resumableState.connectResources;
+    const bucket =
+      crossOrigin === "use-credentials"
+        ? connect.credentials
+        : typeof crossOrigin === "string"
+          ? connect.anonymous
+          : connect.default;
+    if (!href || bucket.has(href)) return;
+    bucket.add(href);
+    request.renderState.preconnects.add(linkOf({ rel: "preconnect", href, crossOrigin }));
+  },
+  L(href: string, as: string, options: Any): void {
+    const request = currentRequest!,
+      rs = request.resumableState,
+      state = request.renderState;
+    if (!as || !href) return;
+    switch (as) {
+      case "image": {
+        const imageSrcSet = options.imageSrcSet;
+        const key = imageSrcSet ? imageSrcSet + "\n" + (options.imageSizes || "") : href;
+        if (rs.imageResources.has(key)) return;
+        rs.imageResources.add(key);
+        const link = linkOf({ rel: "preload", href: imageSrcSet ? undefined : href, as, ...options });
+        if (options.fetchPriority === "high") state.highImagePreloads.add(link);
+        else {
+          state.bulkPreloads.add(link);
+          state.preloads.images.set(key, link);
+        }
+        return;
+      }
+      case "style":
+      case "script": {
+        const resources = as === "style" ? rs.styleResources : rs.scriptResources;
+        if (resources.has(href)) return;
+        const link = linkOf({ rel: "preload", href, as, ...options });
+        resources.set(href, credentialsOf(options));
+        (as === "style" ? state.preloads.stylesheets : state.preloads.scripts).set(href, link);
+        state.bulkPreloads.add(link);
+        return;
+      }
+    }
+    if (!addUnknown(rs.unknownResources, as, href)) return;
+    (as === "font" ? state.fontPreloads : state.bulkPreloads).add(linkOf({ rel: "preload", href, as, ...options }));
+  },
+  m(href: string, options: Any): void {
+    const request = currentRequest!,
+      rs = request.resumableState,
+      state = request.renderState;
+    if (!href) return;
+    const as = options && typeof options.as === "string" ? options.as : "script";
+    if (as === "script") {
+      if (rs.moduleScriptResources.has(href)) return;
+      rs.moduleScriptResources.set(href, credentialsOf(options));
+    } else if (!addUnknown(rs.moduleUnknownResources, as, href)) return;
+    const link = linkOf({ rel: "modulepreload", href, ...options });
+    if (as === "script") state.preloads.moduleScripts.set(href, link);
+    state.bulkPreloads.add(link);
+  },
+  S(href: string, precedence: string | undefined, options: Any): void {
+    const request = currentRequest!,
+      rs = request.resumableState,
+      state = request.renderState;
+    if (!href) return;
+    const prec = precedence || "default";
+    const resourceState = rs.styleResources.get(href);
+    if (resourceState === null) return;
+    rs.styleResources.set(href, null);
+    let queue = state.styles.get(prec);
+    if (!queue) {
+      queue = { precedence: escapeText(prec), rules: [], hrefs: [], sheets: new Map() };
+      state.styles.set(prec, queue);
+    }
+    const sheet: Stylesheet = { state: 0, props: { rel: "stylesheet", href, "data-precedence": prec, ...options } };
+    if (resourceState) adoptPreload(sheet, resourceState, state.preloads.stylesheets.get(href));
+    queue.sheets.set(href, sheet);
+  },
+  X: preinitScriptAs,
+};
 
 // #endregion
 
@@ -3225,8 +3419,11 @@ function renderNode(request: Request, task: Task, node: Any, childIndex: number)
 function performWork(request: Request): void {
   if (request.aborted || request.status > OPEN) return;
   const prevContext = currentSnapshot,
-    prevResumable = currentResumableState;
+    prevResumable = currentResumableState,
+    prevRequest = currentRequest;
   currentResumableState = request.resumableState;
+  currentRequest = request;
+  __serverHints(serverHints);
   try {
     const pinged = request.pingedTasks;
     let i: number;
@@ -3238,6 +3435,9 @@ function performWork(request: Request): void {
     fatalError(request, error);
   } finally {
     currentResumableState = prevResumable;
+    // A render inside a render's component goes back to the outer one's request.
+    currentRequest = prevRequest;
+    __serverHints(prevRequest === null ? null : serverHints);
     // The context objects go back to the values they had, so client roots read their defaults.
     switchContext(prevContext);
   }

@@ -21,6 +21,7 @@ const load = (specifier: string): Promise<Any> => import(specifier);
 const prevEnv = process.env["NODE_ENV"];
 process.env["NODE_ENV"] = "production";
 const React: Any = await load("react");
+const ReactDOM: Any = await load("react-dom");
 const ReactServer: Any = await load("react-dom/server.browser");
 const ReactNodeServer: Any = await load("react-dom/server.node");
 if (prevEnv === undefined) delete process.env["NODE_ENV"];
@@ -28,6 +29,9 @@ else process.env["NODE_ENV"] = prevEnv;
 
 type Lib = Any;
 type Make = (L: Lib) => Any;
+
+/** The library with react-dom's functions (preload and the rest) for `L`. */
+const dom = (L: Lib): Any => (L === React ? ReactDOM : L);
 type Options = Record<string, Any>;
 
 const quiet = { onError: () => {} };
@@ -613,6 +617,139 @@ describe("hoistables and resources", () => {
     await sameError((L) => L.createElement("html", null, L.createElement("head"), L.createElement("head")));
     await sameError((L) => L.createElement(L.Fragment, null, L.createElement("body"), L.createElement("body")));
     await sameError((L) => L.createElement(L.Fragment, null, L.createElement("html"), L.createElement("html")));
+  });
+
+  test("resource hints called while rendering go to the head, in React's order", async () => {
+    const make: Make = (L) => {
+      const D = dom(L);
+      function Hints(): Any {
+        D.prefetchDNS("https://dns.example");
+        D.prefetchDNS("https://dns.example");
+        D.prefetchDNS("");
+        D.prefetchDNS(3);
+        D.preconnect("https://a.example");
+        D.preconnect("https://a.example", { crossOrigin: "anonymous" });
+        D.preconnect("https://a.example", { crossOrigin: "use-credentials" });
+        D.preconnect("https://a.example", { crossOrigin: "use-credentials" });
+        D.preconnect("https://b.example", {});
+        D.preconnect("");
+        D.preconnect(3);
+        D.preload("/font.woff2", { as: "font", type: "font/woff2" });
+        D.preload("/font.woff2", { as: "font" });
+        D.preload("/hero.png", { as: "image", fetchPriority: "high" });
+        D.preload("/a.png", { as: "image" });
+        D.preload("/a.png", { as: "image" });
+        D.preload("/x.png", { as: "image", imageSrcSet: "/x1.png 1x, /x2.png 2x", imageSizes: "50vw" });
+        D.preload("/s.css", { as: "style", crossOrigin: "use-credentials", integrity: "sha-s" });
+        D.preload("/s.css", { as: "style" });
+        D.preload("/plain.css", { as: "style", media: "print" });
+        D.preload("/p.js", { as: "script", integrity: "sha-p", referrerPolicy: "no-referrer", nonce: "n" });
+        D.preload("/p.js", { as: "script" });
+        D.preload("/q.js", { as: "script" });
+        D.preload("/q2.js", { as: "script", crossOrigin: "use-credentials" });
+        D.preloadModule("/m2.js", { integrity: "sha-m2" });
+        D.preloadModule("/m3.js");
+        D.preload("/data.json", { as: "fetch", crossOrigin: "" });
+        D.preload("/data.json", { as: "fetch" });
+        D.preload("/track.vtt", { as: "track" });
+        D.preload("", { as: "image" });
+        D.preload("/x", { as: "" });
+        D.preload("/x", {});
+        D.preload("/x");
+        D.preloadModule("/m.js");
+        D.preloadModule("/m.js", { as: "script" });
+        D.preloadModule("/n.js", { crossOrigin: "use-credentials", integrity: "sha-n" });
+        D.preloadModule("/w.js", { as: "worker", nonce: "n" });
+        D.preloadModule("/w.js", { as: "worker" });
+        D.preloadModule("/w2.js", { as: "worker" });
+        D.preloadModule("");
+        D.preloadModule(3);
+        D.preinit("/s.css", { as: "style", precedence: "high" });
+        D.preinit("/t.css", { as: "style", fetchPriority: "low" });
+        D.preinit("/t.css", { as: "style" });
+        D.preinit("/u.css", { as: "style", precedence: "high", integrity: "sha-u", crossOrigin: "x" });
+        D.preinit("/p.js", { as: "script" });
+        D.preinit("/r.js", { as: "script", nonce: "n", crossOrigin: "use-credentials", fetchPriority: "high" });
+        D.preinit("/r.js", { as: "script" });
+        D.preinit("/x", { as: "image" });
+        D.preinit("", { as: "style" });
+        D.preinit("/x");
+        D.preinitModule("/n.js");
+        D.preinitModule("/o.js", { integrity: "sha-o", crossOrigin: "" });
+        D.preinitModule("/o.js");
+        D.preinitModule("/w3.js", { as: "worker" });
+        D.preinitModule("/v.js", { as: "script" });
+        D.preinitModule("/z.js", "bad");
+        D.preinitModule("");
+        return L.createElement("p", null, "hinted");
+      }
+      return L.createElement(
+        "div",
+        null,
+        L.createElement("link", { rel: "stylesheet", href: "/plain.css", precedence: "default" }),
+        L.createElement("script", { async: true, src: "/q.js" }),
+        L.createElement("script", { async: true, src: "/m.js", type: "module" }),
+        L.createElement(Hints),
+        L.createElement("link", { rel: "stylesheet", href: "/s.css", precedence: "high" }),
+        L.createElement("script", { async: true, src: "/n.js", type: "module" }),
+        L.createElement("script", { async: true, src: "/q2.js" }),
+        L.createElement("script", { async: true, src: "/m2.js", type: "module" }),
+        L.createElement("script", { async: true, src: "/m3.js", type: "module" }),
+      );
+    };
+    await same(make, undefined, true);
+    await same(make, { nonce: "abc" });
+  });
+
+  test("resource hints in a document, from a class, and from content that streams in later", async () => {
+    const make: Make = (L) => {
+      const D = dom(L);
+      class Klass extends L.Component {
+        render(): Any {
+          D.preload("/class.css", { as: "style" });
+          D.preinit("/class.js", { as: "script" });
+          return "class";
+        }
+      }
+      let p: Any;
+      function Late(): Any {
+        L.use((p ??= later("late")));
+        D.preconnect("https://late.example");
+        D.preload("/late.png", { as: "image" });
+        D.preload("/late.woff", { as: "font" });
+        D.preload("/late.css", { as: "style" });
+        D.preinit("/late.css", { as: "style", precedence: "default" });
+        D.preinit("/late2.css", { as: "style", precedence: "default" });
+        D.preinit("/early2.css", { as: "style", precedence: "default" });
+        D.preinit("/late.js", { as: "script" });
+        D.preinitModule("/late.mjs");
+        D.preloadModule("/late-m.js");
+        return L.createElement("span", null, "late");
+      }
+      function Early(): Any {
+        D.preload("/early.css", { as: "style" });
+        D.preload("/early2.css", { as: "style", integrity: "sha-e" });
+        return "early";
+      }
+      return L.createElement(
+        "html",
+        null,
+        L.createElement("head", null, L.createElement(Early)),
+        L.createElement(
+          "body",
+          null,
+          L.createElement(Klass),
+          L.createElement("link", { rel: "stylesheet", href: "/early.css", precedence: "default" }),
+          L.createElement(L.Suspense, { fallback: "f" }, L.createElement(Late)),
+        ),
+      );
+    };
+    await sameStream(make);
+    expect(await pipeAll(Server, make(Compat))).toBe(await pipeAll(ReactNodeServer, make(React)));
+    expect(await pipeAll(Server, make(Compat), undefined, true)).toBe(
+      await pipeAll(ReactNodeServer, make(React), undefined, true),
+    );
+    expect(Server.renderToString(make(Compat))).toBe(ReactServer.renderToString(make(React)));
   });
 
   test("image preloads: the first ten, high priority ones, srcset, and those left out", async () => {

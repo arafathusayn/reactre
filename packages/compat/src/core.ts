@@ -6047,6 +6047,12 @@ interface Hinted {
   preloads: Map<string, Any>;
 }
 const hinted = new WeakMap<object, Hinted>();
+// While @reactre/compat/server renders, its resource dispatcher: hints go to the HTML it writes.
+let serverHints: Any = null;
+/** Internal (@reactre/compat/server): the server's resource dispatcher, or null. */
+export function __serverHints(d: Any): void {
+  serverHints = d;
+}
 function hintsOf(d: Any): Hinted {
   let h = hinted.get(d);
   if (h === undefined) hinted.set(d, (h = { keys: new Set(), preloads: new Map() }));
@@ -6075,6 +6081,7 @@ function hintElement(d: Any, tag: string, props: Any): Any {
 }
 
 function preconnectAs(rel: string, href: string, crossOrigin: string | null | undefined): void {
+  if (serverHints) return serverHints[rel](href, crossOrigin);
   const d = doc();
   if (d === null || !href) return;
   let sel = `link[rel="${rel}"][href="${escAttr(href)}"]`;
@@ -6114,6 +6121,7 @@ export function preload(href: string, opts?: Any): void {
     imageSizes: str(opts.imageSizes),
     media: str(opts.media),
   };
+  if (serverHints) return serverHints.L(href, as, o);
   const d = doc();
   if (d === null || !href || !as) return;
   // An image with a srcset is known by it, not by its href.
@@ -6148,6 +6156,7 @@ export function preloadModule(href: string, opts?: Any): void {
         fetchPriority: str(opts.fetchPriority),
       }
     : undefined;
+  if (serverHints) return serverHints.m(href, o);
   const d = doc();
   if (d === null || !href) return;
   const as = o?.as ?? "script";
@@ -6191,6 +6200,7 @@ export function preinitModule(href: string, opts?: Any): void {
 }
 
 function preinitStyle(href: string, precedence: string | undefined, o: Any): void {
+  if (serverHints) return serverHints.S(href, precedence, o);
   const d = doc();
   if (d === null || !href) return;
   const key = styleKey(href),
@@ -6211,6 +6221,7 @@ function preinitStyle(href: string, precedence: string | undefined, o: Any): voi
 }
 
 function preinitScript(src: string, o: Any, module: boolean): void {
+  if (serverHints) return serverHints.X(src, o, module);
   const d = doc();
   if (d === null || !src) return;
   const key = scriptKey(src),
