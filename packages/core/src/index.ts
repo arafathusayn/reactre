@@ -461,7 +461,17 @@ class ForList<T, K> {
       skipUnchanged: true,
       remove: (e) => this.dispose(e),
     });
-    if (spec.events) for (const [type] of spec.events) this.listen(type);
+    if (spec.events) {
+      // One listener per event type, with that type's holes and handlers.
+      const byType = new Map<string, [number[], ((item: T) => (e: Event) => void)[]]>();
+      for (const [type, hole, h] of spec.events) {
+        let t = byType.get(type);
+        if (t === undefined) byType.set(type, (t = [[], []]));
+        t[0].push(hole);
+        t[1].push(h);
+      }
+      for (const [type, [holes, hs]] of byType) this.listen(type, holes, hs);
+    }
   }
 
   /** Build a row: compute its values, then clone the template with them baked in. */
@@ -593,11 +603,11 @@ class ForList<T, K> {
   /**
    * One listener per event type on the list's parent: the row is the
    * parent's child the event came through, its handler the one of the
-   * innermost element with a handler for the type.
+   * innermost element with a handler for the type. `holes[i]` holds the
+   * element `hs[i]` handles.
    */
-  private listen(type: string): void {
-    const spec = this.spec,
-      parent = this.parent;
+  private listen(type: string, holes: number[], hs: ((item: T) => (e: Event) => void)[]): void {
+    const parent = this.parent;
     parent.addEventListener(type, (ev) => {
       // Climb from the target to the parent's child, keeping the path:
       // path[0] is the innermost element.
@@ -621,10 +631,11 @@ class ForList<T, K> {
       if (e === undefined) return;
       path.push(node);
       for (let p = 0; p < path.length; p++) {
-        for (const [t, hole, h] of spec.events!) {
-          if (t === type && this.node(e, hole) === path[p]) {
+        for (let i = 0; i < holes.length; i++) {
+          if (this.node(e, holes[i]!) === path[p]) {
+            const row = e;
             // Batched: a handler that sets several signals re-renders once.
-            batch(() => h(e!.item)(ev));
+            batch(() => hs[i]!(row.item)(ev));
             return;
           }
         }

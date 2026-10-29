@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### @reactre/core
+
+- Fixed: a `<For>` row with several handlers for one event type, such as two `onClick` links, calls the clicked one once per event. Before, the list added one listener per handler, so each click ran the handler once per handler of its type.
+
 ### @reactre/plugin
 
 - Added: one plugin for Vite, Rollup, Rolldown, esbuild, webpack, Rspack and Bun, built on unplugin and running under Node and Bun. By default it compiles reactre TSX; with `compat`, it resolves `react` and `react-dom` to @reactre/compat (or its class build) and compiles the app's JSX with @reactre/compat/compiler.

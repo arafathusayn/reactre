@@ -155,6 +155,7 @@ const LIST = `
   let calls = 0;
   const label = (row) => (calls++, row.label + suffix());
   const removed = [];
+  let selects = 0;
   function App() {
     return (
       <table><tbody>
@@ -162,7 +163,7 @@ const LIST = `
           {(row) => (
             <tr class={isSelected(row.id) ? "danger" : ""}>
               <td>{row.id}</td>
-              <td><a onClick={() => setSelected(row.id)}>{row.label}</a></td>
+              <td><a onClick={() => (selects++, setSelected(row.id))}>{row.label}</a></td>
               <td><a onClick={() => (removed.push(row.id), setRows((r) => r.filter((x) => x.id !== row.id)))}><span>x</span></a></td>
               <td>{label(row)}</td>
             </tr>
@@ -172,7 +173,7 @@ const LIST = `
     );
   }
   render(App, root);
-  return { rows, setRows, setSelected, setSuffix, calls: () => calls, removed };
+  return { rows, setRows, setSelected, setSuffix, calls: () => calls, removed, selects: () => selects };
 `;
 type ListApi = {
   rows: () => { id: number; label: string }[];
@@ -183,6 +184,7 @@ type ListApi = {
   setSuffix: (s: string) => void;
   calls: () => number;
   removed: number[];
+  selects: () => number;
 };
 const make = (n: number, from = 1) => Array.from({ length: n }, (_, i) => ({ id: from + i, label: "r" + (from + i) }));
 
@@ -235,6 +237,8 @@ describe("reactre: <For>", () => {
     api.setRows(make(5));
     click((trs()[2]!.childNodes[1] as FakeElement).firstChild);
     expect(trs()[2]!.getAttribute("class")).toBe("danger");
+    // One listener per event type: two click handlers per row, but one call per click.
+    expect(api.selects()).toBe(1);
     // A click on the span inside the remove link reaches the link's handler.
     click(((trs()[3]!.childNodes[2] as FakeElement).firstChild as FakeElement).firstChild);
     expect(api.removed).toEqual([4]);
