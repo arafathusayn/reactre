@@ -1528,10 +1528,14 @@ function runHost(f: Fiber, old: Props | null, mount: boolean): void {
     f.d = dom;
     dom[FIBER] = f;
     if (hoistable(f, p)) {
-      // React 19 document metadata: rendered anywhere, placed in <head>.
+      // React 19 document metadata: rendered anywhere, placed in <head>. A <title> goes before
+      // the first one there, as in React, so the newest sets the document's title.
       f.f |= HOIST;
       dom[OWN] = null;
-      document.head.appendChild(dom);
+      const head = document.head;
+      let at: ChildNode | null = null;
+      if (type === "title") for (at = head.firstChild; at !== null && at.nodeName !== "TITLE";) at = at.nextSibling;
+      head.insertBefore(dom, at);
     } else dom[OWN] = curHost;
   }
   setProps(f, dom, old ?? NO_PROPS, p, mount);

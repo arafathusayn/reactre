@@ -5,8 +5,8 @@
 //
 // Covered here: keyed reconciliation and its DOM operation counts, batching and flushSync,
 // context through memo, effect order, event bubbling, compiled blocks hosted by components, list
-// updates from a compiled loop's report (__delta), memo bailouts in lists, lazy initial state, and
-// Suspense's reveal throttle, and keyboard event fields.
+// updates from a compiled loop's report (__delta), memo bailouts in lists, lazy initial state,
+// Suspense's reveal throttle, keyboard event fields, and where <title> goes in <head>.
 
 import { beforeEach, describe, expect, test } from "bun:test";
 
@@ -817,5 +817,19 @@ describe("keyboard events", () => {
     expect(
       read("onKeyPress", [new KeyEvent("keypress", { charCode: 97 }), new KeyEvent("keypress", { charCode: 13 })]),
     ).toEqual(["a 0 97 97", "Enter 0 13 13"]);
+  });
+});
+
+describe("document metadata", () => {
+  let head: FakeElement;
+  beforeEach(() => {
+    head = new FakeElement("HEAD");
+    (document as unknown as { head: FakeElement }).head = head;
+  });
+
+  test("a new <title> goes before the titles already in <head>, and other metadata after them", () => {
+    render(h("div", null, h("title", null, "Outer"), h("meta", { name: "d" }), h("title", null, "Inner")));
+    expect(html(head)).toBe("<title>Inner</title><title>Outer</title><meta></meta>");
+    expect(html()).toBe("<div></div>");
   });
 });
