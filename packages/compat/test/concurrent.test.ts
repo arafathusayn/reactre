@@ -874,6 +874,41 @@ describe("updates that suspend", () => {
       snap("resolved");
     }));
 
+  test("a commit on another root leaves a transition that waits for data waiting", () =>
+    same(async ({ L, log, root, flushSync, snap, task }) => {
+      const d = data();
+      await d.ready("a");
+      let set: Any;
+      const Ctx = L.createContext("none");
+      const Reader = logs(L, log, "Reader", () => "ctx " + L.useContext(Ctx));
+      const Page = logs(L, log, "Page", ({ k }) => d.read(L, k));
+      const App = () => {
+        const [k, s] = L.useState("a");
+        set = s;
+        return L.createElement(
+          "div",
+          null,
+          L.createElement(Ctx.Provider, { value: k }, L.createElement(Reader)),
+          L.createElement(L.Suspense, { fallback: "loading" }, L.createElement(Page, { k })),
+        );
+      };
+      flushSync(() => root.render(L.createElement(App)));
+      L.startTransition(() => set("b"));
+      await task();
+      snap("waiting");
+      // Another root commits meanwhile.
+      const other = new FakeElement("DIV");
+      other.isDocument = true;
+      const r2 = L === React ? ReactClient.createRoot(other) : Compat.createRoot(other as unknown as Element);
+      flushSync(() => r2.render(L.createElement("p", null, "other")));
+      await task();
+      snap("other committed");
+      d.resolve("b");
+      await task();
+      snap("resolved");
+      r2.unmount();
+    }));
+
   test("an update outside a transition that suspends with no boundary above keeps the screen", () =>
     same(async ({ L, log, root, flushSync, snap, task }) => {
       const d = data();

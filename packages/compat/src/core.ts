@@ -3886,10 +3886,7 @@ const HYDRATION = {
   id: treeId,
   store: storeSnapshot,
   listen: (r: RootImpl): void => {
-    // Behind bail renders waiting for the next flush (see laneSame), if any.
-    if (beforeRender === runBails) bailNext = selective;
-    else if (undoRender !== null) undoNext = selective;
-    else beforeRender = selective;
+    if (!befores.includes(selective)) befores.push(selective);
     listenForReplay(r);
   },
   /** Whether an event's target is in content of root `r` that has not hydrated. */
@@ -5538,8 +5535,11 @@ function unmount(f: Fiber, rm: boolean): void {
 let queue: Fiber[] = []; // fibers with a pending update, in the order they were scheduled
 let spareQueue: Fiber[] = []; // the other of the two swapped queue arrays (see flushWork)
 let flushing = false; // inside flushWork: updates made now join this flush
-// What runs before a batch of updates renders: hydration's, once a root hydrates (see selective).
-let beforeRender: ((q: Fiber[]) => void) | null = null;
+// What runs before a batch of updates renders, in order: the transition lanes' bail renders (see
+// laneSame), the urgent render undo's save (see undoBefore), hydration's once a root hydrates (see
+// selective), and what notes the roots a commit reaches while a transition waits (see noteRoots).
+// Each, once added, stays; one with nothing to do returns.
+const befores: ((q: Fiber[]) => void)[] = [];
 let batch = 0; // depth of event handlers, flushSync, batchedUpdates and act: no flush until 0
 let micro = false; // a microtask flush is queued
 let task = false; // a flush in a task of its own is queued
@@ -5724,7 +5724,7 @@ function flushWork(sync: boolean): void {
           queue = spareQueue;
           if (q.length > 1) q.sort(byDepth);
           // On a page that hydrates: dehydrated boundaries the updates reach hydrate first.
-          if (beforeRender !== null) beforeRender(q);
+          for (let i = 0; i < befores.length; i++) befores[i]!(q);
           // The user code React runs in its commit's mutation phase waits for the render to end.
           holding = MUT;
           try {
@@ -7200,6 +7200,8 @@ interface Batch {
   readonly r?: boolean;
   /** Its transitions' view transition types (addTransitionType). */
   y?: string[];
+  /** The roots its last attempt rendered, while it waits (see unhold). */
+  rs?: Set<RootImpl>;
 }
 // The batches waiting to render, in order; the one this event's transitions join; the one this
 // render's deferred values join; how many async actions run.
@@ -7313,14 +7315,43 @@ function newBatch(): Batch {
  * An update makes the batches waiting for data render again, as React's markRootUpdated clears
  * its suspended lanes: replayed over the update, one may not suspend now.
  */
-function unhold(): void {
+/**
+ * Let the batches that wait for data render again: those on root `r` (an update to it, or a commit
+ * that reached it, as React's markRootUpdated and markRootFinished clear that root's suspended
+ * lanes), or all of them (a promise that settled).
+ */
+function unhold(r: RootImpl | null = null): void {
   dropPending();
-  waiting = false;
+  let still = false;
   for (const b of batches)
     if (b.w) {
-      b.w = false;
-      laneSoon();
+      if (r === null || b.rs === undefined || b.rs.has(r)) {
+        b.w = false;
+        laneSoon();
+      } else still = true;
     }
+  waiting = still;
+}
+
+/** The root above fiber `f`. */
+function rootOf(f: Fiber): RootImpl {
+  while (f.r !== null) f = f.r;
+  return f.o;
+}
+
+// The roots the renders reached while a batch waits, for the commit's wake (see wakeCommitted).
+const reached = new Set<RootImpl>();
+
+/** Before a render, while a batch waits: note the roots its fibers are in. */
+function noteRoots(q: Fiber[]): void {
+  if (waiting) for (const f of q) reached.add(rootOf(f));
+}
+
+/** After a commit: wake the batches waiting on the roots it reached. */
+function wakeCommitted(): void {
+  const rs = [...reached];
+  reached.clear();
+  for (const r of rs) if (waiting) unhold(r);
 }
 function laneSoon(): void {
   if (!laneTask) {
@@ -7330,7 +7361,7 @@ function laneSoon(): void {
 }
 
 function laneSet(h: Hook, a: Any): boolean {
-  unhold();
+  unhold(rootOf(h.f));
   let p = pend.get(h);
   if (transition === null) {
     if (p !== undefined) p.u.push(a, null);
@@ -7361,20 +7392,17 @@ function laneSame(h: Hook, f: Fiber): void {
   f.f &= ~DIRTY;
   if (bails === null) {
     bails = new Set();
-    bailNext = beforeRender;
-    beforeRender = runBails;
+    if (!befores.includes(runBails)) befores.unshift(runBails);
   }
   bails.add(f);
 }
-let bails: Set<Fiber> | null = null,
-  bailNext: ((q: Fiber[]) => void) | null = null;
+let bails: Set<Fiber> | null = null;
 
-function runBails(q: Fiber[]): void {
-  const b = bails!;
+function runBails(): void {
+  const b = bails;
+  if (b === null) return;
   bails = null;
-  beforeRender = bailNext;
   for (const f of b) if (!(f.f & (DIRTY | DEAD))) bailRender(f);
-  if (beforeRender !== null) beforeRender(q);
 }
 
 /** Move batch `b`'s updates into `into`, which renders them; `into` is open for this event now. */
@@ -7391,7 +7419,7 @@ function entangle(b: Batch, into: Batch): Batch {
 }
 
 function laneRoot(r: RootImpl, children: Any): boolean {
-  unhold();
+  unhold(r);
   const tok = (r.pt = transition === null ? null : { c: children });
   if (tok === null) return false;
   batchNow().k.push(r.f, () => {
@@ -7406,7 +7434,7 @@ function laneRoot(r: RootImpl, children: Any): boolean {
 }
 
 function laneLater(f: Fiber, fn: () => void): boolean {
-  unhold();
+  unhold(rootOf(f));
   if (transition === null) return false;
   batchNow().k.push(f, fn);
   return true;
@@ -7548,7 +7576,10 @@ function attempt(b: Batch, check: boolean): boolean {
       if (moved) return attempt(b, false);
       // It renders again once any of what it waits for settles (React's ping).
       b.w = waiting = true;
-      for (const t of at.bad) t.then(unhold, unhold);
+      b.rs = rs;
+      if (!befores.includes(noteRoots)) befores.push(noteRoots);
+      const ping = (): void => unhold();
+      for (const t of at.bad) t.then(ping, ping);
       // A reveal that suspends where content showed waits as a transition does.
       if (b.r) batches.push(b);
       return false;
@@ -7590,10 +7621,9 @@ interface Watch {
 
 // #region Urgent render undo (./features/undo.ts)
 
-// The watch of the render the flush is running, while ./features/undo.ts is installed; the
-// beforeRender work that was there before it; whether that render is to be undone.
+// The watch of the render the flush is running, while ./features/undo.ts is installed; whether
+// that render is to be undone.
 let undoWatch: Watch | null = null,
-  undoNext: ((q: Fiber[]) => void) | null = null,
   undoing = false,
   undoQueued: Fiber[] = [],
   // undoNow, once the module installed it: the core reaches the undo only through this.
@@ -7612,8 +7642,7 @@ export function __installUndo(): void {
   // Ahead of whatever is there: a module installs as it loads, before any render.
   if (undoRender !== null) return;
   undoRender = undoNow;
-  undoNext = beforeRender;
-  beforeRender = undoBefore;
+  befores.push(undoBefore);
 }
 
 /**
@@ -7625,10 +7654,7 @@ function undoBefore(q: Fiber[]): void {
   if (undoWatch !== null) unwatch(undoWatch);
   undoWatch = null;
   // Without a MutationObserver nothing records the DOM's changes: what renders commits.
-  if (typeof MutationObserver !== "function") {
-    if (undoNext !== null) undoNext(q);
-    return;
-  }
+  if (typeof MutationObserver !== "function") return;
   const sv: Any[] = [],
     hv: Any[] = [],
     fv: Any[] = [],
@@ -7669,7 +7695,6 @@ function undoBefore(q: Fiber[]): void {
       undoWatch = null;
     }
   });
-  if (undoNext !== null) undoNext(q);
 }
 
 /** Undo the render: its DOM changes, fibers, hooks and queued effects; its updates wait to render again. */
@@ -8295,7 +8320,7 @@ export function __installConcurrent(): void {
     defer: laneDefer,
     act: laneAct,
     flush: runLanes,
-    wake: unhold,
+    wake: wakeCommitted,
     skip: skipSuspended,
     reveal: laneReveal,
     dropped: laneDropped,
