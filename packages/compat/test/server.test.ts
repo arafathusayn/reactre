@@ -752,6 +752,103 @@ describe("hoistables and resources", () => {
     expect(Server.renderToString(make(Compat))).toBe(ReactServer.renderToString(make(React)));
   });
 
+  test("onHeaders: early hints as a Link header, the rest as links in the HTML", async () => {
+    // What each server gives onHeaders (a Headers object for streams, a plain object for pipes),
+    // then the HTML.
+    const run = async (server: Any, L: Lib, options: Options, pipe: Any): Promise<string> => {
+      const seen: string[] = [];
+      const errors: string[] = [];
+      const onHeaders = (h: Any): void => {
+        seen.push(JSON.stringify(h instanceof Headers ? Object.fromEntries(h.entries()) : h));
+        if (options["throws"]) throw new Error("onHeaders threw");
+      };
+      const all = {
+        ...options,
+        onHeaders,
+        onError: (e: Any, info: Any) => void errors.push(e.message + Object.keys(info)),
+      };
+      const html = pipe ? await pipeAll(pipe, make(L), all, true) : await streamAll(server, make(L), all);
+      return [...seen, ...errors, html].join("\n");
+    };
+    let shellDelay = 0;
+    const make: Make = (L) => {
+      const D = dom(L);
+      let p: Any;
+      // Suspends the shell, after Shell has hinted.
+      const Wait = (): Any => (shellDelay ? L.use((p ??= later("waited", shellDelay))) : null);
+      function Shell(): Any {
+        D.prefetchDNS("https://dns.example");
+        D.preconnect("https://a.example/<x>", { crossOrigin: "use-credentials" });
+        D.preconnect("https://b.example");
+        D.preload("/f\n.woff2", { as: "font", type: 'font/"woff2";,' });
+        D.preload("/hero.png", { as: "image", fetchPriority: "high" });
+        D.preload("/set.png", { as: "image", fetchPriority: "high", imageSrcSet: "/s1.png 1x" });
+        D.preload("/plain.png", { as: "image" });
+        D.preload("/script.js", { as: "script" });
+        D.preinit("/a.css", { as: "style", precedence: "high", crossOrigin: "anonymous", integrity: "sha" });
+        return L.createElement(
+          "div",
+          null,
+          L.createElement("img", { src: "/img.png", fetchPriority: "high", sizes: "1px", nonce: "n" }),
+          L.createElement("img", { src: "/img2.png" }),
+          L.createElement("img", { srcSet: "/img3.png 2x" }),
+          L.createElement("link", { rel: "stylesheet", href: "/b.css", precedence: "high", media: "print" }),
+          L.createElement("link", { rel: "stylesheet", href: "/c.css", precedence: "low" }),
+          L.createElement("link", { rel: "stylesheet", href: "/d.css", precedence: "low", integrity: "i" }),
+          L.createElement("p", null, "x"),
+          L.createElement(Wait),
+        );
+      }
+      return L.createElement(Shell);
+    };
+    const both = async (options: Options): Promise<void> => {
+      expect(await run(Server, Compat, options, null)).toBe(await run(ReactServer, React, options, null));
+      expect(await run(null, Compat, options, Server)).toBe(await run(null, React, options, ReactNodeServer));
+    };
+    await both({});
+    await both({ maxHeadersLength: 120 });
+    await both({ maxHeadersLength: 0 });
+    await both({ throws: true });
+    // A shell still rendering when the first work ends: its stylesheets join the header.
+    shellDelay = 5;
+    await both({});
+    await both({ maxHeadersLength: 600 });
+    await both({ maxHeadersLength: 650 });
+    shellDelay = 0;
+    // Nothing to hint: an empty header set.
+    const empty = async (server: Any): Promise<string> => {
+      let seen = "";
+      await streamAll(server, Compat.createElement("p"), {
+        onHeaders: (h: Any) => void (seen = JSON.stringify(Object.fromEntries(h.entries()))),
+      });
+      return seen;
+    };
+    expect(await empty(Server)).toBe(await empty(ReactServer));
+  });
+
+  test("onHeaders: many high-priority images, and preloads too long for any header", async () => {
+    const run = async (server: Any, L: Lib): Promise<string> => {
+      let seen = "";
+      const html = await streamAll(
+        server,
+        L.createElement(
+          "div",
+          null,
+          Array.from({ length: 40 }, (_, i) =>
+            L.createElement("img", {
+              key: i,
+              src: `/image-number-${i}.png`,
+              fetchPriority: i % 2 ? "high" : undefined,
+            }),
+          ),
+        ),
+        { onHeaders: (h: Any) => void (seen = h.get("Link")), maxHeadersLength: 100000 },
+      );
+      return seen + "\n" + html;
+    };
+    expect(await run(Server, Compat)).toBe(await run(ReactServer, React));
+  });
+
   test("image preloads: the first ten, high priority ones, srcset, and those left out", async () => {
     await same((L) =>
       L.createElement(

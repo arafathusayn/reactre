@@ -29,8 +29,8 @@
 //      same text in 2048- or 4096-byte views; only the chunk boundaries differ.
 //
 // What differs from React (see the README for the full list): a promise created during render
-// (uncached) is not replayed on retry, so `use()` of one suspends again; `onHeaders`,
-// `formState`, `unstable_externalRuntimeSrc` and the prerender and resume APIs are not supported
+// (uncached) is not replayed on retry, so `use()` of one suspends again; `formState`,
+// `unstable_externalRuntimeSrc` and the prerender and resume APIs are not supported
 // (the latter throw); error messages are React's full (development) messages rather than
 // minified codes.
 //
@@ -1270,6 +1270,31 @@ function pushStartInstance(
           rs.imageResources.add(key);
           const input = props["crossOrigin"];
           const crossOrigin = typeof input === "string" ? (input === "use-credentials" ? input : "") : undefined;
+          // With onHeaders, a Link header while it has room, for a high-priority image or while
+          // the images there are short.
+          const headers = state.headers;
+          if (
+            headers &&
+            headers.remainingCapacity > 0 &&
+            typeof srcSet !== "string" &&
+            (props["fetchPriority"] === "high" || headers.highImagePreloads.length < 500) &&
+            fitsHeader(
+              headers,
+              getPreloadAsHeader(src, "image", {
+                imageSrcSet: srcSet,
+                imageSizes: props["sizes"],
+                crossOrigin,
+                integrity: props["integrity"],
+                nonce: props["nonce"],
+                type: props["type"],
+                fetchPriority: props["fetchPriority"],
+                referrerPolicy: props["referrerPolicy"],
+              }),
+            )
+          ) {
+            headers.highImagePreloads = appendHeader(headers.highImagePreloads, lastHeader);
+            return pushSelfClosing(target, props, "img", ctx);
+          }
           resource = [];
           pushLinkImpl(resource, {
             rel: "preload",
@@ -1498,6 +1523,9 @@ interface RenderState {
     moduleScripts: Map<string, string[]>;
   };
   nonce: { script: string | undefined; style: string | undefined };
+  /** onHeaders' Link header as it fills, until it is given (then null); null without onHeaders. */
+  headers: HeadersState | null;
+  onHeaders: ((headers: Record<string, string>) => void) | undefined;
   stylesToHoist: boolean;
   /** "<!DOCTYPE html>" for streams; renderToString writes none. */
   doctype: string;
@@ -1505,8 +1533,17 @@ interface RenderState {
   generateStaticMarkup: boolean;
 }
 
+/** The Link header's parts, and the room left in it. */
+interface HeadersState {
+  preconnects: string;
+  fontPreloads: string;
+  highImagePreloads: string;
+  remainingCapacity: number;
+}
+
 /** Options of the stream entries that shape the HTML. */
-export interface RenderToReadableStreamOptions {
+/** The options both stream entries take. */
+export interface StreamOptions {
   identifierPrefix?: string;
   namespaceURI?: string;
   nonce?: string | { script?: string; style?: string };
@@ -1515,13 +1552,23 @@ export interface RenderToReadableStreamOptions {
   bootstrapModules?: (string | { src: string; integrity?: string; crossOrigin?: string })[];
   importMap?: unknown;
   progressiveChunkSize?: number;
+  /** The Link header's length at most (2000 by default). */
+  maxHeadersLength?: number;
+  onError?: (error: unknown, errorInfo: ErrorInfo) => string | void;
+  onBrowserBailout?: (error: unknown, errorInfo: ErrorInfo) => void;
+}
+
+/** renderToReadableStream's options. */
+export interface RenderToReadableStreamOptions extends StreamOptions {
   signal?: AbortSignal;
-  onError?: (error: unknown, errorInfo: { componentStack?: string }) => string | void;
-  onBrowserBailout?: (error: unknown, errorInfo: { componentStack?: string }) => void;
+  /** Called once, before the HTML, with a Link header of the hints it can hold. */
+  onHeaders?: (headers: Headers) => void;
 }
 
 /** renderToPipeableStream's options: the stream options and its callbacks. */
-export interface RenderToPipeableStreamOptions extends Omit<RenderToReadableStreamOptions, "signal"> {
+export interface RenderToPipeableStreamOptions extends StreamOptions {
+  /** Called once, before the HTML, with the Link header of the hints it can hold. */
+  onHeaders?: (headers: { Link?: string }) => void;
   onShellReady?: () => void;
   onShellError?: (error: unknown) => void;
   onAllReady?: () => void;
@@ -1540,10 +1587,12 @@ function pushCompletedShellIdAttribute(target: string[], rs: ResumableState): vo
 
 function createRenderState(
   rs: ResumableState,
-  options: RenderToReadableStreamOptions | undefined,
+  options: StreamOptions | undefined,
   legacy: boolean,
   generateStaticMarkup: boolean,
+  onHeaders: ((headers: Record<string, string>) => void) | undefined,
 ): RenderState {
+  const maxHeadersLength = options?.maxHeadersLength;
   const nonceOpt = options?.nonce;
   const nonceScript = typeof nonceOpt === "string" ? nonceOpt : nonceOpt && nonceOpt.script;
   const nonceStyle = typeof nonceOpt === "string" ? undefined : nonceOpt && nonceOpt.style;
@@ -1589,6 +1638,15 @@ function createRenderState(
     bulkPreloads: new Set(),
     preloads: { images: new Map(), stylesheets: new Map(), scripts: new Map(), moduleScripts: new Map() },
     nonce: { script: nonceScript, style: nonceStyle },
+    headers: onHeaders
+      ? {
+          preconnects: "",
+          fontPreloads: "",
+          highImagePreloads: "",
+          remainingCapacity: 2 + (typeof maxHeadersLength === "number" ? maxHeadersLength : 2000),
+        }
+      : null,
+    onHeaders,
     stylesToHoist: false,
     doctype: legacy ? "" : "<!DOCTYPE html>",
     generateStaticMarkup,
@@ -1692,13 +1750,89 @@ function preinitScriptAs(src: string, options: Any, module: boolean): void {
   pushScriptImpl(script, props);
 }
 
+// onHeaders' Link header: URLs and quoted parameters escaped as React escapes them.
+const linkHeaderEscapes: Record<string, string> = {
+  "<": "%3C",
+  ">": "%3E",
+  "\n": "%0A",
+  "\r": "%0D",
+  '"': "%22",
+  "'": "%27",
+  ";": "%3B",
+  ",": "%2C",
+};
+const linkHeaderEscape = (c: string): string => linkHeaderEscapes[c]!;
+const escapeHrefForHeader = (href: string): string => ("" + href).replace(/[<>\r\n]/g, linkHeaderEscape);
+const escapeParamForHeader = (value: string): string => ("" + value).replace(/["';,\r\n]/g, linkHeaderEscape);
+
+/** A preload as a Link header entry, with its string options as parameters. */
+function getPreloadAsHeader(href: string, as: string, params: Any): string {
+  let header = "<" + escapeHrefForHeader(href) + '>; rel=preload; as="' + escapeParamForHeader(as) + '"';
+  for (const name in params) {
+    const value = params[name];
+    if (hasOwn.call(params, name) && typeof value === "string")
+      header += "; " + name.toLowerCase() + '="' + escapeParamForHeader(value) + '"';
+  }
+  return header;
+}
+
+// The entry fitsHeader last measured, to append when it fits.
+let lastHeader = "";
+/** Whether `header` fits in the Link header; its length (and a separator's) is taken either way. */
+function fitsHeader(headers: HeadersState, header: string): boolean {
+  lastHeader = header;
+  return (headers.remainingCapacity -= header.length + 2) >= 0;
+}
+const appendHeader = (list: string, header: string): string => (list ? list + ", " + header : header);
+
+/** Give onHeaders its Link header, once: when the first work ends, or the shell or all is done. */
+function safelyEmitEarlyPreloads(request: Request, shellComplete: boolean): void {
+  try {
+    const state = request.renderState,
+      headers = state.headers;
+    if (headers === null) return;
+    state.headers = null;
+    let link = headers.preconnects;
+    if (headers.fontPreloads) link = appendHeader(link, headers.fontPreloads);
+    if (headers.highImagePreloads) link = appendHeader(link, headers.highImagePreloads);
+    // While the shell renders, its stylesheets too, as long as they fit.
+    if (!shellComplete)
+      outer: for (const queue of state.styles.values())
+        for (const sheet of queue.sheets.values()) {
+          if (headers.remainingCapacity <= 0) break outer;
+          const props = sheet.props;
+          const header = getPreloadAsHeader(props["href"], "style", {
+            crossOrigin: props["crossOrigin"],
+            integrity: props["integrity"],
+            nonce: props["nonce"],
+            type: props["type"],
+            fetchPriority: props["fetchPriority"],
+            referrerPolicy: props["referrerPolicy"],
+            media: props["media"],
+          });
+          if (!fitsHeader(headers, header)) break outer;
+          link = appendHeader(link, header);
+        }
+    state.onHeaders!(link ? { Link: link } : {});
+  } catch (error) {
+    logRecoverableError(request, error, {});
+  }
+}
+
 const serverHints = {
   "dns-prefetch"(href: string): void {
     const request = currentRequest!,
       dns = request.resumableState.dnsResources;
     if (!href || dns.has(href)) return;
     dns.add(href);
-    request.renderState.preconnects.add(linkOf({ href, rel: "dns-prefetch" }));
+    const headers = request.renderState.headers;
+    if (
+      headers &&
+      headers.remainingCapacity > 0 &&
+      fitsHeader(headers, "<" + escapeHrefForHeader(href) + ">; rel=dns-prefetch")
+    )
+      headers.preconnects = appendHeader(headers.preconnects, lastHeader);
+    else request.renderState.preconnects.add(linkOf({ href, rel: "dns-prefetch" }));
   },
   preconnect(href: string, crossOrigin: string | null | undefined): void {
     const request = currentRequest!,
@@ -1711,7 +1845,20 @@ const serverHints = {
           : connect.default;
     if (!href || bucket.has(href)) return;
     bucket.add(href);
-    request.renderState.preconnects.add(linkOf({ rel: "preconnect", href, crossOrigin }));
+    const headers = request.renderState.headers;
+    if (
+      headers &&
+      headers.remainingCapacity > 0 &&
+      fitsHeader(
+        headers,
+        "<" +
+          escapeHrefForHeader(href) +
+          ">; rel=preconnect" +
+          (typeof crossOrigin === "string" ? '; crossorigin="' + escapeParamForHeader(crossOrigin) + '"' : ""),
+      )
+    )
+      headers.preconnects = appendHeader(headers.preconnects, lastHeader);
+    else request.renderState.preconnects.add(linkOf({ rel: "preconnect", href, crossOrigin }));
   },
   L(href: string, as: string, options: Any): void {
     const request = currentRequest!,
@@ -1724,6 +1871,17 @@ const serverHints = {
         const key = imageSrcSet ? imageSrcSet + "\n" + (options.imageSizes || "") : href;
         if (rs.imageResources.has(key)) return;
         rs.imageResources.add(key);
+        const headers = state.headers;
+        if (
+          headers &&
+          headers.remainingCapacity > 0 &&
+          typeof imageSrcSet !== "string" &&
+          options.fetchPriority === "high" &&
+          fitsHeader(headers, getPreloadAsHeader(href, as, options))
+        ) {
+          headers.highImagePreloads = appendHeader(headers.highImagePreloads, lastHeader);
+          return;
+        }
         const link = linkOf({ rel: "preload", href: imageSrcSet ? undefined : href, as, ...options });
         if (options.fetchPriority === "high") state.highImagePreloads.add(link);
         else {
@@ -1744,7 +1902,16 @@ const serverHints = {
       }
     }
     if (!addUnknown(rs.unknownResources, as, href)) return;
-    (as === "font" ? state.fontPreloads : state.bulkPreloads).add(linkOf({ rel: "preload", href, as, ...options }));
+    const headers = state.headers;
+    if (
+      headers &&
+      headers.remainingCapacity > 0 &&
+      as === "font" &&
+      fitsHeader(headers, getPreloadAsHeader(href, as, options))
+    )
+      headers.fontPreloads = appendHeader(headers.fontPreloads, lastHeader);
+    else
+      (as === "font" ? state.fontPreloads : state.bulkPreloads).add(linkOf({ rel: "preload", href, as, ...options }));
   },
   m(href: string, options: Any): void {
     const request = currentRequest!,
@@ -2160,12 +2327,13 @@ function defaultErrorHandler(error: unknown): null {
 interface RequestOptions {
   legacy: boolean;
   generateStaticMarkup: boolean;
-  options: RenderToReadableStreamOptions | undefined;
+  options: StreamOptions | undefined;
   progressiveChunkSize: number | undefined;
   onAllReady?: (() => void) | undefined;
   onShellReady?: (() => void) | undefined;
   onShellError?: ((error: unknown) => void) | undefined;
   onFatalError?: ((error: unknown) => void) | undefined;
+  onHeaders?: ((headers: Record<string, string>) => void) | undefined;
   scheduleWork: (fn: () => void) => void;
 }
 
@@ -2179,7 +2347,7 @@ function createRequest(children: Any, o: RequestOptions): Request {
     destination: null,
     flushScheduled: false,
     resumableState: rs,
-    renderState: createRenderState(rs, o.legacy ? undefined : o.options, o.legacy, o.generateStaticMarkup),
+    renderState: createRenderState(rs, o.legacy ? undefined : o.options, o.legacy, o.generateStaticMarkup, o.onHeaders),
     progressiveChunkSize: o.progressiveChunkSize === undefined ? 12800 : o.progressiveChunkSize,
     status: OPENING,
     fatalError: null,
@@ -3601,11 +3769,13 @@ function finishedTask(request: Request, boundary: Boundary | null, row: Row | nu
 }
 
 function completeShell(request: Request): void {
+  safelyEmitEarlyPreloads(request, true);
   preparePreamble(request);
   request.onShellReady();
 }
 
 function completeAll(request: Request): void {
+  safelyEmitEarlyPreloads(request, true);
   preparePreamble(request);
   request.onAllReady();
 }
@@ -4333,6 +4503,7 @@ function startWork(request: Request): void {
   queueMicrotask(() => performWork(request));
   request.scheduleWork(() => {
     if (request.status === OPENING) request.status = OPEN;
+    safelyEmitEarlyPreloads(request, request.pendingRootTasks === 0);
   });
 }
 
@@ -4484,6 +4655,7 @@ export function renderToReadableStream(
         reject(error);
       },
       onFatalError,
+      onHeaders: options?.onHeaders && ((headers) => options.onHeaders!(new Headers(headers))),
       scheduleWork: scheduleTask,
     });
     if (options?.signal) attachAbortSignal(request, options.signal);
@@ -4522,6 +4694,7 @@ export function renderToPipeableStream(
     onAllReady: options?.onAllReady,
     onShellReady: options?.onShellReady,
     onShellError: options?.onShellError,
+    onHeaders: options?.onHeaders,
     scheduleWork: scheduleTask,
   });
   let started = false;
