@@ -4301,14 +4301,31 @@ function readThenable(t: Any): Any {
 
 /**
  * Read a context, or a promise's value (suspending until it settles). Uses no hook slot, so it
- * may be called conditionally, as React allows.
+ * may be called conditionally, as React allows. A browser() token reads as undefined on the
+ * client; anything else is React's error.
  */
 export function use<T>(usable: PromiseLike<T> | Context<T>): T {
-  if ((usable as Any).$$typeof === CONTEXT_TYPE) {
-    if (cur === null) throw new Error("Invalid hook call.");
-    return readContext(cur, usable);
+  if (usable !== null && typeof usable === "object") {
+    if (typeof (usable as Any).then === "function") return readThenable(usable);
+    const tt = (usable as Any).$$typeof;
+    if (tt === RECOVERABLE_TYPE) return undefined as T;
+    if (tt === CONTEXT_TYPE) {
+      if (cur === null) throw new Error("Invalid hook call.");
+      return readContext(cur, usable);
+    }
   }
-  return readThenable(usable);
+  throw new Error("An unsupported type was passed to use(): " + String(usable));
+}
+
+// The $$typeof of a browser() token.
+const RECOVERABLE_TYPE = Symbol.for("react.recoverable");
+
+/**
+ * A token for content that renders only in the browser: a server renderer shows the nearest
+ * Suspense fallback for it, and on the client use() reads it as undefined (React 19.3).
+ */
+export function browser(reason?: unknown): { $$typeof: symbol; _reason: unknown } {
+  return { $$typeof: RECOVERABLE_TYPE, _reason: reason };
 }
 
 // #endregion
@@ -5617,6 +5634,7 @@ const React: Record<string, unknown> = {
   createRoot,
   hydrateRoot,
   createPortal,
+  browser,
   flushSync,
   unstable_batchedUpdates,
   useFormStatus,

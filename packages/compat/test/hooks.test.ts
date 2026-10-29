@@ -15,6 +15,7 @@ import { FakeElement, FakeEvent, installFakeDocument } from "@reactre/testdom";
 
 import {
   __COMPILER_RUNTIME,
+  browser,
   c,
   cache,
   cacheSignal,
@@ -649,6 +650,33 @@ describe("the compiler's memo cache", () => {
 });
 
 describe("use", () => {
+  // React 19.3's browser(): a token that a server renderer turns into a client-only boundary. On
+  // the client, use() of it returns undefined.
+  test("browser() makes React's token, which use() reads as undefined", () => {
+    expect(browser("why")).toEqual({ $$typeof: Symbol.for("react.recoverable"), _reason: "why" });
+    const seen: unknown[] = [];
+    function App() {
+      seen.push(use(browser() as never));
+      return h("p", null, "client");
+    }
+    render(h(App));
+    expect(seen).toEqual([undefined]);
+    expect(html()).toBe("<p>client</p>");
+  });
+
+  test("anything but a promise, a context or a browser token is React's unsupported-type error", () => {
+    function App({ v }: { v: unknown }) {
+      use(v as never);
+      return null;
+    }
+    render(h(App, { v: 5 }));
+    render(h(App, { v: { a: 1 } }));
+    expect(uncaught.map((e) => (e as Error).message)).toEqual([
+      "An unsupported type was passed to use(): 5",
+      "An unsupported type was passed to use(): [object Object]",
+    ]);
+  });
+
   test("reads a context, and may be called conditionally", () => {
     const Ctx = createContext("default");
     function App({ read }: { read: boolean }) {
