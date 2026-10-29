@@ -49,7 +49,7 @@ reactre({
   - `"action"` (function form actions)
   - `"blocks"`, `"fastLists"`
 - **Groups** expand to lists of keys: `"@suspense"`, `"@transitions"`, `"@forms"`, `"@hints"`.
-- **`classes: true`** becomes the `"Component"` key.
+- **`classes`** becomes the `"Component"` key, on by default like every key.
 - **The manifest** `packages/compat/src/apis.ts` maps every key to its module and its dependencies. The plugin, the entry generator and the tests all read it.
 
 At buildStart the plugin writes `node_modules/.cache/reactre/compat-<hash>.js`, and `react` and `react-dom` resolve to it. It contains:
@@ -69,7 +69,7 @@ How each import style interacts with this:
 
 ## How a module plugs in with no hot-path cost
 
-- `index.ts` becomes `core.ts`. A new `index.ts` is the full entry, with the same exports as today.
+- `index.ts` became `core.ts` (`@reactre/compat/core`, no class components). The new `index.ts` is the full entry, `@reactre/compat`: core with class support installed, so the default is all of React.
 - Each API module imports engine internals from `core.ts` as `__`-prefixed exports, so bundlers inline them and minify their names.
 - A module installs its implementation into a module-level slot when it loads, so the slot is filled if and only if an enabled API imported it. No render pays for the install.
 
@@ -122,7 +122,7 @@ At least one of `createRoot` and `hydrateRoot` must be on.
 ## Order
 
 0. The size check and its budgets (no runtime change).
-1. `index.ts` → `core.ts`, a full `index.ts`, `__install`, `missing()`, `__swap`, the manifest, and the `./core` and `./api/*` exports. Land the server-rendering branch first; `server.ts` needs a one-line import fix.
+1. `index.ts` → `core.ts`, a full `index.ts`, `__install`, `missing()`, `__swap`, the manifest, and the `./api/*` exports. Done so far: the rename, the full `index.ts` with classes and the `./core` export.
 2. Plugin: `apis` and `exclude`, the generated entry, the import scan and the stubs. At first every key maps to core.
 3. The extra events (~1.5 KB).
 4. Controlled fields (~1.2 KB).

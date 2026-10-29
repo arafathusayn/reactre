@@ -83,7 +83,8 @@ describe("compat: where react resolves", () => {
   test("Vite: react to compat, its server renderer to @reactre/compat/server, with or without classes", async () => {
     for (const [options, client] of [
       [{ compat: true }, "@reactre/compat"],
-      [{ compat: { classes: true } }, "@reactre/compat/classes"],
+      [{ compat: { classes: true } }, "@reactre/compat"],
+      [{ compat: { classes: false } }, "@reactre/compat/core"],
     ] as const) {
       const plugin = raw("vite", options);
       for (const [id, target] of targets(client)) {

@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { compileSource, reactreCompatCompiler } from "../src/compiler.ts";
-import { __block, __defaults, __key, __template, Fragment, jsx, jsxs } from "../src/index.ts";
+import { __block, __defaults, __key, __template, Fragment, jsx, jsxs } from "../src/core.ts";
 
 // The descriptions of the templates hoisted in compiled output, parsed back from their JSON.
 const templates = (out: string): unknown[] =>

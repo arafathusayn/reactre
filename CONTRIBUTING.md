@@ -15,7 +15,7 @@ bun run compat              # React compatibility check, in headless Chrome
 packages/dom            @reactre/dom: templates and keyed lists
 packages/core           @reactre/core: signals, <For> and render, on @reactre/dom
 packages/compiler       @reactre/compiler, and the JavaScript scanner both compilers share
-packages/compat         @reactre/compat, @reactre/compat/classes and @reactre/compat/compiler
+packages/compat         @reactre/compat, /core, /classes, /server and /compiler
 packages/testdom        @reactre/testdom: the fake DOM the tests run on (private)
 apps/jfb                the js-framework-benchmark replica
 apps/profiling          CPU profiles, trace windows and A/B proofs

@@ -4,8 +4,8 @@
 //
 //   - core (the default): .jsx and .tsx files are compiled by @reactre/compiler into templates and
 //     the code that updates them, as the Bun plugin compiles them.
-//   - compat: `react`, `react-dom` and their subpaths resolve to @reactre/compat (or its class
-//     build), and `react-dom/server` and `react-dom/static` (with their .browser, .edge, .node
+//   - compat: `react`, `react-dom` and their subpaths resolve to @reactre/compat (or, with `classes: false`,
+//     @reactre/compat/core), and `react-dom/server` and `react-dom/static` (with their .browser, .edge, .node
 //     and .bun forms) to @reactre/compat/server, in the app and in its dependencies, and the
 //     app's .jsx and .tsx files are compiled by @reactre/compat/compiler, whose host element
 //     trees become templates. Server Components stay on React: a Vite environment named `rsc`,
@@ -43,7 +43,11 @@ import { transpile } from "./transpile.ts";
 
 /** Options for compat mode. */
 export interface CompatOptions {
-  /** Resolve `react` to @reactre/compat/classes, for apps and libraries with class components. Default false. */
+  /**
+   * Include class components. Default true: `react` resolves to @reactre/compat, React's whole
+   * client API. `false` resolves it to @reactre/compat/core, which leaves class support out, for
+   * an app that renders no class component itself or through a library.
+   */
   readonly classes?: boolean;
   /** Compile the app's host element trees to templates with @reactre/compat/compiler. Default true. */
   readonly compile?: boolean;
@@ -87,7 +91,7 @@ export const reactre: UnpluginInstance<ReactreOptions | undefined, boolean> = cr
 >((options = {}, meta) => {
   const compat = options.compat === true ? {} : options.compat === false ? undefined : options.compat;
   const compile = compat === undefined || compat.compile !== false;
-  const client = compat?.classes === true ? "@reactre/compat/classes" : "@reactre/compat";
+  const client = compat?.classes === false ? "@reactre/compat/core" : "@reactre/compat";
   /** What a request for `react` or one of its subpaths resolves to. */
   const target = (id: string): string => (SERVER.test(id) ? "@reactre/compat/server" : client);
   // The app's root, where Vite says, else the working directory.

@@ -9,7 +9,7 @@
 
 import { describe, expect, spyOn, test } from "bun:test";
 
-import * as Compat from "../src/index.ts";
+import * as Compat from "../src/core.ts";
 import * as Server from "../src/server.ts";
 import ServerDefault from "../src/server.ts";
 

@@ -5,9 +5,10 @@
 //   UPDATE_SIZES=1 bun test packages/compat/test/size.test.ts
 //
 // Profiles:
-//   full     the default entry, React's whole client API
-//   classes  the default entry with class components
-//   jfb      the js-framework-benchmark React app (apps/jfb/app/main.jsx), compiled to templates
+//   full  the default entry, React's whole client API with class components
+//   core  @reactre/compat/core, the same without class components
+//   jfb   the js-framework-benchmark React app (apps/jfb/app/main.jsx) on core, compiled to
+//         templates
 
 import { expect, test } from "bun:test";
 import { gzipSync } from "node:zlib";
@@ -17,17 +18,17 @@ import { reactreCompatCompiler } from "../src/compiler.ts";
 const src = (f: string): string => Bun.fileURLToPath(new URL(`../src/${f}`, import.meta.url));
 const budgets = Bun.fileURLToPath(new URL("../sizes.json", import.meta.url));
 
-/** Resolves react, react-dom and their subpaths to compat's source, as @reactre/plugin does. */
+/** Resolves react, react-dom and their subpaths to compat's core, as @reactre/plugin does with `classes: false`. */
 const toCompat: Bun.BunPlugin = {
   name: "react-to-compat",
   setup(build) {
-    build.onResolve({ filter: /^react(-dom)?(\/.*)?$/ }, () => ({ path: src("index.ts") }));
+    build.onResolve({ filter: /^react(-dom)?(\/.*)?$/ }, () => ({ path: src("core.ts") }));
   },
 };
 
 const profiles: Record<string, () => Promise<Bun.BuildOutput>> = {
   full: () => Bun.build({ entrypoints: [src("index.ts")], minify: true, target: "browser", format: "esm" }),
-  classes: () => Bun.build({ entrypoints: [src("classes.ts")], minify: true, target: "browser", format: "esm" }),
+  core: () => Bun.build({ entrypoints: [src("core.ts")], minify: true, target: "browser", format: "esm" }),
   jfb: () =>
     Bun.build({
       entrypoints: [Bun.fileURLToPath(new URL("../../../apps/jfb/app/main.jsx", import.meta.url))],

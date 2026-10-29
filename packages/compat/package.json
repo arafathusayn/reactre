@@ -21,8 +21,8 @@
   "author": "Arafat Husayn",
   "type": "module",
   "sideEffects": [
-    "./src/classes.ts",
-    "./dist/classes.js"
+    "./src/index.ts",
+    "./dist/index.js"
   ],
   "exports": {
     ".": {
@@ -30,10 +30,15 @@
       "bun": "./src/index.ts",
       "default": "./dist/index.js"
     },
+    "./core": {
+      "types": "./src/core.ts",
+      "bun": "./src/core.ts",
+      "default": "./dist/core.js"
+    },
     "./classes": {
-      "types": "./src/classes.ts",
-      "bun": "./src/classes.ts",
-      "default": "./dist/classes.js"
+      "types": "./src/index.ts",
+      "bun": "./src/index.ts",
+      "default": "./dist/index.js"
     },
     "./server": {
       "types": "./src/server.ts",
@@ -51,7 +56,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/index.ts src/classes.ts src/server.ts --outdir dist --target browser --format esm --splitting --packages external && bun build src/compiler.ts --outdir dist --target node --format esm --packages external"
+    "build": "rm -rf dist && bun build src/index.ts src/core.ts src/server.ts --outdir dist --target browser --format esm --splitting --packages external && bun build src/compiler.ts --outdir dist --target node --format esm --packages external"
   },
   "dependencies": {
     "@reactre/compiler": "workspace:*",

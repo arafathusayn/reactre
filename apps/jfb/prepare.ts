@@ -96,7 +96,9 @@ function resolveFrom(dir: string, react: Entry["react"]): BunPlugin {
         path: Bun.resolveSync(args.path, dir),
       }));
       if (react === "reactre-compat")
-        build.onResolve({ filter: /^react(-dom)?(\/.*)?$/ }, () => ({ path: Bun.resolveSync("@reactre/compat", dir) }));
+        build.onResolve({ filter: /^react(-dom)?(\/.*)?$/ }, () => ({
+          path: Bun.resolveSync("@reactre/compat/core", dir),
+        }));
     },
   };
 }

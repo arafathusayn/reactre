@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { FakeElement, FakeEvent, FakeText, HTML_NS, installFakeDocument, SVG_NS } from "@reactre/testdom";
 
-import { createElement as h, createRoot, flushSync, hydrateRoot, type Root, useState } from "../src/index.ts";
+import { createElement as h, createRoot, flushSync, hydrateRoot, type Root, useState } from "../src/core.ts";
 
 // #region A richer fake DOM
 

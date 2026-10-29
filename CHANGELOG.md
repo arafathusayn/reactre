@@ -12,6 +12,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### @reactre/plugin
 
+- Changed: in compat mode, `classes` defaults to true: `react` resolves to @reactre/compat, React's whole client API. `classes: false` resolves it to @reactre/compat/core, without class components.
 - Added: in compat mode, `react-dom/server`, `react-dom/static` and their `.browser`, `.edge`, `.node` and `.bun` builds resolve to @reactre/compat/server, with or without `classes`.
 - Added: Server Components stay on React: compat mode leaves a Vite environment named `rsc`, and a build that resolves with the `react-server` condition (Vite, Rolldown, esbuild, webpack, Rspack, Bun), alone. In Vite the redirect is now a resolve hook per environment, applied in each environment's dependency optimizer too, instead of `resolve.alias`.
 - Fixed: in compat mode, a dependency that cannot see @reactre/compat through `node_modules`, as with Bun's and pnpm's isolated installs, gets the app's copy of compat for `react`, not React or nothing. In every bundler the target resolves from the importer's directory when it reaches @reactre/compat, else from the app's root, else from the plugin's own. `vite dev` now prebundles one copy of compat that the app and its dependencies share; before, its dependency scan failed.
@@ -24,6 +25,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### @reactre/compat
 
+- Changed: `@reactre/compat` includes class components, so the default entry is all of React's client API. `@reactre/compat/core` is the entry without them, for apps that render no class component; `@reactre/compat/classes` stays as an alias of `@reactre/compat`.
 - Changed: `version` is `"19.3.1"`, the React release compat matches.
 - Added: `@reactre/compat/server`, React 19.3.1's server rendering API: `renderToString`, `renderToStaticMarkup`, `renderToReadableStream` and `renderToPipeableStream` write the HTML React's production build writes, byte for byte, running compat's own hooks. `prerender`, `prerenderToNodeStream`, `resume` and `resumeToPipeableStream` are exported so imports resolve, and throw: compat does not implement partial prerendering. The README lists what else differs.
 - Fixed: the class build (`@reactre/compat/classes`) is declared as having side effects, so bundlers that trust `sideEffects`, such as Vite's, keep the code that installs class support.

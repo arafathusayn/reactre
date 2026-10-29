@@ -24,7 +24,7 @@ import {
   Suspense,
   useLayoutEffect,
   useState,
-} from "../src/index.ts";
+} from "../src/core.ts";
 
 // #region Fixtures
 

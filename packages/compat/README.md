@@ -47,14 +47,15 @@ The plugin has an entry for each: `@reactre/plugin/rollup`, `/rolldown`, `/esbui
 
 ## Modules
 
-| Module                     | What it is                                                               |
-| -------------------------- | ------------------------------------------------------------------------ |
-| `@reactre/compat`          | React's API, without class components                                    |
-| `@reactre/compat/classes`  | The same, with class components (lifecycles, setState, error boundaries) |
-| `@reactre/compat/server`   | `react-dom/server`: React's server rendering, on compat's hooks          |
-| `@reactre/compat/compiler` | The compiler @reactre/plugin runs, and a Bun plugin of its own           |
+| Module                     | What it is                                                                 |
+| -------------------------- | -------------------------------------------------------------------------- |
+| `@reactre/compat`          | React's client API, class components included                              |
+| `@reactre/compat/core`     | The same without class components (lifecycles, setState, error boundaries) |
+| `@reactre/compat/classes`  | `@reactre/compat` under its earlier name, for apps that resolve to it      |
+| `@reactre/compat/server`   | `react-dom/server`: React's server rendering, on compat's hooks            |
+| `@reactre/compat/compiler` | The compiler @reactre/plugin runs, and a Bun plugin of its own             |
 
-Use `@reactre/compat/classes` (`compat: { classes: true }` in the plugin) when the app or a library it uses renders class components. The compiler is optional; without it, everything still runs.
+`@reactre/compat` is all of React's client API. An app that renders no class component, itself or through a library, can use `@reactre/compat/core` (`compat: { classes: false }` in the plugin) and leave class support out; a class that renders there throws an error naming the fix. The compiler is optional; without it, everything still runs.
 
 Every change is checked against React 19 itself, scenario by scenario: the same app runs on both, and what each renders and logs must match line for line.
 
@@ -77,11 +78,11 @@ Each module bundled whole, minified, for the browser in production mode, with Re
 
 | Bundle                              | Minified |    gzip |  brotli |
 | ----------------------------------- | -------: | ------: | ------: |
-| `@reactre/compat`                   |  49.3 KB | 18.7 KB | 16.8 KB |
-| `@reactre/compat/classes`           |  52.6 KB | 19.7 KB | 17.7 KB |
+| `@reactre/compat`                   |  77.2 KB | 28.3 KB | 25.1 KB |
+| `@reactre/compat/core`              |  73.9 KB | 27.1 KB | 24.1 KB |
 | `react` + `react-dom/client` 19.3.1 | 214.1 KB | 66.7 KB | 57.4 KB |
 
-Class support costs about 3.4 KB minified, 1 KB gzipped, and only apps that import `@reactre/compat/classes` pay it. Most of the runtime ships whatever an app imports: a counter with one `useState` and `createRoot` comes to 14.9 KB gzipped (16.0 KB with classes), against 64.4 KB on React. Measured with Bun's bundler, gzip at level 9 and brotli at quality 11; Rolldown, the bundler in Vite, gives sizes within 1 KB of these.
+Class support costs about 3.3 KB minified, 1.2 KB gzipped, which apps on `@reactre/compat/core` leave out. Most of the runtime ships whatever an app imports: a counter with one `useState` and `createRoot` comes to 20.2 KB gzipped (19.0 KB on core), against 64.4 KB on React. Measured with Bun's bundler, gzip at level 9 and brotli at quality 11; Rolldown, the bundler in Vite, gives sizes within 1 KB of these.
 
 ## License
 

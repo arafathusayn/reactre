@@ -1,5 +1,6 @@
 // Resolves `react`, `react-dom` and their subpaths to a runtime at build time, as a bundler alias
-// would in a real app: React itself, or reactre-compat (with or without class components).
+// would in a real app: React itself, or reactre-compat (@reactre/compat, or @reactre/compat/core
+// without class components).
 //
 // The scenarios import from "react" and "react-dom" like any app, so one source checks every
 // runtime; only this alias changes between builds.
@@ -13,8 +14,8 @@ export type Runtime = "react" | "reactre-compat";
 
 /** Options for `reactAlias`. */
 export interface AliasOptions {
-  /** reactre-compat only: include class components (@reactre/compat/classes). Off by default. */
-  readonly classes?: boolean;
+  /** reactre-compat only: @reactre/compat/core, which leaves class components out. Off by default. */
+  readonly core?: boolean;
 }
 
 /**
@@ -23,7 +24,7 @@ export interface AliasOptions {
  * the one package root, which provides the APIs of all of them.
  */
 export function reactAlias(runtime: Runtime, options: AliasOptions = {}): BunPlugin {
-  const compat = Bun.resolveSync(options.classes ? "@reactre/compat/classes" : "@reactre/compat", import.meta.dir);
+  const compat = Bun.resolveSync(options.core ? "@reactre/compat/core" : "@reactre/compat", import.meta.dir);
   return {
     name: "react-alias-" + runtime,
     setup(build) {

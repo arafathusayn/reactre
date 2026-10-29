@@ -36,7 +36,7 @@ import {
   SuspenseList,
   useState,
   ViewTransition,
-} from "../src/index.ts";
+} from "../src/core.ts";
 
 // #region Fixtures
 

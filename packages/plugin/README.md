@@ -71,8 +71,9 @@ The plugin turns `.jsx` and `.tsx` files into plain JavaScript, TypeScript inclu
 reactre({
   // Run a React app on @reactre/compat. true, or:
   compat: {
-    // Resolve react to @reactre/compat/classes, for apps and libraries with class components.
-    classes: false,
+    // Include class components (@reactre/compat). false resolves react to @reactre/compat/core,
+    // which leaves them out, for apps whose code and libraries render no class component.
+    classes: true,
     // Compile your JSX's HTML element trees to templates. Off, your bundler's JSX transform
     // handles JSX and the plugin only resolves react.
     compile: true,

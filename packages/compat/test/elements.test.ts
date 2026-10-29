@@ -20,7 +20,7 @@ import {
   jsx,
   lazy,
   memo,
-} from "../src/index.ts";
+} from "../src/core.ts";
 
 describe("creating elements", () => {
   test("jsx takes a spread key out of the props and uses the config as the props otherwise", () => {

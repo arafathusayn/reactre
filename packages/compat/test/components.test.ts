@@ -14,7 +14,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } fr
 
 import { FakeComment, FakeElement, FakeEvent, FakeNode, FakeText, installFakeDocument } from "@reactre/testdom";
 
-import "../src/classes.ts";
+import "../src/index.ts";
 import {
   __block,
   __installClasses,
@@ -37,7 +37,7 @@ import {
   useEffect,
   useLayoutEffect,
   useState,
-} from "../src/index.ts";
+} from "../src/core.ts";
 
 // #region Fixtures
 
@@ -90,7 +90,7 @@ afterEach(() => {
  * A separate instance of the module (the query string makes one), for a test that needs module
  * state the shared instance cannot have (no class support), or that leaves it unusable.
  */
-const isolated = (tag: string): Promise<typeof import("../src/index.ts")> => import(`../src/index.ts?${tag}`);
+const isolated = (tag: string): Promise<typeof import("../src/core.ts")> => import(`../src/core.ts?${tag}`);
 
 // What the fake DOM lacks and these tests need, added to FakeElement while this file runs:
 // a style declaration (Suspense and Activity hide nodes with it), removeEventListener (an
@@ -494,8 +494,8 @@ describe("class components", () => {
     bare.flushSync(() => r.render(bare.createElement(Shown)));
     const why = " is a class component, and this build leaves class support out.";
     expect(seen).toEqual([
-      "Named" + why + " Alias react to @reactre/compat/classes to include it.",
-      "Shown as" + why + " Alias react to @reactre/compat/classes to include it.",
+      "Named" + why + " Alias react to @reactre/compat, not @reactre/compat/core, to include it.",
+      "Shown as" + why + " Alias react to @reactre/compat, not @reactre/compat/core, to include it.",
     ]);
   });
 });
@@ -984,7 +984,7 @@ describe("scheduling", () => {
  * is set, showing a component that `flip` makes swap its element, so the root places the new one.
  */
 function brittleRoot(
-  m: Pick<typeof import("../src/index.ts"), "createRoot" | "createElement" | "flushSync" | "useState">,
+  m: Pick<typeof import("../src/core.ts"), "createRoot" | "createElement" | "flushSync" | "useState">,
 ) {
   class Brittle extends FakeElement {
     broken = false;

@@ -53,7 +53,7 @@ import {
   useSyncExternalStore,
   useSyncExternalStoreWithSelector,
   useTransition,
-} from "../src/index.ts";
+} from "../src/core.ts";
 
 // #region Fixtures
 

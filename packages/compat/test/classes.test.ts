@@ -1,5 +1,5 @@
-// Class components, which the class build (@reactre/compat/classes)
-// adds to @reactre/compat. Importing it installs class support for
+// Class components, which @reactre/compat (src/index.ts) adds to @reactre/compat/core.
+// Importing it installs class support for
 // every test in the process, so class tests live here.
 //
 // Covered: setState merging and callbacks with componentDidUpdate, the lifecycles in React's
@@ -20,7 +20,7 @@ import {
   flushSync,
   PureComponent,
   type Root,
-} from "../src/classes.ts";
+} from "../src/index.ts";
 
 let container: FakeElement;
 let root: Root;
@@ -391,11 +391,32 @@ describe("error boundaries with componentDidCatch only", () => {
 });
 
 describe("packaging", () => {
-  // The class build works by side effect: importing it installs class support. A bundler that
-  // trusts a blanket "sideEffects": false follows its re-exports to the main module and drops
+  // The main entry works by side effect: importing it installs class support. A bundler that
+  // trusts a blanket "sideEffects": false follows its re-exports to the core module and drops
   // the install (Vite's Rolldown does), so the manifest must name it.
-  test("the class build is declared as having side effects", async () => {
+  test("the entries with classes are declared as having side effects", async () => {
     const manifest = (await Bun.file(new URL("../package.json", import.meta.url)).json()) as { sideEffects: unknown };
-    expect(manifest.sideEffects).toEqual(["./src/classes.ts", "./dist/classes.js"]);
+    expect(manifest.sideEffects).toEqual(["./src/index.ts", "./dist/index.js"]);
+  });
+
+  // Each entry in a process of its own, resolved by package name, so no other test's install
+  // leaks in: @reactre/compat renders a class, @reactre/compat/core throws its clear error.
+  test.each([
+    ["@reactre/compat", "P:class"],
+    ["@reactre/compat/classes", "P:class"],
+    ["@reactre/compat/core", "is a class component, and this build leaves class support out"],
+  ])("%s", (entry, expected) => {
+    const script = `
+      import { installFakeDocument, FakeElement } from "@reactre/testdom";
+      installFakeDocument();
+      const { Component, createElement, createRoot, flushSync } = await import(${JSON.stringify(entry)});
+      class C extends Component { render() { return createElement("p", null, "class"); } }
+      const el = new FakeElement("DIV");
+      const root = createRoot(el, { onUncaughtError: (e) => console.log(String(e)) });
+      flushSync(() => root.render(createElement(C)));
+      console.log(el.firstChild?.tagName + ":" + el.textContent);
+    `;
+    const r = Bun.spawnSync([process.execPath, "-e", script], { cwd: new URL("..", import.meta.url).pathname });
+    expect(r.stdout.toString()).toContain(expected);
   });
 });

@@ -29,7 +29,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
-} from "../src/index.ts";
+} from "../src/core.ts";
 
 // #region Fixtures
 

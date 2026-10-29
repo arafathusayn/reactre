@@ -6,16 +6,16 @@
 // whatever React 19 does, including details no one thought to spell out. A real browser runs
 // both sides, so DOM behavior (events, focus, form controls) is the browser's, not a mock's.
 //
-//   bun run.ts [--runtimes reactre-compat,reactre-compat+classes,reactre-compat+classes+compiler]
+//   bun run.ts [--runtimes reactre-compat,reactre-compat+compiler,reactre-compat+core]
 //              [--only <text>] [--verbose] [--dump <file>]
 //
-// Runtimes: `reactre-compat` is the default build, without class components; `+classes` is the
-// build with them (@reactre/compat/classes); `+compiler` compiles the scenarios' JSX to templates
-// with @reactre/compat/compiler. The build aliases `react`, `react-dom` and their subpaths to the
-// runtime, as a bundler plugin for a real app would.
+// Runtimes: `reactre-compat` is the default build, @reactre/compat, React's whole client API;
+// `+compiler` compiles the scenarios' JSX to templates with @reactre/compat/compiler; `+core` is
+// @reactre/compat/core, which an app chooses to leave class components out. The build aliases
+// `react`, `react-dom` and their subpaths to the runtime, as a bundler plugin for a real app would.
 //
-// Exits non-zero when a `+classes` scenario differs from React, or a scenario of the default
-// build differs for any reason but rendering a class (those are listed as needing classes).
+// Exits non-zero when a scenario differs from React, except a `+core` scenario that differs only
+// because it renders a class (those are listed as needing classes).
 // --only runs just the scenarios whose names contain one of its comma-separated texts.
 // --verbose prints the pages' console output and both full transcripts of each differing
 // scenario. --dump writes React's transcripts to a file as JSON, to read what each scenario
@@ -36,7 +36,7 @@ const dir = import.meta.dir;
 /**
  * Bundles a page entry for one runtime spec into a single IIFE script.
  *
- * "reactre-compat+classes" is the runtime with class support, "+compiler" adds
+ * "reactre-compat" is @reactre/compat, "+core" is @reactre/compat/core, and "+compiler" adds
  * @reactre/compat/compiler (the scenarios' JSX compiled to templates). Every side is a minified
  * production build, since production builds are what apps ship.
  */
@@ -48,7 +48,7 @@ async function bundle(entry: string, spec: string): Promise<string> {
     minify: true,
     plugins: [
       ...(extras.includes("compiler") ? [reactreCompatCompiler()] : []),
-      reactAlias(runtime, { classes: extras.includes("classes") }),
+      reactAlias(runtime, { core: extras.includes("core") }),
     ],
     // A classic script cannot hold `import.meta`, which some libraries read: for Vite's mode, or
     // pdf.js for paths it uses only under Node.
@@ -71,12 +71,10 @@ const opt = (name: string): string | undefined => {
   const i = args.indexOf(name);
   return i >= 0 ? args[i + 1] : undefined;
 };
-const runtimes = (opt("--runtimes") ?? "reactre-compat,reactre-compat+classes,reactre-compat+classes+compiler").split(
-  ",",
-);
+const runtimes = (opt("--runtimes") ?? "reactre-compat,reactre-compat+compiler,reactre-compat+core").split(",");
 /** Whether a runtime is ours, so its differences fail the check. */
 const ours = (rt: string) => rt.startsWith("reactre-compat");
-// What the default build throws when a class component renders.
+// What @reactre/compat/core throws when a class component renders.
 const NO_CLASSES = "this build leaves class support out";
 const verbose = args.includes("--verbose");
 /** Only the scenarios whose names contain one of these comma-separated texts. */
@@ -155,9 +153,9 @@ try {
         pass++;
         continue;
       }
-      // The default build leaves classes out on purpose; a scenario it fails only for that is
+      // @reactre/compat/core leaves classes out on purpose; a scenario it fails only for that is
       // reported apart and does not fail the check.
-      if (ours(rt) && !rt.includes("+classes") && b.some((line) => line.includes(NO_CLASSES))) {
+      if (ours(rt) && rt.includes("+core") && b.some((line) => line.includes(NO_CLASSES))) {
         classes.push(name);
         continue;
       }

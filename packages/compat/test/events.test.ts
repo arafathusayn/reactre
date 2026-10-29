@@ -28,7 +28,7 @@ import React, {
   type Root,
   useActionState,
   useState,
-} from "../src/index.ts";
+} from "../src/core.ts";
 
 // #region Fake DOM additions
 

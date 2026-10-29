@@ -38,7 +38,7 @@
 // resources), format and tree contexts, the request and its tasks, rendering, the work loop,
 // flushing, and the public API.
 
-import { __serverRender, Children, type ReactElement, type ServerHooks, version as compatVersion } from "./index.ts";
+import { __serverRender, Children, type ReactElement, type ServerHooks, version as compatVersion } from "./core.ts";
 
 // `Any` stands for React's untyped values (props, children, element types), as in index.ts.
 // biome-ignore lint: elements, props and React's internal records are untyped.
