@@ -2448,3 +2448,219 @@ describe("more of React's paths", () => {
     }
   });
 });
+
+describe("component stacks", () => {
+  // React's production stacks read each component's frame from a native stack: a component is
+  // called without props (a class is constructed) so it throws, and the frame it threw from is
+  // its line. Both libraries call the same functions, so the frames are the same.
+  const SuspenseList = Symbol.for("react.suspense_list");
+
+  /** Each onError call: the message, the info's keys and its componentStack. */
+  async function errorInfos(server: Any, el: Any, options?: Options): Promise<string[]> {
+    const seen: string[] = [];
+    const onError = (e: Any, info: Any): void =>
+      void seen.push([full(String(e?.message ?? e)), Object.keys(info).join(), info.componentStack].join(" | "));
+    try {
+      const stream = await server.renderToReadableStream(el, { ...options, onError });
+      await stream.allReady;
+      await text(stream);
+    } catch (e) {
+      seen.push("rejected: " + full(String((e as Error)?.message ?? e)));
+    }
+    return seen;
+  }
+  const sameInfos = async (make: Make, options?: Options): Promise<string[]> => {
+    const expected = await errorInfos(ReactServer, make(React), options);
+    expect(await errorInfos(Server, make(Compat), options)).toEqual(expected);
+    return expected;
+  };
+
+  test("onError's componentStack names each component, host element and boundary, innermost first", async () => {
+    const make: Make = (L) => {
+      const Boom = (): never => {
+        throw new Error("boom");
+      };
+      function Mid(): Any {
+        L.useState(1);
+        return L.createElement("section", null, L.createElement(Boom));
+      }
+      class Implicit extends L.Component {
+        render(): Any {
+          return L.createElement(Mid);
+        }
+      }
+      class Explicit extends L.Component {
+        constructor(props: Any) {
+          super(props);
+          this.state = {};
+        }
+        render(): Any {
+          return L.createElement(Implicit);
+        }
+      }
+      const Memo = L.memo(function Inner() {
+        return L.createElement(Explicit);
+      });
+      const Ref = L.forwardRef(function Fw(_: Any, __: Any) {
+        return L.createElement(Memo);
+      });
+      const Lazy = L.lazy(() => ({ then: (r: Any) => r({ default: Ref }) }));
+      const Ctx = L.createContext(0);
+      // A function without a name: its frame is "<anonymous>", which its displayName replaces.
+      const Anonymous = ((): Any =>
+        function (p: Any) {
+          return p.child;
+        })();
+      Anonymous.displayName = "Shown";
+      return L.createElement(
+        "div",
+        null,
+        L.createElement(
+          L.Suspense,
+          { fallback: "f" },
+          L.createElement(
+            SuspenseList,
+            null,
+            L.createElement(Ctx, { value: 1 }, L.createElement(Anonymous, { child: L.createElement(Lazy) })),
+          ),
+        ),
+      );
+    };
+    const [info] = await sameInfos(make);
+    expect(info).toContain("boom | componentStack | \n    at Boom (");
+    expect(info).toContain("\n    at section (<anonymous>)\n    at Mid (");
+    expect(info).toContain("\n    at Suspense (<anonymous>)\n    at div (<anonymous>)");
+  });
+
+  test("types without a frame of their own: memo of forwardRef, failed lazy, invalid objects, ViewTransition", async () => {
+    await sameInfos((L) => {
+      const Boom = (): never => {
+        throw new Error("boom");
+      };
+      const MemoRef = L.memo(L.forwardRef((_: Any, __: Any) => L.createElement(Boom)));
+      return L.createElement(
+        L.Suspense,
+        { fallback: "f" },
+        L.createElement(Symbol.for("react.view_transition"), null, L.createElement(MemoRef)),
+      );
+    });
+    await sameInfos((L) => {
+      const Failed = L.lazy(() => ({ then: (_: Any, reject: Any) => reject(new Error("load failed")) }));
+      return L.createElement(L.Suspense, { fallback: "f" }, L.createElement("p", null, L.createElement(Failed)));
+    });
+    await sameInfos((L) =>
+      L.createElement(
+        L.Suspense,
+        { fallback: "f" },
+        L.createElement({ name: "Info", env: "Server" } as Any),
+        L.createElement(L.Suspense, null, L.createElement({ name: "Plain" } as Any)),
+      ),
+    );
+  });
+
+  test("the stack of a fallback, of content that suspended first, and of a fatal error", async () => {
+    await sameInfos((L) => {
+      const Boom = (): never => {
+        throw new Error("in fallback");
+      };
+      const Never = (): Any => L.use(new Promise(() => {}));
+      return L.createElement(
+        L.Suspense,
+        { fallback: L.createElement("p", null, L.createElement(Boom)) },
+        L.createElement(Never),
+      );
+    });
+    await sameInfos((L) => {
+      let p: Any;
+      const Late = (): never => {
+        L.use((p ??= later("x")));
+        throw new Error("after suspending");
+      };
+      return L.createElement(L.Suspense, { fallback: "f" }, L.createElement("b", null, L.createElement(Late)));
+    });
+    await sameInfos((L) => {
+      const Boom = (): never => {
+        throw new Error("fatal");
+      };
+      return L.createElement("main", null, L.createElement(Boom));
+    });
+  });
+
+  test("a root that is not an element gives no componentStack; aborted tasks give theirs", async () => {
+    await sameInfos(() => [
+      (() => {
+        throw new Error("never rendered");
+      }) as Any,
+    ]);
+    const make: Make = (L) => {
+      // A hook first: called outside a render, React's use() throws and compat's reads the promise.
+      function Never(): Any {
+        L.useState(0);
+        return L.use(new Promise(() => {}));
+      }
+      return L.createElement(
+        "div",
+        null,
+        L.createElement(L.Suspense, { fallback: "f" }, L.createElement("i", null, L.createElement(Never))),
+      );
+    };
+    const run = async (server: Any, L: Lib): Promise<string[]> => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort("stop"), 3);
+      return errorInfos(server, make(L), { signal: controller.signal });
+    };
+    expect(await run(Server, Compat)).toEqual(await run(ReactServer, React));
+  });
+
+  test("short native stacks, and a stack that cannot be generated", async () => {
+    const limit = Error.stackTraceLimit;
+    // One frame: neither stack reaches the frame both start from, so each component is named.
+    Error.stackTraceLimit = 1;
+    try {
+      await sameInfos((L) => {
+        const Boom = (): never => {
+          throw new Error("short");
+        };
+        function Mid(): Any {
+          L.useState(0);
+          return L.createElement(Boom);
+        }
+        return L.createElement(L.Suspense, null, L.createElement(Mid));
+      });
+    } finally {
+      Error.stackTraceLimit = limit;
+    }
+    const first = (lines: string[]): string[] => lines.map((l) => l.split("\n").slice(0, 2).join("\n"));
+    const make: Make = (L) => {
+      const Odd = (): Any => null;
+      Object.defineProperty(Odd, "prototype", {
+        get() {
+          throw new Error("no prototype");
+        },
+      });
+      return L.createElement(L.Suspense, { fallback: "f" }, L.createElement(Odd));
+    };
+    expect(first(await errorInfos(Server, make(Compat)))).toEqual(first(await errorInfos(ReactServer, make(React))));
+  });
+
+  test("renderToPipeableStream passes the same stacks", async () => {
+    const make: Make = (L) => {
+      function Boom(): never {
+        L.useRef(null);
+        throw new Error("piped");
+      }
+      return L.createElement("div", null, L.createElement(L.Suspense, { fallback: "f" }, L.createElement(Boom)));
+    };
+    const run = (server: Any, L: Lib): Promise<string[]> =>
+      new Promise((resolve) => {
+        const seen: string[] = [];
+        const writable = { write: () => true, end: () => resolve(seen), on: () => writable };
+        server
+          .renderToPipeableStream(make(L), {
+            onError: (e: Any, info: Any) => void seen.push(e.message + info.componentStack),
+          })
+          .pipe(writable);
+      });
+    expect(await run(Server, Compat)).toEqual(await run(ReactNodeServer, React));
+  });
+});

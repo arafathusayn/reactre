@@ -31,8 +31,8 @@
 // (uncached) is not replayed on retry, so `use()` of one suspends again; ReactDOM's resource hint
 // functions (preload, preinit, ...) write nothing during a server render; `onHeaders`,
 // `formState`, `unstable_externalRuntimeSrc` and the prerender and resume APIs are not supported
-// (the latter throw); errors give an empty component stack; error messages are React's full
-// (development) messages rather than minified codes.
+// (the latter throw); error messages are React's full (development) messages rather than
+// minified codes.
 //
 // The file reads top down, in folding regions: HTML writing (escaping, attributes, elements,
 // resources), format and tree contexts, the request and its tasks, rendering, the work loop,
@@ -1918,6 +1918,8 @@ interface Task {
   context: ContextNode | null;
   treeContext: TreeContext;
   row: Row | null;
+  /** The elements from the root to the node rendering, for errors' component stacks. */
+  componentStack: StackNode | null;
 }
 
 interface Request {
@@ -1943,8 +1945,8 @@ interface Request {
   clientRenderedBoundaries: Boundary[];
   completedBoundaries: Boundary[];
   partialBoundaries: Boundary[];
-  onError: (error: unknown, info: { componentStack?: string }) => Any;
-  onBrowserBailout: (error: unknown, info: { componentStack?: string }) => void;
+  onError: (error: unknown, info: ErrorInfo) => Any;
+  onBrowserBailout: (error: unknown, info: ErrorInfo) => void;
   onAllReady: () => void;
   onShellReady: () => void;
   onShellError: (error: unknown) => void;
@@ -2024,7 +2026,9 @@ function createRequest(children: Any, o: RequestOptions): Request {
     null,
     emptyTreeContext,
     null,
+    null,
   );
+  pushComponentStack(task);
   request.pingedTasks.push(task);
   return request;
 }
@@ -2085,6 +2089,7 @@ function createRenderTask(
   context: ContextNode | null,
   treeContext: TreeContext,
   row: Row | null,
+  componentStack: StackNode | null,
 ): Task {
   request.allPendingTasks++;
   if (blockedBoundary === null) request.pendingRootTasks++;
@@ -2103,6 +2108,7 @@ function createRenderTask(
     context,
     treeContext,
     row,
+    componentStack,
   };
   abortSet.add(task);
   return task;
@@ -2132,9 +2138,7 @@ function createPendingSegment(
 }
 
 /** An onError digest: the string it returned, else none. Browser bailouts go to their own callback. */
-function logRecoverableError(request: Request, error: Any): Any {
-  // Component stacks are not tracked: the info's stack is empty.
-  const info = { componentStack: "" };
+function logRecoverableError(request: Request, error: Any, info: ErrorInfo): Any {
   if (isRecoverableError(error)) {
     request.onBrowserBailout(error, info);
     return "";
@@ -2199,6 +2203,191 @@ function cloneRecoverableErrorAsFatal(error: Any): Error {
     fatal.stack = fatal.name + ": " + fatal.message + (frame === -1 ? "" : stack.slice(frame));
   } else fatal.stack = undefined as Any;
   return fatal;
+}
+
+// #endregion
+
+// #region Component stacks
+
+// React's production component stacks: the element types from the root to where an error was
+// thrown, each described when onError first reads `componentStack` (describing calls components).
+// A component's frame is read from a native stack: it is called without props (a class is
+// constructed without them) so that it throws, and the frame below the probe's own is its line.
+// The frames are formatted as React's browser, Bun and legacy builds format them (its Node and
+// edge builds format them with an Error.prepareStackTrace of their own).
+
+/** What onError and onBrowserBailout receive with an error. */
+export interface ErrorInfo {
+  componentStack?: string;
+}
+
+/** One element of a component stack, and the elements above it. */
+interface StackNode {
+  parent: StackNode | null;
+  type: Any;
+}
+
+function pushComponentStack(task: Task): void {
+  const node = task.node;
+  if (typeof node === "object" && node !== null && node.$$typeof === ELEMENT)
+    task.componentStack = { parent: task.componentStack, type: node.type };
+}
+
+/** A fallback's stack: the boundary's, with the boundary named as its fallback. */
+const fallbackStack = (stack: StackNode | null): StackNode | null =>
+  stack === null ? null : { parent: stack.parent, type: "Suspense Fallback" };
+
+// How this engine writes a frame: "    at " before the name and " (<anonymous>)" after it in V8,
+// JavaScriptCore and Bun; "name@unknown:0:0" in Firefox.
+let framePrefix: string | undefined,
+  frameSuffix = "";
+function describeBuiltInComponentFrame(name: string): string {
+  if (framePrefix === undefined) {
+    const stack = new Error().stack!;
+    const match = stack.trim().match(/\n( *(at )?)/);
+    framePrefix = (match && match[1]) || "";
+    frameSuffix = stack.indexOf("\n    at") > -1 ? " (<anonymous>)" : stack.indexOf("@") > -1 ? "@unknown:0:0" : "";
+  }
+  return "\n" + framePrefix + name + frameSuffix;
+}
+
+let describing = false;
+/** The native frame of component `fn` (a class when `construct`), else a frame with its name. */
+function describeNativeComponentFrame(fn: Any, construct: boolean): string {
+  if (!fn || describing) return "";
+  describing = true;
+  const ErrorCtor: Any = Error;
+  const prevPrepare = ErrorCtor.prepareStackTrace;
+  ErrorCtor.prepareStackTrace = undefined;
+  try {
+    // The probe: its name marks the frame both stacks share.
+    const RunInRootFrame = {
+      DetermineComponentFrameRoot(): (string | null)[] {
+        let control: Any;
+        try {
+          if (construct) {
+            const Fake = function (): void {
+              throw Error();
+            };
+            Object.defineProperty(Fake.prototype, "props", {
+              set() {
+                throw Error();
+              },
+            });
+            try {
+              Reflect.construct(Fake, []);
+            } catch (x) {
+              control = x;
+            }
+            Reflect.construct(fn, [], Fake);
+          } else {
+            try {
+              throw Error();
+            } catch (x) {
+              control = x;
+            }
+            const out = fn();
+            if (out && typeof out.catch === "function") out.catch(noop);
+          }
+        } catch (sample: Any) {
+          if (sample && control && typeof sample.stack === "string") return [sample.stack, control.stack];
+        }
+        return [null, null];
+      },
+    };
+    const [sampleStack, controlStack] = RunInRootFrame.DetermineComponentFrameRoot();
+    if (sampleStack && controlStack) {
+      const sampleLines = sampleStack.split("\n"),
+        controlLines = controlStack.split("\n");
+      let s = 0,
+        c = 0;
+      while (s < sampleLines.length && !sampleLines[s]!.includes("DetermineComponentFrameRoot")) s++;
+      while (c < controlLines.length && !controlLines[c]!.includes("DetermineComponentFrameRoot")) c++;
+      // The probe's frame is missing (a short stack): line the stacks up from their ends.
+      if (s === sampleLines.length || c === controlLines.length)
+        for (
+          s = sampleLines.length - 1, c = controlLines.length - 1;
+          s >= 1 && c >= 0 && sampleLines[s] !== controlLines[c];
+        )
+          c--;
+      for (; s >= 1 && c >= 0; s--, c--)
+        if (sampleLines[s] !== controlLines[c]) {
+          // The frame above the first that differs is the component's (React's loop, unrolled).
+          if (s !== 1 || c !== 1) {
+            do (s--, c--);
+            while (c >= 0 && sampleLines[s] === controlLines[c] && s >= 1);
+            if (c < 0 || sampleLines[s] !== controlLines[c]) {
+              let frame = "\n" + sampleLines[s]!.replace(" at new ", " at ");
+              if (fn.displayName && frame.includes("<anonymous>")) frame = frame.replace("<anonymous>", fn.displayName);
+              return frame;
+            }
+          }
+          break;
+        }
+    }
+  } finally {
+    describing = false;
+    ErrorCtor.prepareStackTrace = prevPrepare;
+  }
+  const name = fn.displayName || fn.name;
+  return name ? describeBuiltInComponentFrame(name) : "";
+}
+
+function describeComponentStackByType(type: Any): string {
+  if (typeof type === "string") return describeBuiltInComponentFrame(type);
+  if (typeof type === "function")
+    return describeNativeComponentFrame(type, !!(type.prototype && type.prototype.isReactComponent));
+  if (typeof type === "object" && type !== null) {
+    switch (type.$$typeof) {
+      case FORWARD_REF_TYPE:
+        return describeNativeComponentFrame(type.render, false);
+      case MEMO_TYPE:
+        return describeNativeComponentFrame(type.type, false);
+      case LAZY_TYPE: {
+        let resolved: Any;
+        try {
+          resolved = type._init(type._payload);
+        } catch {
+          return describeBuiltInComponentFrame("Lazy");
+        }
+        return describeComponentStackByType(resolved);
+      }
+    }
+    // A server component's info (its location is known only in development builds).
+    if (typeof type.name === "string")
+      return describeBuiltInComponentFrame(type.name + (type.env ? " [" + type.env + "]" : ""));
+  }
+  switch (type) {
+    case SUSPENSE_LIST_TYPE:
+      return describeBuiltInComponentFrame("SuspenseList");
+    case SUSPENSE_TYPE:
+      return describeBuiltInComponentFrame("Suspense");
+    case VIEW_TRANSITION_TYPE:
+      return describeBuiltInComponentFrame("ViewTransition");
+  }
+  return "";
+}
+
+/** The info for an error thrown at `stack`: its componentStack is described when first read. */
+function getThrownInfo(stack: StackNode | null): ErrorInfo {
+  const info: ErrorInfo = {};
+  if (stack !== null)
+    Object.defineProperty(info, "componentStack", {
+      configurable: true,
+      enumerable: true,
+      get() {
+        let described = "";
+        try {
+          for (let node: StackNode | null = stack; node !== null; node = node.parent)
+            described += describeComponentStackByType(node.type);
+        } catch (x: Any) {
+          described = "\nError generating stack: " + x.message + "\n" + x.stack;
+        }
+        Object.defineProperty(info, "componentStack", { value: described });
+        return described;
+      },
+    });
+  return info;
 }
 
 // #endregion
@@ -2634,7 +2823,7 @@ function renderSuspenseBoundary(request: Request, task: Task, props: Props): voi
       contentRootSegment.status = ERRORED;
       error = thrown;
     }
-    boundary.errorDigest = logRecoverableError(request, error);
+    boundary.errorDigest = logRecoverableError(request, error, getThrownInfo(task.componentStack));
   } finally {
     task.blockedBoundary = parentBoundary;
     task.blockedPreamble = parentPreamble;
@@ -2656,7 +2845,9 @@ function renderSuspenseBoundary(request: Request, task: Task, props: Props): voi
     task.context,
     task.treeContext,
     task.row,
+    fallbackStack(task.componentStack),
   );
+  pushComponentStack(fallbackTask);
   request.pingedTasks.push(fallbackTask);
 }
 
@@ -2813,7 +3004,11 @@ function getIteratorFn(o: Any): Any {
 function renderNodeDestructive(request: Request, task: Task, node: Any, childIndex: number): void {
   task.node = node;
   task.childIndex = childIndex;
+  // An error leaves the stack where it was thrown, for the boundary or task that catches it.
+  const stack = task.componentStack;
+  pushComponentStack(task);
   retryNode(request, task);
+  task.componentStack = stack;
 }
 
 function retryNode(request: Request, task: Task): void {
@@ -2966,6 +3161,7 @@ function spawnNewSuspendedRenderTask(request: Request, task: Task): Task {
     task.context,
     task.treeContext,
     task.row,
+    task.componentStack,
   );
 }
 
@@ -2979,6 +3175,7 @@ function renderNode(request: Request, task: Task, node: Any, childIndex: number)
   const prevFormat = task.formatContext,
     prevContext = task.context,
     prevTree = task.treeContext,
+    prevStack = task.componentStack,
     segment = task.blockedSegment;
   const childrenLength = segment.children.length,
     chunkLength = segment.chunks.length;
@@ -2997,6 +3194,7 @@ function renderNode(request: Request, task: Task, node: Any, childIndex: number)
         task.formatContext = prevFormat;
         task.context = prevContext;
         task.treeContext = prevTree;
+        task.componentStack = prevStack;
         switchContext(prevContext);
         return;
       }
@@ -3006,6 +3204,7 @@ function renderNode(request: Request, task: Task, node: Any, childIndex: number)
         task.formatContext = prevFormat;
         task.context = prevContext;
         task.treeContext = prevTree;
+        task.componentStack = prevStack;
         switchContext(prevContext);
         return;
       }
@@ -3035,7 +3234,7 @@ function performWork(request: Request): void {
     pinged.splice(0, i);
     if (request.destination !== null) flushCompletedQueues(request, request.destination);
   } catch (error) {
-    logRecoverableError(request, error);
+    logRecoverableError(request, error, {});
     fatalError(request, error);
   } finally {
     currentResumableState = prevResumable;
@@ -3097,13 +3296,14 @@ function erroredTask(request: Request, task: Task, x: Any): void {
     row = task.row;
   if (row !== null && --row.pendingTasks === 0) finishSuspenseListRow(request, row);
   request.allPendingTasks--;
+  const info = getThrownInfo(task.componentStack);
   if (boundary === null) {
     const error = isRecoverableError(x) ? cloneRecoverableErrorAsFatal(x) : x;
-    logRecoverableError(request, error);
+    logRecoverableError(request, error, info);
     fatalError(request, error);
     return;
   }
-  const digest = logRecoverableError(request, x);
+  const digest = logRecoverableError(request, x, info);
   boundary.pendingTasks--;
   if (boundary.status !== ERRORED) {
     boundary.status = ERRORED;
@@ -3230,16 +3430,17 @@ function finishAbortedTask(task: Task, request: Request, error: Any): void {
   const boundary = task.blockedBoundary,
     segment = task.blockedSegment;
   if (segment.status !== ABORTED) return;
+  const info = getThrownInfo(task.componentStack);
   const recoverable = isRecoverableError(error);
   if (boundary === null) {
     const e = recoverable ? cloneRecoverableErrorAsFatal(error) : error;
-    logRecoverableError(request, e);
+    logRecoverableError(request, e, info);
     if (request.status !== ABORTING && request.status !== CLOSED) fatalError(request, e);
     return;
   }
   if (boundary.status !== ERRORED) {
     boundary.status = ERRORED;
-    boundary.errorDigest = logRecoverableError(request, error);
+    boundary.errorDigest = logRecoverableError(request, error, info);
     if (boundary.parentFlushed) request.clientRenderedBoundaries.push(boundary);
   }
   boundary.pendingTasks--;
@@ -3276,7 +3477,7 @@ function abort(request: Request, reason: Any): void {
       }
       if (request.destination !== null) flushCompletedQueues(request, request.destination);
     } catch (e) {
-      logRecoverableError(request, e);
+      logRecoverableError(request, e, {});
       fatalError(request, e);
     }
   };
@@ -3920,7 +4121,7 @@ function startFlowing(request: Request, destination: Destination): void {
     try {
       flushCompletedQueues(request, destination);
     } catch (error) {
-      logRecoverableError(request, error);
+      logRecoverableError(request, error, {});
       fatalError(request, error);
     }
   }

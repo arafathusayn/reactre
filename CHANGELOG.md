@@ -27,6 +27,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### @reactre/compat
 
 - Added: `@reactre/compat/api`, the keys that switch React's APIs on and off (`KEYS`, `GROUPS`, `REQUIRES`, the names every build keeps in `ALWAYS`) and `enabledApis`, which expands and checks an app's keys.
+- Added: @reactre/compat/server gives `onError` (and `onBrowserBailout`) the `componentStack` React's production server gives: host elements, boundaries and `Suspense Fallback` by name, and each component by the frame of a native stack trace it throws from when called without props, read when the stack is first read. The README lists the cases that differ.
 - Changed: `@reactre/compat` includes class components, so the default entry is all of React's client API. `@reactre/compat/core` is the entry without them, for apps that render no class component; `@reactre/compat/classes` stays as an alias of `@reactre/compat`.
 - Changed: `version` is `"19.3.1"`, the React release compat matches.
 - Added: `@reactre/compat/server`, React 19.3.1's server rendering API: `renderToString`, `renderToStaticMarkup`, `renderToReadableStream` and `renderToPipeableStream` write the HTML React's production build writes, byte for byte, running compat's own hooks. `prerender`, `prerenderToNodeStream`, `resume` and `resumeToPipeableStream` are exported so imports resolve, and throw: compat does not implement partial prerendering. The README lists what else differs.

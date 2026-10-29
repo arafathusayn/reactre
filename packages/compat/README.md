@@ -71,7 +71,8 @@ Server Components stay on React: the plugin leaves the RSC environment, and any 
 - `prerender`, `prerenderToNodeStream`, `resume` and `resumeToPipeableStream` are exported but throw: partial prerendering is not implemented.
 - A promise created during render rather than cached suspends again on each retry, where React replays it.
 - `preload`, `preinit` and the other resource functions write nothing during a server render. `onHeaders`, `formState` and `unstable_externalRuntimeSrc` are not supported.
-- Errors carry React's full messages rather than minified codes, and `componentStack` is empty.
+- Errors carry React's full messages rather than minified codes.
+- `onError`'s `componentStack` is React's production stack, each component's frame read from a native stack trace as React reads it, with two exceptions. A component whose first call that throws without props is `use()` of a promise gets a frame with only its name, as compat's `use()` reads a promise outside a render where React's throws. Under JavaScriptCore (Bun, Safari), a component that returns a hook's result directly, a tail call, has no frame of its own, so the frame shown is the hook's, in compat's code rather than React's. Frames are formatted as React's browser, Bun and legacy builds format them; its Node and edge builds use an `Error.prepareStackTrace` of their own, which Bun writes differently for an engine-made frame such as a class's implicit constructor.
 - `useId`'s server ids follow React's, but compat's client makes its own ids, so hydration patches the attributes that hold them.
 - Streams are chunked differently and do not wait for a slow destination to drain; the bytes are the same.
 
