@@ -4586,6 +4586,10 @@ let batch = 0; // depth of event handlers, flushSync, batchedUpdates and act: no
 let micro = false; // a microtask flush is queued
 let task = false; // a flush in a task of its own is queued
 let passiveTimer = false; // a passive-effect flush is queued after paint
+// React's nestedUpdateCount: commits in a row that left an update to render (a layout effect, ref
+// or componentDidUpdate setting state on every commit). Past React's limit, the next update
+// throws #185 (see schedule).
+let nested = 0;
 
 /**
  * Mark `f` for re-render and queue it once. Outside a batch or a flush, a flush is queued as
@@ -4595,6 +4599,12 @@ let passiveTimer = false; // a passive-effect flush is queued after paint
  */
 function schedule(f: Fiber): void {
   if (f.f & DEAD) return;
+  // React's limit, as its getRootForUpdatedFiber checks it on every update: its count starts at
+  // the second such commit, so the 52nd throws, from the setState (to the effect's boundary).
+  if (nested > 51) {
+    nested = 0;
+    throw new Error(prodMessage(185));
+  }
   f.f |= DIRTY;
   // React's lane, roughly: an update outside any event, batch or flush waits for its task, and
   // flushSync leaves it there until a sync update reaches the same fiber.
@@ -4731,9 +4741,17 @@ function flushWork(sync: boolean): void {
           spareQueue = q;
         }
         flushLayout();
+        // A commit that leaves an update counts, as React counts it once the commit is over. The
+        // update renders on React's sync lane, whose passive effects run first: here too, as they
+        // would before the next render anyway. A sync flush's last commit counts below.
+        if (queue.length) {
+          flushPassive();
+          nested++;
+        } else if (!sync) nested = 0;
       }
       if (!sync) break;
       flushPassive();
+      nested = queue.length ? nested + 1 : 0;
       // An error a passive effect threw renders now, as React flushes the sync lane it is on.
       if (!routed || !queue.length) break;
     }

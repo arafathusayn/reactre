@@ -1049,6 +1049,126 @@ describe("errors", () => {
       return L.createElement(Loop);
     }, 301));
 
+  /**
+   * Renders each element `make(L, log)` returns into one root with each library, one flushSync
+   * apiece, and expects the same: the log the tree writes, the errors reported (code, then
+   * component stack) in order with it, and the markup. Returns compat's log.
+   */
+  async function logsSame(make: (L: Lib, log: string[]) => Any[]): Promise<string[]> {
+    const run = async (L: Lib, createRoot: (c: Any, o: Any) => Any, flush: (fn: () => void) => void) => {
+      const log: string[] = [],
+        c = box();
+      const report = (kind: string) => (e: Any, info: Any) =>
+        void log.push(`${kind} ${e.message.replace(/^Minified React error #(\d+);.*$/s, "#$1")}${info.componentStack}`);
+      const root = createRoot(c, {
+        onUncaughtError: report("uncaught"),
+        onCaughtError: report("caught"),
+        onRecoverableError: report("recoverable"),
+      });
+      for (const el of make(L, log)) {
+        flush(() => root.render(el));
+        await tasks();
+      }
+      log.push("dom " + markup(c));
+      return log;
+    };
+    const react = await run(React, ReactClient.createRoot, ReactDOM.flushSync);
+    const compat = await run(Compat, (c, o) => Compat.createRoot(c as unknown as Element, o), Compat.flushSync);
+    expect(compat).toEqual(react);
+    return compat;
+  }
+
+  test("a layout effect, ref or componentDidUpdate that updates on every commit (#185)", async () => {
+    // React counts the commits in a row that leave an update to render, and its 52nd throws #185
+    // from the setState that would queue the next, to the nearest error boundary or the root.
+    const layout = await logsSame((L, log) => {
+      function Loop() {
+        const [n, set] = L.useState(0);
+        L.useLayoutEffect(() => {
+          log.push("layout " + n);
+          set(n + 1);
+        });
+        return L.createElement("p", null, n);
+      }
+      return [L.createElement("div", null, L.createElement(Loop))];
+    });
+    expect(layout.length).toBe(55);
+    expect(layout.at(-2)).toStartWith("uncaught #185\n    at Loop (");
+    // A ref callback: a new one each render, so each commit detaches the old and attaches the new.
+    await logsSame((L, log) => {
+      function Loop() {
+        const [n, set] = L.useState(0);
+        return L.createElement("p", {
+          ref: (el: Any) => {
+            log.push("ref " + n + " " + (el === null ? "null" : "p"));
+            set(n + 1);
+          },
+        });
+      }
+      return [L.createElement(Loop)];
+    });
+    // componentDidUpdate, under an error boundary that catches the error.
+    await logsSame((L, log) => {
+      class Loop extends L.Component<Any> {
+        state = { n: 0 };
+        componentDidMount() {
+          this.setState({ n: 1 });
+        }
+        componentDidUpdate() {
+          log.push("update " + this.state.n);
+          this.setState({ n: this.state.n + 1 });
+        }
+        render() {
+          return this.state.n;
+        }
+      }
+      class Boundary extends L.Component<Any> {
+        state = { failed: false };
+        static getDerivedStateFromError() {
+          return { failed: true };
+        }
+        render() {
+          return this.state.failed ? "failed" : this.props.children;
+        }
+      }
+      return [L.createElement(Boundary, null, L.createElement(Loop))];
+    });
+    // A passive effect and a layout effect taking turns count too: each commit leaves an update.
+    await logsSame((L, log) => {
+      function Turns() {
+        const [n, set] = L.useState(0);
+        const [m, setM] = L.useState(0);
+        L.useEffect(() => {
+          log.push("passive " + n);
+          set(n + 1);
+        });
+        L.useLayoutEffect(() => {
+          log.push("layout " + m);
+          setM(m + 1);
+        }, [n]);
+        return n + "," + m;
+      }
+      return [L.createElement(Turns)];
+    });
+  });
+
+  test("a passive effect that updates on every commit runs on, unlimited (no #185 in production)", async () => {
+    // React's production build has no limit on passive updates (NESTED_PASSIVE_UPDATE_LIMIT is a
+    // development warning): each renders in a task of its own, so the page keeps running.
+    const log = await logsSame((L, log) => {
+      function Count() {
+        const [n, set] = L.useState(0);
+        L.useEffect(() => {
+          if (n < 200) set(n + 1);
+          else log.push("reached " + n);
+        });
+        return n;
+      }
+      return [L.createElement(Count)];
+    });
+    expect(log).toEqual(["reached 200", "dom 200"]);
+  });
+
   test("use() of a value it cannot read (#438)", async () => {
     const Use = (L: Lib, v: Any) =>
       function Use() {
