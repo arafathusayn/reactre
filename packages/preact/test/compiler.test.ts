@@ -15,11 +15,11 @@ const templates = (src: string, source: "preact" | "react" = "preact") =>
 describe("templates", () => {
   test("literal props are statics; a prop after a hole is a hole, so attributes keep their order", () => {
     expect(templates(`export const a = (x) => <p id="a" title={x} class="c" n={1} u={undefined} />;`)).toEqual([
-      '["p",{"id":"a","title":{"h":0},"class":{"h":1},"n":{"h":2},"u":{"h":3}}]',
+      '["p",{"id":"a","title":[0],"class":[1],"n":[2],"u":[3]}]',
     ]);
     // An uncloned DOM property is always a hole.
     expect(templates(`export const a = <video muted={true} src="s" />;`)).toEqual([
-      '["video",{"muted":{"h":0},"src":{"h":1}}]',
+      '["video",{"muted":[0],"src":[1]}]',
     ]);
   });
 
@@ -36,7 +36,7 @@ describe("templates", () => {
 
   test("compat's order: class and className after every other prop", () => {
     expect(templates(`export const a = <p className="c" id="i" />;`, "react")).toEqual([
-      '["p",{"id":"i","className":"c"}]',
+      '["p",{"id":"i","class":"c"}]',
     ]);
     expect(compileSource(`export const a = <p />;`, "jsx", { source: "react" })).toContain('from "react"');
   });
@@ -58,7 +58,7 @@ describe("templates", () => {
     const keyed = compileSource(`export const a = <ul>{[<li key="k">x</li>]}</ul>;`, "jsx");
     expect(keyed).toContain('__hrBlock(__hrT0, "k", [])');
     expect(templates(`export const a = <p style={{ a: 1 }} data-q="x" />;`)).toEqual([
-      '["p",{"style":{"h":0},"data-q":{"h":1}}]',
+      '["p",{"style":[0],"data-q":[1]}]',
     ]);
     expect(templates(`const k = 1; export const a = <p k={k} {...{ "q-q": 1 }} />;`)).toEqual([]);
   });

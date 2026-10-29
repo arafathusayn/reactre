@@ -184,17 +184,9 @@ function handleDomVNode(vnode: Any): void {
   vnode.props = normalizedProps;
 }
 
-// The same rules for a compiled template's props, which never pass through the vnode hook.
-// Template tags are never form fields, custom elements or noscript (the compiler leaves those
-// to plain vnodes), so the rules that depend on them do not arise.
-blockHooks.n = (i: string): string =>
-  i == "className"
-    ? "class"
-    : i[0] == "o" && i[1] == "n"
-      ? eventName(i, "", {}, null)
-      : CAMEL_PROPS.test(i)
-        ? i.replace(CAMEL_REPLACE, "-$&").toLowerCase()
-        : i;
+// The same rules for a compiled template's hole values, which never pass through the vnode hook.
+// The compiler renames props and rewrites literal values itself (src/compiler.ts). Template tags
+// are never form fields, custom elements or noscript, so the rules that depend on them do not arise.
 blockHooks.v = (i: string, value: Any): Any =>
   i == "style" && value && value.constructor == Object
     ? pxStyle(value)

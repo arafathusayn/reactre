@@ -106,15 +106,14 @@ export const slots: { block: Any; copy: Any; drop: Any; expand: Any; claim: Any;
 };
 
 /**
- * How compat writes a compiled template's host props (src/compat.ts fills these): `n` renames a
- * prop as its vnode hook would (onDoubleClick to ondblclick), `v` changes a value (numbers in
- * style to px), and `s` is the `$$typeof` its elements carry.
+ * How compat writes a compiled template's hole values (src/compat.ts fills these): `v` changes a
+ * value as its vnode hook would (numbers in style to px), and `s` is the `$$typeof` its elements
+ * carry. Names and literal values need nothing here: the compiler applies compat's renames.
  */
 export const blockHooks: {
-  n: ((name: string) => string) | null;
   v: ((name: string, value: Any) => Any) | null;
   s: Any;
-} = { n: NULL, v: NULL, s: undefined };
+} = { v: NULL, s: undefined };
 
 // #endregion
 

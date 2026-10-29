@@ -217,13 +217,16 @@ class Compiler {
         values.length = mark;
         return null;
       }
-      const lit = literal(value);
+      // Under compat, the template holds the names compat's vnode hook gives, and literals its values.
+      const key = this.react ? reactName(name) : name;
+      let lit = literal(value);
+      if (this.react) lit = reactValue(key, lit);
       if (!dynamic && !UNCLONED.has(name) && lit !== NOT_LITERAL && (lit === null || typeof lit !== "object")) {
         // A prop set to undefined is no prop.
-        if (lit !== undefined) ps[name] = lit;
+        if (lit !== undefined) ps[key] = lit;
       } else {
         dynamic = true;
-        ps[name] = { h: values.length };
+        ps[key] = [values.length];
         values.push(this.rewrite(value));
       }
     }
@@ -265,6 +268,30 @@ class Compiler {
     if (close !== src.length - 1) return null;
     return { helper: m[1]!, multi: this.helpers.get(m[1]!)!, args: split(src, m[0].length, close) };
   }
+}
+
+// What compat's vnode hook (src/compat.ts) does to a host element's props, done here for a template's.
+const CAMEL_PROPS =
+  /^(?:accent|alignment|arabic|baseline|cap|clip(?!PathU)|color|dominant|fill|flood|font|glyph(?!R)|horiz|image(?!S)|letter|lighting|marker(?!H|W|U)|overline|paint|pointer|shape|stop|strikethrough|stroke|text(?!L)|transform|underline|unicode|units|v|vector|vert|word|writing|x(?!C))[A-Z]/;
+
+/** A React prop name as compat renames it on an element that is not a form field. */
+function reactName(i: string): string {
+  if (i === "className") return "class";
+  if (i[0] === "o" && i[1] === "n") {
+    const l = i.toLowerCase();
+    if (l === "ondoubleclick") return "ondblclick";
+    if (l === "onfocus") return "onfocusin";
+    if (l === "onblur") return "onfocusout";
+    return l === "oninput" ? l : i;
+  }
+  return CAMEL_PROPS.test(i) ? i.replace(/[A-Z0-9]/g, "-$&").toLowerCase() : i;
+}
+
+/** A literal prop value as compat writes it; null is no prop, except on an event. */
+function reactValue(name: string, v: unknown): unknown {
+  if (name === "download" && v === true) return "";
+  if (name === "translate" && v === "no") return false;
+  return v === null && !(name[0] === "o" && name[1] === "n") ? undefined : v;
 }
 
 /** Whether a child expression renders nothing: null, undefined or a boolean literal. */

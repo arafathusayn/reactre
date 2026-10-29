@@ -42,7 +42,7 @@ import {
 
 /**
  * A template's description, the compiler's JSON: [tag, props, ...children]. A prop value
- * `{ h: i }` is hole i; a child is text, an element, or (as the only child) the index of a
+ * `[i]` is hole i; a child is text, an element, or (as the only child) the index of a
  * children hole. Props are 0 when there are none.
  */
 export type Desc = [string, Record<string, Any> | 0, ...(string | number | Desc)[]];
@@ -79,7 +79,7 @@ export function __template(desc: Desc): Template {
   return { d: desc, b: {} };
 }
 
-/** A hole in a prop: `{ h: index }`. */
+/** A hole in a prop: `[index]` (a literal prop is never an object). */
 const isHole = (v: Any): boolean => typeof v == "object" && v !== NULL;
 
 /** The namespace an element with `tag` is created in, inside `parentNs`. */
@@ -101,18 +101,15 @@ function build(t: Template, ns: string): Built {
     let own = -1;
     const index = () => (own < 0 ? (own = at(path)) : own);
     if (ps)
-      for (const raw in ps) {
-        const name = blockHooks.n ? blockHooks.n(raw) : raw;
-        let v = ps[raw];
+      // Names and literals are already what Preact writes (the compiler applied compat's renames),
+      // and a prop set to undefined is not in the template.
+      for (const name in ps) {
+        const v = ps[name];
         if (isHole(v)) {
-          b.el[v.h] = index();
-          b.nm[v.h] = name;
-          b.ns[v.h] = ns;
-        } else {
-          if (blockHooks.v) v = blockHooks.v(name, v);
-          // As on a mount: a prop set to undefined is not written.
-          if (v !== undefined) setProperty(dom, name, v, undefined, ns);
-        }
+          b.el[v[0]] = index();
+          b.nm[v[0]] = name;
+          b.ns[v[0]] = ns;
+        } else setProperty(dom, name, v, undefined, ns);
       }
     const cns = childNsOf(tag, ns);
     let k = 0;
@@ -205,7 +202,7 @@ export function __block(t: Template, key: Any, values: Any[]): Any {
 function propsOf(d: Desc, v: Any[]): Any {
   const props: Any = {};
   const ps = d[1];
-  if (ps) for (const k in ps) props[k] = isHole(ps[k]) ? v[ps[k].h] : ps[k];
+  if (ps) for (const k in ps) props[k] = isHole(ps[k]) ? v[ps[k][0]] : ps[k];
   if (d.length > 2) {
     if (typeof d[2] == "number") props.children = v[d[2]];
     else {
