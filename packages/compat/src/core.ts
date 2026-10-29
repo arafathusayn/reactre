@@ -21,7 +21,8 @@
 //      prop first uses that type. A dispatch walks the fiber tree from the target, so events
 //      bubble through portals as in React. Non-bubbling events (scroll, load, media events) get
 //      one listener on the element; mouseenter and friends are derived from over and out events.
-//   4. Effects: insertion effects run when their component completes, layout effects and refs
+//   4. Effects: insertion effects, layout cleanups, ref detaches and componentWillUnmount run once
+//      the whole render is over (React's mutation phase), layout effects and refs after them,
 //      before the render returns, passive effects after paint (or before the next render,
 //      whichever comes first). Updates batch automatically. Those from an event handler or
 //      inside flushSync flush before the handler returns; those from a discrete event's native
@@ -1684,7 +1685,7 @@ function move(parent: Node, node: Node, ref: Node | null): void {
 function place(h: Fiber): void {
   h.f &= ~STRUCT;
   // Child nodes placed in a void element (one that mounts with them throws in runHost first).
-  if (VOID.has(h.t)) throw new Error(prodMessage(137, h.t));
+  if (VOID.has(h.t)) return propError(h, new Error(prodMessage(137, h.t)));
   const parent = h.d as Node;
   const want: Node[] = [];
   for (let ix = 0, xs = h.c; ix < xs.length; ix++) {
@@ -1833,7 +1834,7 @@ function runHost(f: Fiber, old: Props | null, mount: boolean): void {
   if (f.f & STRUCT) place(f);
   // After the children: the options must exist before the value can select one.
   if (f.t === "select") setSelect(dom, p, old ?? NO_PROPS, mount);
-  // Refs attach with layout effects (after the whole render), detach at once.
+  // Refs attach with layout effects (after the whole render), detach in the mutation phase.
   const ref = p.ref,
     oref = old === null ? undefined : old["ref"];
   if (ref !== oref) swapRef(f, ref, oref);
@@ -1868,7 +1869,13 @@ function hostChildren(f: Fiber, dom: Any, p: Any, old: Props | null): void {
     const oh = old === null ? undefined : old["dangerouslySetInnerHTML"];
     // Checked as React's setProp checks it, when it changes; not on a claimed element, as
     // React's hydration checks nothing.
-    if (html !== oh && !(f.f & CLAIMED)) checkHTML(f.t, html, p.children);
+    if (html !== oh && !(f.f & CLAIMED)) {
+      const e = htmlError(f.t, html, p.children);
+      if (e !== null) {
+        if (old === null) throw e;
+        return propError(f, e);
+      }
+    }
     const s = html.__html;
     // With __html null or undefined there is no HTML: the children render.
     if (s != null) {
@@ -1895,7 +1902,7 @@ function hostChildren(f: Fiber, dom: Any, p: Any, old: Props | null): void {
       dom.textContent = s;
     } else if (f.tx !== s || (old !== null && old["dangerouslySetInnerHTML"]?.__html != null)) {
       // Text in a void element mounted without it.
-      if (f.tx === null && old !== null && VOID.has(f.t)) throw new Error(prodMessage(137, f.t));
+      if (f.tx === null && old !== null && VOID.has(f.t)) return propError(f, new Error(prodMessage(137, f.t)));
       // Rewrite the one text node's data when there is one: cheaper than textContent, which
       // replaces the node.
       const fc = dom.firstChild;
@@ -1929,13 +1936,32 @@ function textOver(dom: Any, ch: Any): void {
 
 /**
  * React's errors for dangerouslySetInnerHTML: on a textarea (#91) or a void element (#137), not
- * in the form {__html} (#61), or with HTML and children both (#60).
+ * in the form {__html} (#61), or with HTML and children both (#60); null when it is valid.
  */
-function checkHTML(tag: string, html: Any, children: Any): void {
-  if (tag === "textarea") throw new Error(prodMessage(91));
-  if (VOID.has(tag)) throw new Error(prodMessage(137, tag));
-  if (typeof html !== "object" || !("__html" in html)) throw new Error(prodMessage(61));
-  if (html.__html != null && children != null) throw new Error(prodMessage(60));
+function htmlError(tag: string, html: Any, children: Any): Error | null {
+  const code =
+    tag === "textarea"
+      ? 91
+      : VOID.has(tag)
+        ? 137
+        : typeof html !== "object" || !("__html" in html)
+          ? 61
+          : html.__html != null && children != null
+            ? 60
+            : 0;
+  return code === 0 ? null : new Error(code === 137 ? prodMessage(137, tag) : prodMessage(code));
+}
+
+/**
+ * An update's invalid prop (`e`, for host `f`): React's client checks an update's props as it
+ * commits them, so the render goes on and the error is thrown in the commit's mutation phase,
+ * to the nearest boundary, with the element's own stack. Outside a held render, it is thrown now.
+ */
+function propError(f: Fiber, e: Error): void {
+  if (holding === null) throw e;
+  holding.q.push(f, () => {
+    throw e;
+  });
 }
 
 // #endregion
@@ -2222,7 +2248,7 @@ function setAttr(f: Fiber, dom: Any, name: string, v: Any, old: Any): void {
     }
     if (name.charCodeAt(1) === 110 && nativeListener(dom, name, v, old)) return;
   }
-  if (name === "style") return setStyle(dom, v, old);
+  if (name === "style") return setStyle(dom, v, old, f);
   if (isCustom(tag)) {
     // React 19's custom element rule: any value goes to a property the element defines, so
     // objects, arrays and functions reach it intact; otherwise true is presence.
@@ -2398,10 +2424,15 @@ function removeAttr(dom: Any, ns: string | null, attr: string): void {
 
 /**
  * Apply a style prop, an object, property by property, touching only the properties that changed
- * from `old`. Anything else throws, as React's setValueForStyles does.
+ * from `old`. Anything else throws (#62), as React's setValueForStyles does: at once as an element
+ * mounts, and as it commits for an update of `f`, whose element is in place (see propError).
  */
-function setStyle(dom: Any, v: Any, old: Any): void {
-  if (v != null && typeof v !== "object") throw new Error(prodMessage(62));
+function setStyle(dom: Any, v: Any, old: Any, f?: Any): void {
+  if (v != null && typeof v !== "object") {
+    const e = new Error(prodMessage(62));
+    if (f instanceof Fiber && dom.parentNode !== null && !(f.f & HOIST)) return propError(f, e);
+    throw e;
+  }
   const s = dom.style;
   if (old != null && typeof old === "object") for (const k in old) if (v == null || !(k in v)) styleProp(s, k, null);
   if (v != null) for (const k in v) if (old == null || v[k] !== old[k]) styleProp(s, k, v[k]);
@@ -2750,7 +2781,7 @@ function runBlock(f: Fiber, v: Any[], o: Any[] | null, mount: boolean): void {
     if (k === H_EVENT) continue; // read when the event fires
     if (s === null) s = f.bs = t.locate(f.d);
     if (k === H_ATTR) setAttr(infos[i], s[i], t.names[i]!, x, o![i]);
-    else if (k === H_STYLE) setStyle(s[i], x, o![i]);
+    else if (k === H_STYLE) setStyle(s[i], x, o![i], f);
     else setChild(f, i, x, o![i]);
   }
 }
@@ -3995,7 +4026,7 @@ function runRoot(f: Fiber): void {
     if (thrown !== null) {
       if (isThenable(thrown)) {
         // A transition that can be undone keeps the screen (see attempt).
-        if (holding !== null) holding.bad.push(thrown);
+        if (holding !== null && holding !== MUT) holding.bad.push(thrown);
         else {
           if (pre && !r.tr) {
             prerender(f, thrown);
@@ -4005,9 +4036,13 @@ function runRoot(f: Fiber): void {
         }
       } else {
         removeAll(f);
-        const report = r.opts.onUncaughtError;
-        if (report) callReport(report, thrown, { componentStack: stackOf(thrown, f) });
-        else reportUncaught(thrown);
+        const report = r.opts.onUncaughtError,
+          info = { componentStack: stackOf(thrown, f) };
+        const tell = (): void => (report ? callReport(report, thrown, info) : reportUncaught(thrown));
+        // Reported once the commit that empties the root ran its mutation phase, as React reports
+        // it from that commit.
+        if (holding === MUT) MUT.q.push(f, tell);
+        else tell();
       }
     }
   } finally {
@@ -4513,15 +4548,14 @@ function detachRef(f: Fiber, ref: Any): void {
 }
 
 /**
- * A host's or Fragment's ref changed from `oref` to `ref`: the old one detaches at once, the new
- * one attaches with layout effects. Hidden content detached its refs when it hid, and attaches
- * them when it shows.
+ * A host's or Fragment's ref changed from `oref` to `ref`: the old one detaches in the mutation
+ * phase (see mutations), the new one attaches with layout effects. Hidden content detached its
+ * refs when it hid, and attaches them when it shows.
  */
 function swapRef(f: Fiber, ref: Any, oref: Any): void {
   if (oref != null && (hiddenCount === 0 || hiddenLevel(f) === 0))
-    // A transition that can be undone detaches it as it commits (see attempt).
-    if (holding !== null) holding.q.push(f, () => detachRef(f, oref));
-    else detachRef(f, oref);
+    // As the render's commit runs (see mutations), or a transition's (see attempt).
+    safely(f, () => detachRef(f, oref));
   if (ref != null) {
     checkRef(ref);
     laterShown(f, () => attachRef(f, ref, f.n === HOST ? f.d : fragmentRefs!.of(f)));
@@ -5133,7 +5167,7 @@ function suspense(f: Fiber): void {
   for (let i = 0, cs = f.c; i < cs.length; i++) cs[i]!.i = i;
   curHost.f |= STRUCT;
   // A transition that can be undone keeps content that showed; its retries wait for its commit.
-  if (holding !== null) {
+  if (holding !== null && holding !== MUT) {
     if (shown) holding.bad.push(thrown);
     holding.t.push(f, thrown);
     return;
@@ -5368,8 +5402,8 @@ function unmount(f: Fiber, rm: boolean): void {
         for (let ix = 0, xs = f.h; ix < xs.length; ix++) {
           const h = xs[ix]!;
           if (h.x === undefined) continue;
-          // Layout and insertion cleanups run now; passive ones wait for the passive flush, as
-          // in React.
+          // Layout and insertion cleanups run with the commit's mutation phase; passive ones wait
+          // for the passive flush, as in React.
           if (h.k !== PASSIVE) safely(f, h.x);
           else if (h.k === PASSIVE) passiveUnmountQ.push(f, h.x);
           h.x = undefined;
@@ -5616,19 +5650,26 @@ function flushWork(sync: boolean): void {
           if (q.length > 1) q.sort(byDepth);
           // On a page that hydrates: dehydrated boundaries the updates reach hydrate first.
           if (beforeRender !== null) beforeRender(q);
-          for (let ix = 0; ix < q.length; ix++) {
-            const f = q[ix]!;
-            // flushSync leaves an update from outside an event to its task.
-            if (syncOnly && f.f & LATER) {
-              held.push(f);
-              continue;
+          // The user code React runs in its commit's mutation phase waits for the render to end.
+          holding = MUT;
+          try {
+            for (let ix = 0; ix < q.length; ix++) {
+              const f = q[ix]!;
+              // flushSync leaves an update from outside an event to its task.
+              if (syncOnly && f.f & LATER) {
+                held.push(f);
+                continue;
+              }
+              f.f &= ~(QUEUED | LATER);
+              // Skipped when a parent's render already rendered it (DIRTY cleared) or removed it.
+              if ((f.f & (DIRTY | DEAD)) === DIRTY) rerender(f);
             }
-            f.f &= ~(QUEUED | LATER);
-            // Skipped when a parent's render already rendered it (DIRTY cleared) or removed it.
-            if ((f.f & (DIRTY | DEAD)) === DIRTY) rerender(f);
+          } finally {
+            holding = null;
           }
           q.length = 0;
           spareQueue = q;
+          mutations();
         }
         flushLayout();
         // A commit that leaves an update counts, as React counts it once the commit is over. The
@@ -5768,6 +5809,8 @@ function safely(f: Fiber, fn: () => void): void {
     fn();
   } catch (e) {
     throwTo(f, e);
+    // React captures the stack of an error its commit catches at once (an object keeps it).
+    if (e !== null && typeof e === "object") stackOf(e, f);
   }
 }
 
@@ -6199,8 +6242,9 @@ function commitEffects(f: Fiber): void {
   // Hidden content runs its layout effects (level 1), or all of them (2), when it shows.
   const level = hiddenCount === 0 ? 0 : hiddenLevel(f);
   // As React's mutation phase does for each component: insertion cleanups, then insertion effects
-  // (before any layout effect reads the DOM, React's order for CSS-in-JS), then layout cleanups.
-  // Layout and passive effects wait in their queues.
+  // (before any layout effect reads the DOM, React's order for CSS-in-JS), then layout cleanups,
+  // all held until the render is over (see mutations). Layout and passive effects wait in their
+  // queues.
   let insertions = false,
     layouts = false;
   for (let i = 0; i < fx.length; i += 3) {
@@ -6209,7 +6253,11 @@ function commitEffects(f: Fiber): void {
     h.d = fx[i + 2];
     if (h.k === INSERTION) {
       insertions = true;
-      if (h.x !== undefined) safely(f, h.x);
+      if (h.x !== undefined) {
+        const x = h.x;
+        h.x = undefined;
+        safely(f, x);
+      }
     } else if (h.k === LAYOUT) {
       if (level === 0) {
         layouts = true;
@@ -6222,6 +6270,8 @@ function commitEffects(f: Fiber): void {
       const h: Hook = fx[i];
       if (h.k === INSERTION)
         safely(f, () => {
+          // Not for a component the same render removed (its update never commits in React).
+          if (f.f & DEAD) return;
           const r = h.c();
           h.x = typeof r === "function" ? r : undefined;
         });
@@ -6547,7 +6597,7 @@ export function useSyncExternalStore<T>(
   effect(PASSIVE, () => subscribe(box.c), [subscribe]);
   // A transition checks a new store, or one whose snapshot or getter changed, once more before
   // it commits (see attempt), as React's pushStoreConsistencyCheck.
-  if (holding !== null && check) holding.s.push(box);
+  if (holding !== null && check && holding !== MUT) holding.s.push(box);
   // The check is the store hook's own slot, queued as a passive callback after the subscription's
   // effect, as React orders them: no allocation, and nothing queued when nothing changed.
   if (check) (f.x ??= []).push(h, box.c, null);
@@ -7048,6 +7098,51 @@ interface Held {
   readonly s: Any[];
 }
 let holding: Held | null = null;
+// What a render outside a transition holds: the user code of its mutation phase (see mutations).
+const MUT: Held = { q: [], bad: [], t: [], s: [] };
+
+/**
+ * Run what the render just over held, in order, as React's commit runs its mutation phase after
+ * the whole render: insertion effects, layout cleanups, ref detaches and componentWillUnmount.
+ */
+function mutations(): void {
+  const q = MUT.q;
+  if (q.length === 0) return;
+  MUT.q = [];
+  for (let i = 0; i < q.length; i += 2)
+    if (q[i].f & DEAD) {
+      deletionsFirst(q, i);
+      break;
+    }
+  for (let i = 0; i < q.length; i += 2) safely(q[i], q[i + 1]);
+}
+
+/**
+ * Move the work of each removed subtree in `q` (its fibers are dead), from `i` on, before the
+ * work of its parent's other children, as React's mutation phase runs a fiber's deletions before
+ * its children's effects. Compat removed the subtree where its parent's reconcile met it.
+ */
+function deletionsFirst(q: Any[], i: number): void {
+  for (; i < q.length; i += 2) {
+    if (!(q[i].f & DEAD)) continue;
+    let d: Fiber = q[i];
+    while (d.r !== null && d.r.f & DEAD) d = d.r;
+    const p = d.r;
+    // The run of this removal's work, and the work before it under the same parent.
+    let j = i + 2;
+    while (j < q.length && q[j].f & DEAD && under(q[j], d)) j += 2;
+    let k = i;
+    while (k > 0 && !(q[k - 2].f & DEAD) && p !== null && q[k - 2] !== p && under(q[k - 2], p)) k -= 2;
+    if (k < i) q.splice(k, 0, ...q.splice(i, j - i));
+    i = j - 2;
+  }
+}
+
+/** Whether fiber `f` is `p` or below it. */
+function under(f: Fiber | null, p: Fiber): boolean {
+  for (; f !== null; f = f.r) if (f === p) return true;
+  return false;
+}
 
 /** The open batch of this event's transitions, made (and its task queued) on its first update. */
 function batchNow(): Batch {

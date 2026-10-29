@@ -2736,6 +2736,96 @@ describe("the render loop", () => {
     return Boundary;
   };
 
+  test("insertion effects, layout cleanups, ref detaches and componentWillUnmount wait for the whole render", async () => {
+    // React runs them in its commit's mutation phase, after every component rendered, children
+    // before parents, a removed subtree's where its parent's are.
+    const make = (L: Lib, log: string[], failIn = "") => {
+      const h = L.createElement;
+      const refs: Record<string, Any> = {};
+      const ref = (name: string) => (refs[name] ??= (el: Any) => void log.push(`ref ${name} ${el ? "set" : "null"}`));
+      const Fx = named(log, "Fx", ({ name, k, children }) => {
+        L.useInsertionEffect(() => {
+          log.push(`insertion ${name} ${k}`);
+          return () => void log.push(`insertion cleanup ${name} ${k}`);
+        }, [k]);
+        L.useLayoutEffect(() => {
+          log.push(`layout ${name} ${k}`);
+          return () => {
+            log.push(`layout cleanup ${name} ${k}`);
+            if (failIn === name && k === 0) throw new Error("cleanup " + name);
+          };
+        }, [k]);
+        L.useEffect(() => {
+          log.push(`passive ${name} ${k}`);
+          return () => void log.push(`passive cleanup ${name} ${k}`);
+        }, [k]);
+        return h("p", { ref: ref(name + k) }, children ?? name);
+      });
+      class Gone extends L.Component<Any> {
+        componentWillUnmount() {
+          log.push("willUnmount Gone");
+        }
+        render() {
+          return h(Fx, { name: "inGone", k: 0 });
+        }
+      }
+      const B = boundary(L, log);
+      const App = named(log, "App", ({ k }) =>
+        h(
+          "main",
+          null,
+          h(Fx, { name: "a", k }),
+          k === 0 ? h(Gone, { ref: ref("gone") }) : null,
+          h(B, null, h(Fx, { name: "b", k }, h(Fx, { name: "inner", k }))),
+          h(Fx, { name: "c", k }),
+        ),
+      );
+      const steps: Step[] = [
+        (root, flush) => flush(() => root.render(h(App, { k: 0 }))),
+        (root, flush) => flush(() => root.render(h(App, { k: 1 }))),
+      ];
+      return steps;
+    };
+    await stepsSame((L, log) => make(L, log));
+    // A cleanup that throws: the commit goes on, then its boundary (or the root) has the error.
+    await stepsSame((L, log) => make(L, log, "inner"));
+    await stepsSame((L, log) => make(L, log, "c"));
+  });
+
+  test("an update's invalid props throw as it commits: the render goes on, the element starts the stack", async () => {
+    const bad: Record<string, (L: Lib) => Any> = {
+      html: (L) => L.createElement("div", { id: "b", dangerouslySetInnerHTML: { __html: "h" } }, "t"),
+      form: (L) => L.createElement("div", { id: "b", dangerouslySetInnerHTML: "h" }),
+      area: (L) => L.createElement("textarea", { dangerouslySetInnerHTML: { __html: "h" } }),
+      style: (L) => L.createElement("div", { id: "b", style: "color: red" }, "t"),
+      text: (L) => L.createElement("br", { id: "b" }, "t"),
+      nodes: (L) => L.createElement("br", { id: "b" }, L.createElement("i")),
+    };
+    for (const kind of Object.keys(bad))
+      for (const caught of [true, false])
+        await stepsSame((L, log) => {
+          const h = L.createElement,
+            B = boundary(L, log);
+          const first =
+            kind === "text" || kind === "nodes"
+              ? h("br", { id: "a" })
+              : kind === "area"
+                ? h("textarea")
+                : h("div", { id: "a" }, "t");
+          const Inner = withEffects(L, log, "Inner");
+          const Mid = named(log, "Mid", (p) => h(Inner, null, p.on ? bad[kind]!(L) : first));
+          const After = withEffects(L, log, "After");
+          const tree = (on: boolean) => {
+            const mid = h(Mid, { on });
+            return h("section", null, h(After, null, "before"), caught ? h(B, null, mid, h(After)) : mid, h(After));
+          };
+          return [
+            (root, flush) => flush(() => root.render(tree(false))),
+            (root, flush) => flush(() => root.render(tree(true))),
+          ];
+        });
+  });
+
   test("an error no boundary catches renders the root again before it is reported", async () => {
     const mount = await stepsSame((L, log) => {
       const h = L.createElement,
