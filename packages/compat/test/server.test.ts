@@ -1721,9 +1721,9 @@ describe("Suspense", () => {
         L.createElement(
           L.Suspense,
           { fallback: L.createElement("p", null, "loading one") },
-          L.createElement(Wait, { id: "one", ms: 2 }),
-          L.createElement(L.Suspense, { fallback: "inner" }, L.createElement(Wait, { id: "two", ms: 8 })),
-          L.createElement(Wait, { id: "three", ms: 4 }, L.createElement(Wait, { id: "four", ms: 6 })),
+          L.createElement(Wait, { id: "one", ms: 20 }),
+          L.createElement(L.Suspense, { fallback: "inner" }, L.createElement(Wait, { id: "two", ms: 80 })),
+          L.createElement(Wait, { id: "three", ms: 40 }, L.createElement(Wait, { id: "four", ms: 60 })),
         ),
         L.createElement(
           "table",
@@ -1734,7 +1734,7 @@ describe("Suspense", () => {
             L.createElement(
               L.Suspense,
               { fallback: null },
-              L.createElement("tr", null, L.createElement("td", null, L.createElement(Wait, { id: "td", ms: 3 }))),
+              L.createElement("tr", null, L.createElement("td", null, L.createElement(Wait, { id: "td", ms: 30 }))),
             ),
           ),
         ),
@@ -1744,13 +1744,13 @@ describe("Suspense", () => {
           L.createElement(
             L.Suspense,
             { fallback: null },
-            L.createElement("g", null, L.createElement(Wait, { id: "g", ms: 3 })),
+            L.createElement("g", null, L.createElement(Wait, { id: "g", ms: 30 })),
           ),
         ),
         L.createElement(
           "math",
           null,
-          L.createElement(L.Suspense, { fallback: null }, L.createElement(Wait, { id: "m", ms: 3 })),
+          L.createElement(L.Suspense, { fallback: null }, L.createElement(Wait, { id: "m", ms: 30 })),
         ),
         L.createElement(
           "table",
@@ -1758,7 +1758,7 @@ describe("Suspense", () => {
           L.createElement(
             L.Suspense,
             { fallback: null },
-            L.createElement("tbody", null, L.createElement(Wait, { id: "tb", ms: 3 })),
+            L.createElement("tbody", null, L.createElement(Wait, { id: "tb", ms: 30 })),
           ),
         ),
         L.createElement(
@@ -1773,7 +1773,7 @@ describe("Suspense", () => {
               L.createElement(
                 L.Suspense,
                 { fallback: null },
-                L.createElement("td", null, L.createElement(Wait, { id: "tr", ms: 3 })),
+                L.createElement("td", null, L.createElement(Wait, { id: "tr", ms: 30 })),
               ),
             ),
           ),
@@ -1784,7 +1784,7 @@ describe("Suspense", () => {
           L.createElement(
             "colgroup",
             null,
-            L.createElement(L.Suspense, { fallback: null }, L.createElement(Wait, { id: "col", ms: 3 })),
+            L.createElement(L.Suspense, { fallback: null }, L.createElement(Wait, { id: "col", ms: 30 })),
           ),
         ),
       );
