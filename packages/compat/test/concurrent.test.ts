@@ -14,6 +14,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } fr
 
 import { FakeElement, FakeEvent, FakeNode, installFakeDocument } from "@reactre/testdom";
 
+import { __lanePhase } from "../src/core.ts";
 import * as Compat from "../src/index.ts";
 
 // biome-ignore lint: both libraries are used through one untyped interface.
@@ -197,10 +198,77 @@ function nodes(n: FakeNode, out: FakeNode[] = []): FakeNode[] {
 }
 
 /**
+ * Find where React's cycle of transition lanes is and put compat's there: transitions run before
+ * (other files run them in one library alone) move each. A probe starts two transitions, in
+ * events apart, that wait for data, then gives both their data: the second renders first only
+ * when the first got the cycle's last lane. A transition that does not wait goes between probes,
+ * so each starts three lanes on, and within ten one finds the end.
+ */
+async function alignLanes(): Promise<void> {
+  const c = new FakeElement("DIV");
+  c.isDocument = true;
+  const root = ReactClient.createRoot(c);
+  const sets: Any[] = [];
+  const order: number[] = [];
+  let bump: Any;
+  const Item = (props: { i: number }) => {
+    const [p, set] = React.useState(null);
+    sets[props.i] = set;
+    if (p !== null) React.use(p);
+    order.push(props.i);
+    return null;
+  };
+  const Bump = () => {
+    bump = React.useState(0)[1];
+    return null;
+  };
+  ReactDOM.flushSync(() =>
+    root.render(
+      React.createElement(
+        React.Suspense,
+        { fallback: null },
+        React.createElement(Item, { i: 0 }),
+        React.createElement(Item, { i: 1 }),
+        React.createElement(Bump),
+      ),
+    ),
+  );
+  const tick = async (): Promise<void> => {
+    for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0));
+  };
+  try {
+    for (let tries = 0; tries < 10; tries++) {
+      const a = deferred(),
+        b = deferred();
+      React.startTransition(() => sets[0](a.p));
+      await tick();
+      React.startTransition(() => sets[1](b.p));
+      await tick();
+      order.length = 0;
+      a.resolve();
+      b.resolve();
+      await tick();
+      if (order[0] === 1) {
+        // The first got the last lane, the second the first: React's next is the second.
+        __lanePhase(1);
+        return;
+      }
+      React.startTransition(() => bump(tries + 1));
+      await tick();
+    }
+    throw new Error("React's transition lanes were not found");
+  } finally {
+    root.unmount();
+    await tick();
+  }
+}
+
+/**
  * Runs `scene` with React and with compat and expects the same log, without the renders unless
  * `renders`. Returns compat's.
  */
 async function same(scene: (k: Kit) => Promise<void>, renders = true): Promise<string[]> {
+  await alignLanes();
   const run = async (L: Lib, createRoot: (c: Any) => Any, flushSync: (fn: () => void) => void) => {
     const c = new FakeElement("DIV");
     c.isDocument = true;

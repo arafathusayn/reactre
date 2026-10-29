@@ -7405,6 +7405,14 @@ let nextLane = 0,
   thisEvent = 0,
   actionLane = 0;
 
+/**
+ * Internal (tests): put compat's cycle of transition lanes where React's is, which every
+ * transition either library ran before moved.
+ */
+export function __lanePhase(n: number): void {
+  nextLane = n;
+}
+
 /** The lane of this event's transitions, claimed on its first (React's requestTransitionLane). */
 function eventLane(): number {
   if (thisEvent === 0) {
