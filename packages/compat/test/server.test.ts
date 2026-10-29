@@ -163,6 +163,55 @@ describe("React's production build", () => {
   });
 });
 
+describe("errors", () => {
+  // React's server builds for Node, Deno, Bun and edge runtimes throw full messages (only its
+  // browser builds minify them), and so does compat's server, its errors from compat's hooks
+  // included, though compat's client throws React's production codes.
+  test("carry React's full messages, as React's Node build throws them", () => {
+    const cases: Make[] = [
+      (L) => {
+        function Use() {
+          L.use(5);
+          return null;
+        }
+        return L.createElement(Use);
+      },
+      (L) => {
+        function Early() {
+          L.useEffectEvent(() => 1)();
+          return null;
+        }
+        return L.createElement(Early);
+      },
+      (L) => {
+        function Loop() {
+          const [n, set] = L.useState(0);
+          set(n + 1);
+          return null;
+        }
+        return L.createElement(Loop);
+      },
+      (L) => L.createElement("div", { style: "color: red" }),
+      (L) => L.createElement("div", null, { x: 1 }),
+      (L) => L.createElement("div", null, L.createElement(undefined)),
+    ];
+    const raw = (fn: () => unknown): string => {
+      try {
+        fn();
+      } catch (e) {
+        return (e as Error).message;
+      }
+      return "(nothing thrown)";
+    };
+    for (const make of cases) {
+      const message = raw(() => ReactNodeServer.renderToString(make(React)));
+      expect(message).not.toStartWith("Minified");
+      expect(message).not.toBe("(nothing thrown)");
+      expect(raw(() => Server.renderToString(make(Compat)))).toBe(message);
+    }
+  });
+});
+
 describe("entry", () => {
   test("exports React's server API, and a default object with it", () => {
     for (const k of ["renderToString", "renderToStaticMarkup", "renderToReadableStream", "resume"])

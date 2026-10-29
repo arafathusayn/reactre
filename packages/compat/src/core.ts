@@ -643,11 +643,13 @@ function kindOf(type: Any): number {
  * The message of React's production error `code`, as React's client builds it
  * (formatProdErrorMessage): a link to react.dev/errors carrying each argument, which that page
  * fills into the full message. (Where React's production client throws a full message, as
- * Children does, compat throws the same text without this.) Only code that throws or reports an
- * error calls this. Each site makes its own Error, so the error's stack starts where it is thrown,
- * as React's does.
+ * Children does, compat throws the same text without this.) During a server render the message
+ * is the full one, as React's server builds for Node, Deno, Bun and edge runtimes throw it
+ * (ServerHooks.message). Only code that throws or reports an error calls this. Each site makes
+ * its own Error, so the error's stack starts where it is thrown, as React's does.
  */
 function prodMessage(code: number, ...args: Any[]): string {
+  if (server !== null) return server.message(code, args);
   let url = "https://react.dev/errors/" + code;
   for (let i = 0; i < args.length; i++) url += (i > 0 ? "&" : "?") + "args[]=" + encodeURIComponent(args[i]);
   return (
@@ -5746,6 +5748,12 @@ export interface ServerHooks {
   thenable(t: Any): Any;
   /** useActionState: its state (a postback's, when it matches), dispatch and pending flag. */
   actionState(action: Any, initialState: Any, permalink: string | undefined): [Any, Any, boolean];
+  /**
+   * The full message of React's error `code` with `args`, for the errors a component can meet in a
+   * server render: too many re-renders (301), use() of a value it cannot read (438) and a
+   * useEffectEvent function called while rendering (440).
+   */
+  message(code: number, args: Any[]): string;
 }
 
 // The server side of the hooks while a server render calls a component, else null.

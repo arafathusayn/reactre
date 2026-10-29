@@ -31,8 +31,8 @@
 //      browser and edge builds), so the chunks are React's too.
 //
 // What differs from React (see the README for the full list): the prerender and resume APIs are
-// not supported (they throw); error messages are React's full (development) messages rather than
-// minified codes.
+// not supported (they throw). Errors carry React's full messages, as React's server builds for
+// Node, Deno, Bun and edge runtimes do; its browser builds throw minified codes.
 //
 // The file reads top down, in folding regions: HTML writing (escaping, attributes, elements,
 // resources), format and tree contexts, the request and its tasks, rendering, the work loop,
@@ -2906,6 +2906,15 @@ const serverHooks: ServerHooks = {
       t = prev;
     }
     return (lastThenable = t);
+  },
+  // React's server builds for Node, Deno, Bun and edge runtimes throw full messages; only its
+  // browser builds throw the codes compat's client throws.
+  message(code, args) {
+    return code === 438
+      ? "An unsupported type was passed to use(): " + args[0]
+      : code === 440
+        ? "A function wrapped in useEffectEvent can't be called during rendering."
+        : "Too many re-renders. React limits the number of renders to prevent an infinite loop.";
   },
 };
 
