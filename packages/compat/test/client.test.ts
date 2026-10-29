@@ -2459,6 +2459,18 @@ describe("errors", () => {
       (L: Lib) => el(L, "br", null, "x"),
       (L: Lib) => el(L, "br", null, el(L, "b", null)),
       (L: Lib) => el(L, "br", { dangerouslySetInnerHTML: { __html: "x" } }),
+      // Children that render no node.
+      (L: Lib) => el(L, "br", null, false),
+      (L: Lib) => el(L, "br", null, true),
+      (L: Lib) => el(L, "br", null, []),
+      (L: Lib) => el(L, "br", null, [null, false]),
+      (L: Lib) =>
+        el(
+          L,
+          "br",
+          null,
+          L.createElement(() => null),
+        ),
     ])
       expect(await rendersSame((L) => [el(L, "br", null), next(L)])).toHaveLength(1);
     // null children are none.

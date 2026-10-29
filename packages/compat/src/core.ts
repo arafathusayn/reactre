@@ -940,8 +940,13 @@ function sameProps(a: Any, b: Any, na: number): number {
  */
 function reconcile(p: Fiber, children: Any): void {
   const old = p.c;
-  if (children == null || typeof children === "boolean") {
+  if (children == null) {
     if (old.length) removeAll(p);
+    return;
+  }
+  if (typeof children === "boolean") {
+    if (old.length) removeAll(p);
+    else voidChildren(p);
     return;
   }
   // One element (what most components render): no arrays, no loop.
@@ -979,6 +984,7 @@ function reconcile(p: Fiber, children: Any): void {
   if (n === 0) {
     // An empty list: no lookups, one clear where the list is all there is.
     if (m) removeAll(p);
+    else voidChildren(p);
     return;
   }
   let nc: Fiber[] = NO_FIBERS,
@@ -990,7 +996,11 @@ function reconcile(p: Fiber, children: Any): void {
     // do all the way, the children array stays as it is.
     i = patchAligned(items, old, n);
     oi = alignedOld;
-    if (i === n && oi === m) return;
+    if (i === n && oi === m) {
+      // Holes only, where there were no children.
+      if (m === 0) voidChildren(p);
+      return;
+    }
     nc = old.slice(0, oi);
     // The fast paths below that touch the DOM themselves need p to be the host whose children
     // are these nodes (p === curHost); a fragment's or component's children share their host
@@ -1850,6 +1860,15 @@ function runHost(f: Fiber, old: Props | null, mount: boolean): void {
     oref = old === null ? undefined : old["ref"];
   if (ref !== oref) swapRef(f, ref, oref);
   if (mount && p.autoFocus && AUTO_FOCUS.has(f.t)) laterShown(f, () => dom.focus());
+}
+
+/**
+ * React's #137 for children that render no node (true, false, an empty list, holes) given to a
+ * void element on an update, met where reconcile finds no child to make: React throws for any
+ * children that are not null. A mount with them throws in runHost first.
+ */
+function voidChildren(p: Fiber): void {
+  if (VOID.has(p.t)) propError(p, new Error(prodMessage(137, p.t)));
 }
 
 // The elements React's client gives no children (#137), as its setInitialProperties lists them.
