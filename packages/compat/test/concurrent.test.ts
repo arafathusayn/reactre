@@ -6,10 +6,10 @@
 // it was until the data arrives. Each test runs one scene with each library, on a root apiece,
 // and expects the same log: what the components and effects write, and the markup at each point
 // the scene looks at (synchronously, after the microtasks, after a task, once all settled).
-//
-// Where a transition suspends, React renders more than compat does (the other children of a
-// boundary, and the transition again to warm it after another commit, see "What is left as it
-// is" in plans/compat-concurrent.md): those scenes compare all but the renders.
+// Renders are in the log too, those of a transition that suspends and is undone included, except
+// where React's order depends on the transition lane each transition got: React hands them out
+// in a cycle of 14 shared by every root of the page, so which of two transitions waiting at once
+// renders first depends on how many came before. Compat renders them in the order they started.
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 
@@ -508,7 +508,7 @@ describe("updates that suspend", () => {
       await task();
       snap("resolved");
       log.push("portal " + markup(out));
-    }, false));
+    }));
 
   test("a transition undone puts back the document metadata it hoisted to <head>, and only that", async () => {
     // A <head> for both libraries: React's (the fake nodes' document) and compat's (`document`).
@@ -625,7 +625,40 @@ describe("updates that suspend", () => {
       snap("urgent");
       await task();
       snap("task");
-    }, false));
+    }));
+
+  test("a transition whose updates leave state as it was renders the component, and not its children", () =>
+    same(async ({ L, log, root, flushSync, snap, task }) => {
+      let set: Any, setF: Any;
+      const Child = logs(L, log, "Child", ({ v }) => "child " + v);
+      const Plain = logs(L, log, "Plain", () => {
+        const [v, s] = L.useState(1);
+        set = s;
+        return L.createElement(Child, { v });
+      });
+      const Fwd = L.forwardRef(function Fwd(props: Any, ref: Any) {
+        const [v, s] = L.useState(1);
+        setF = s;
+        log.push(`render Fwd ${props.p} ${ref === null ? "no ref" : "ref"}`);
+        L.useLayoutEffect(() => void log.push("layout Fwd"));
+        return L.createElement(Child, { v });
+      });
+      flushSync(() =>
+        root.render(L.createElement("div", null, L.createElement(Plain), L.createElement(Fwd, { p: "p" }))),
+      );
+      // Replayed over the urgent updates made since, each transition's leaves the state as they set it.
+      L.startTransition(() => {
+        set((v: number) => v + 1);
+        setF((v: number) => v + 1);
+      });
+      flushSync(() => {
+        set(5);
+        setF(5);
+      });
+      snap("urgent");
+      await task();
+      snap("task");
+    }));
 
   test("what a transition renders around content that suspends in a shown boundary", () =>
     same(async ({ L, log, root, flushSync, snap, task }) => {
@@ -660,7 +693,7 @@ describe("updates that suspend", () => {
       d.resolve("b");
       await task();
       snap("resolved");
-    }, false));
+    }));
 
   test("two transitions on one state, started apart, render together; another waits for none", () =>
     same(async ({ L, log, root, flushSync, snap, task, micro }) => {
@@ -703,6 +736,7 @@ describe("updates that suspend", () => {
       d.resolve("bx");
       await task();
       snap("resolved");
+      // Which renders first, the first two transitions or the third, depends on their lanes.
     }, false));
 
   test("startTransition that suspends with no boundary above keeps the screen", () =>

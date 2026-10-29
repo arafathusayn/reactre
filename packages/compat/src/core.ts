@@ -4169,6 +4169,8 @@ function runFunc(f: Fiber, mount = false): void {
   } catch (e) {
     renderThrew(f, e);
     f.f |= DIRTY;
+    // A transition that will be undone renders the rest of the boundary, as React's does.
+    if (holding !== null && holding !== MUT && lanes!.skip(f, e)) return;
     throw e;
   } finally {
     cur = prevCur;
@@ -5115,6 +5117,14 @@ function suspense(f: Fiber): void {
         }
         f.s = primary;
       } else reconcile(primary, f.p.children);
+      // Content a transition's attempt went on rendering after it suspended (see skipSuspended).
+      if (shown && skipped !== null) {
+        const t = skipped.get(f);
+        if (t !== undefined) {
+          skipped.delete(f);
+          throw t;
+        }
+      }
       // Resolved: the fallback goes and the kept content is shown again.
       if (f.q !== null) {
         setHidden(primary, false);
@@ -5629,11 +5639,13 @@ function flushWork(sync: boolean): void {
   // Reentrant calls (flushSync inside an effect) leave the work to the flush already running.
   if (flushing) return;
   flushing = true;
+  let committed = false;
   try {
     for (;;) {
       routed = false;
       while (queue.length || layoutQ.length) {
         while (queue.length) {
+          committed = true;
           // Effects of the last commit run before the next render, as in React: its refs and
           // layout effects first, so its passive effects never see a ref still unset. A render
           // that threw is not committed yet: as React unwinds to the boundary within the render,
@@ -5689,6 +5701,8 @@ function flushWork(sync: boolean): void {
   } finally {
     flushing = false;
   }
+  // A transition waiting for data renders again after a commit (see waiting).
+  if (waiting && committed) lanes!.wake();
   // Updates made by the passive effects just run (or left by a throw) get a flush of their own.
   if (queue.length) flushSoon(false);
   // What flushSync left waits for the task it was queued for.
@@ -7059,6 +7073,10 @@ interface Lanes {
   act(p: PromiseLike<unknown>): void;
   /** Render the batches that are ready now (act()); whether any was. */
   flush(): boolean;
+  /** A commit: the batches waiting for data render again (see waiting). */
+  wake(): void;
+  /** A component threw in a transition's attempt: whether it is passed over (see skipSuspended). */
+  skip(f: Fiber, e: Any): boolean;
 }
 let lanes: Lanes | null = null;
 
@@ -7085,6 +7103,9 @@ let openBatch: Batch | null = null,
 let pend: Map<Hook, { b: Any; u: Any[] }> = null as Any;
 // Whether a batch renders now: a deferred value takes its new value.
 let laneRender = false;
+// Whether a batch waits for data (see attempt): a commit makes it render again, as React's
+// markRootFinished clears the suspended lanes of the root it commits.
+let waiting = false;
 
 /** A batch rendering where it can be undone (see attempt). */
 interface Held {
@@ -7098,6 +7119,25 @@ interface Held {
   readonly s: Any[];
 }
 let holding: Held | null = null;
+// The Suspense boundaries whose content suspended in a transition's attempt, with what it waits
+// for, while their other children render (see skipSuspended); null when there are none.
+let skipped: Map<Fiber, Any> | null = null;
+
+/**
+ * Component `f` threw `e` while a transition renders where it can be undone. A promise inside a
+ * boundary that shows its content makes the attempt wait, undone; React renders the boundary's
+ * other children and its fallback first (its prerendering), so here `f` renders nothing and its
+ * siblings go on, and the boundary shows its fallback once its children rendered. Returns whether
+ * `f` is passed over so.
+ */
+function skipSuspended(f: Fiber, e: Any): boolean {
+  if (!isThenable(e)) return false;
+  let b = f.r;
+  while (b !== null && b.n !== SUSPENSE && b.n !== ROOT) b = b.r;
+  if (b === null || b.n !== SUSPENSE || b.s === null || b.q !== null) return false;
+  if (!(skipped ??= new Map()).has(b)) skipped.set(b, e);
+  return true;
+}
 // What a render outside a transition holds: the user code of its mutation phase (see mutations).
 const MUT: Held = { q: [], bad: [], t: [], s: [] };
 
@@ -7162,6 +7202,7 @@ function newBatch(): Batch {
  * its suspended lanes: replayed over the update, one may not suspend now.
  */
 function unhold(): void {
+  waiting = false;
   for (const b of batches)
     if (b.w) {
       b.w = false;
@@ -7307,8 +7348,14 @@ function attempt(b: Batch, check: boolean): boolean {
     headRecords: MutationRecord[] = [];
   laneRender = flushing = true;
   try {
-    // A component whose state the updates leave as it was renders nothing new, as in React.
-    for (const h of b.h) if (rebase(h, undo)) schedule(h.f);
+    // A component whose state the updates leave as it was renders, and bails out (see bailRender).
+    const changed = new Set<Fiber>(b.f),
+      same: Any[] = [];
+    for (const h of b.h)
+      if (rebase(h, undo)) {
+        changed.add(h.f);
+        schedule(h.f);
+      } else same.push(h.f, h.f.e);
     for (let i = 0; i < b.k.length; i += 2) if (!(b.k[i].f & DEAD)) b.k[i + 1]();
     for (const f of b.f) schedule(f);
     while (queue.length) {
@@ -7323,8 +7370,17 @@ function attempt(b: Batch, check: boolean): boolean {
       q.length = 0;
       spareQueue = q;
     }
+    // Not rendered by a parent meanwhile, nor for another update.
+    for (let i = 0; i < same.length; i += 2) {
+      const f: Fiber = same[i];
+      if (f.e === same[i + 1] && !changed.has(f) && !(f.f & DEAD)) {
+        changed.add(f);
+        bailRender(f);
+      }
+    }
   } finally {
     laneRender = flushing = unwinding = false;
+    skipped = null;
     holding = null;
     if (mo !== null) {
       records = mo.takeRecords();
@@ -7392,7 +7448,7 @@ function attempt(b: Batch, check: boolean): boolean {
       fallbackShownAt = shownAt;
       if (moved) return attempt(b, false);
       // It renders again once any of what it waits for settles (React's ping).
-      b.w = true;
+      b.w = waiting = true;
       for (const t of at.bad) t.then(unhold, unhold);
       return false;
     }
@@ -7405,7 +7461,30 @@ function attempt(b: Batch, check: boolean): boolean {
   for (let i = 0; i < at.q.length; i += 2) safely(at.q[i], at.q[i + 1]);
   for (const h of b.h) if (h.f.f & DEAD) pend.delete(h);
   flushWork(false);
+  if (waiting) unhold();
   return true;
+}
+
+/**
+ * Render function component `f` whose state its updates left as it was, as React renders it
+ * before it bails out: the function runs, and its children and effects stay as they were.
+ */
+function bailRender(f: Fiber): void {
+  const prevCur = cur,
+    prevHi = hi,
+    props = f.p;
+  cur = f;
+  hi = 0;
+  try {
+    if (f.f & FORWARD) {
+      const { ref, ...rest } = props;
+      f.s(rest, ref ?? null);
+    } else f.s(props);
+  } finally {
+    f.x = null;
+    cur = prevCur;
+    hi = prevHi;
+  }
 }
 
 /**
@@ -7495,6 +7574,8 @@ export function __installConcurrent(): void {
     defer: laneDefer,
     act: laneAct,
     flush: runLanes,
+    wake: unhold,
+    skip: skipSuspended,
   };
 }
 
