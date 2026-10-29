@@ -691,8 +691,36 @@ describe("startTransition and useTransition", () => {
   });
 
   // React 19 sends an error thrown synchronously by the callback to the error boundary
-  // (startTransition's catch dispatches a rejected thenable); compat rethrows it to the caller.
-  test.todo("a transition callback that throws synchronously sends the error to the boundary");
+  // (startTransition's catch dispatches a rejected thenable), not to the caller.
+  test("a transition callback that throws synchronously sends the error to the boundary", () => {
+    let start!: (fn: () => unknown) => void;
+    function App() {
+      start = useTransition()[1];
+      return h("p", null, "app");
+    }
+    render(h(App));
+    const boom = new Error("sync");
+    expect(() =>
+      flushSync(() =>
+        start(() => {
+          throw boom;
+        }),
+      ),
+    ).not.toThrow();
+    expect(uncaught).toEqual([boom]);
+    expect(html()).toBe("");
+  });
+
+  // React's startTransition reports a callback's synchronous throw (reportGlobalError).
+  test("startTransition reports a callback that throws, instead of throwing to its caller", () => {
+    const boom = new Error("sync");
+    expect(() =>
+      startTransition(() => {
+        throw boom;
+      }),
+    ).not.toThrow();
+    expect(reported).toEqual([boom]);
+  });
 });
 
 describe("useDeferredValue", () => {

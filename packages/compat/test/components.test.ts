@@ -430,13 +430,42 @@ describe("class components", () => {
     expect(calls).toEqual(["instance", null]);
   });
 
-  // React detaches a class's ref before componentWillUnmount (commitDeletionEffectsOnFiber, case
-  // 1); classes.ts's unmount calls componentWillUnmount first, and skips the detach if it throws.
-  test.todo("a class's ref is detached before its componentWillUnmount runs");
+  // React detaches a class's ref, then calls componentWillUnmount, each on its own
+  // (commitDeletionEffectsOnFiber, case 1): one that throws leaves the other to run.
+  test("a class's ref is detached before its componentWillUnmount runs, which may throw", () => {
+    const log: string[] = [];
+    class Widget extends Component {
+      override componentWillUnmount() {
+        log.push("will unmount");
+        throw new Error("unmount");
+      }
+      override render() {
+        return h("i");
+      }
+    }
+    render(h(Widget, { ref: (v: unknown) => void log.push(v === null ? "ref null" : "ref") }));
+    render(null);
+    expect(log).toEqual(["ref", "ref null", "will unmount"]);
+  });
+
   // React 19 keeps what a callback ref returns for any fiber (commitAttachRef stores refCleanup)
-  // and calls it instead of ref(null). Compat skips that for class fibers (attachRef's
-  // `f.n !== CLASS`), whose `rx` holds setState callbacks, so the cleanup never runs.
-  test.todo("a callback ref's cleanup to a class instance runs instead of a call with null");
+  // and calls it instead of ref(null).
+  test("a callback ref's cleanup to a class instance runs instead of a call with null", () => {
+    const log: string[] = [];
+    class Widget extends Component {
+      override render() {
+        return h("i");
+      }
+    }
+    const ref = (v: unknown) => {
+      log.push(v === null ? "null" : "inst");
+      return () => void log.push("cleanup");
+    };
+    render(h(Widget, { ref }));
+    render(h(Widget, { ref: (v: unknown) => void log.push(v === null ? "null 2" : "inst 2") }));
+    render(null);
+    expect(log).toEqual(["inst", "cleanup", "inst 2", "null 2"]);
+  });
 
   test("a second install of class support keeps the one already in use", () => {
     __installClasses(() => {
@@ -800,8 +829,20 @@ describe("batching APIs", () => {
   });
 
   // React 19's unstable_batchedUpdates is `fn(a)`: updates outside an event render in a later
-  // task. Compat flushes them synchronously when the outermost call returns.
-  test.todo("unstable_batchedUpdates leaves its updates to the scheduler, as React's does");
+  // task.
+  test("unstable_batchedUpdates leaves its updates to the scheduler, as React's does", async () => {
+    let set!: (n: number) => void;
+    function App() {
+      const [n, setN] = useState(0);
+      set = setN;
+      return h("b", null, n);
+    }
+    render(h(App));
+    unstable_batchedUpdates(() => set(1), 0);
+    expect(html()).toBe("<b>0</b>");
+    await nextTask();
+    expect(html()).toBe("<b>1</b>");
+  });
 
   // React's flushSync flushes sync-lane work only (flushSyncWork): an update from a timer waits
   // for its own task. Compat's flushSync renders every queued update.

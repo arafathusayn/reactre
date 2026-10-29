@@ -3168,20 +3168,27 @@ function noClasses(type: Any): Error {
 
 /**
  * Point `ref` (a callback or an object) at `v`. A callback ref may return a cleanup function
- * (React 19); it is kept in `f.rx` and called instead of `ref(null)` on detach.
+ * (React 19); it is kept in `f.rx` (on a class's instance, whose fiber's `rx` holds setState
+ * callbacks) and called instead of `ref(null)` on detach.
  */
 function attachRef(f: Fiber, ref: Any, v: Any): void {
   if (typeof ref === "function") {
     const r = ref(v);
-    if (typeof r === "function" && f.n !== CLASS) f.rx = r;
+    if (typeof r === "function") {
+      if (f.n !== CLASS) f.rx = r;
+      else f.s[REF_CLEANUP] = r;
+    }
   } else if (ref !== null && typeof ref === "object") ref.current = v;
 }
+const REF_CLEANUP = Symbol("ref cleanup");
 
 /** Detach `ref`: run its cleanup if it returned one, else call it with null or clear `current`. */
 function detachRef(f: Fiber, ref: Any): void {
-  if (f.n !== CLASS && typeof f.rx === "function") {
-    const r = f.rx;
-    f.rx = null;
+  const own = f.n !== CLASS ? f : f.s;
+  const r = own === null ? undefined : f.n !== CLASS ? own.rx : own[REF_CLEANUP];
+  if (typeof r === "function") {
+    if (f.n !== CLASS) own.rx = null;
+    else own[REF_CLEANUP] = null;
     r();
   } else if (typeof ref === "function") ref(null);
   else if (ref !== null && typeof ref === "object") ref.current = null;
@@ -3443,6 +3450,8 @@ function unmount(f: Fiber, rm: boolean): void {
       }
       break;
     case CLASS:
+      // The ref is detached, then componentWillUnmount runs, each on its own, as React does.
+      if (f.p.ref != null) safely(f, () => detachRef(f, f.p.ref));
       if (classes !== null) safely(f, () => classes!.unmount(f));
       break;
     case PORTAL:
@@ -3705,12 +3714,8 @@ export function flushSync<T>(fn?: () => T): T {
 
 /** Run `fn` with its updates batched (they are batched anyway). */
 export function unstable_batchedUpdates<A, R>(fn: (a: A) => R, a: A): R {
-  batch++;
-  try {
-    return fn(a);
-  } finally {
-    if (--batch === 0) flushWork(true);
-  }
+  // React 19's is fn(a): updates are batched anyway, and render when the scheduler says.
+  return fn(a);
 }
 
 /**
@@ -4219,15 +4224,26 @@ function settle(t: Transition, r: Any, onError?: (e: Any) => void): void {
     r.then(fin, (e: Any) => {
       fin();
       if (onError) onError(e);
-      else reportError(e);
+      else reportUncaught(e);
     });
   else fin();
 }
 
-/** Run `fn` as a transition. Rendering is synchronous, so its updates render at once. */
+/**
+ * Run `fn` as a transition. Rendering is synchronous, so its updates render at once. An error it
+ * throws, or rejects with, is reported, as React's reportGlobalError does.
+ */
 export function startTransition(fn: () => Any): void {
   const t: Transition = { done: [], wait: [] };
-  settle(t, inTransition(t, fn));
+  let r: Any;
+  try {
+    r = inTransition(t, fn);
+  } catch (e) {
+    for (const d of t.done) d();
+    reportUncaught(e);
+    return;
+  }
+  settle(t, r);
 }
 
 /**
@@ -4246,8 +4262,10 @@ export function useTransition(): [boolean, (fn: () => Any) => void] {
       try {
         r = inTransition(t, fn);
       } catch (e) {
+        // As React's: the error goes to the component's boundary, not to the caller.
         setPending(false);
-        throw e;
+        throwTo(f, e);
+        return;
       }
       settle(t, r, (e) => throwTo(f, e));
     };

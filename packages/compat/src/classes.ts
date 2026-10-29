@@ -253,11 +253,10 @@ function support(core: ClassCore): ClassSupport {
       if (core.isRendering(f)) f.f |= RERENDER;
       else core.schedule(f);
     },
-    /** componentWillUnmount, then the ref is detached. */
+    /** componentWillUnmount (the core detached the ref before). */
     unmount(f) {
       const inst = f.s;
       if (inst !== null && typeof inst.componentWillUnmount === "function") inst.componentWillUnmount();
-      if (f.p.ref != null) core.detachRef(f, f.p.ref);
     },
   };
 
