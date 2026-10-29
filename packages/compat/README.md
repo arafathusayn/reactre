@@ -75,7 +75,7 @@ Server Components stay on React: the plugin leaves the RSC environment, and any 
 - Errors carry React's full messages rather than minified codes.
 - `onError`'s `componentStack` is React's production stack, each component's frame read from a native stack trace as React reads it, with two exceptions. A component whose first call that throws without props is `use()` of a promise gets a frame with only its name, as compat's `use()` reads a promise outside a render where React's throws. Under JavaScriptCore (Bun, Safari), a component that returns a hook's result directly, a tail call, has no frame of its own, so the frame shown is the hook's, in compat's code rather than React's. Frames are formatted as React's browser, Bun and legacy builds format them; its Node and edge builds use an `Error.prepareStackTrace` of their own, which Bun writes differently for an engine-made frame such as a class's implicit constructor.
 - `useId`'s server ids follow React's, but compat's client makes its own ids, so hydration patches the attributes that hold them.
-- Streams are chunked differently and do not wait for a slow destination to drain; the bytes are the same.
+- Stream chunks are those of one React build per entry: `renderToPipeableStream` writes as React's Node build does (4096-byte views, a long string as it is, and a pause when the writable is full until it drains), `renderToReadableStream` enqueues as its browser and edge builds do (2048-byte views). React's Bun build, which `react-dom/server` resolves to under Bun, writes each piece on its own instead. The bytes are the same.
 
 ## Size
 

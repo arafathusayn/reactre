@@ -25,8 +25,10 @@
 //      reads its defaults as before. Class components are rendered here, as React's server renders
 //      them (constructor, getDerivedStateFromProps, componentWillMount with its setState queue,
 //      render), whether or not @reactre/compat/classes is loaded.
-//   4. Output chunks are strings; the stream entries encode them as they flush. React flushes the
-//      same text in 2048- or 4096-byte views; only the chunk boundaries differ.
+//   4. Output chunks are strings; the stream entries encode them into views as they flush, as
+//      React's builds do: 4096-byte views for renderToPipeableStream, which pauses while the
+//      writable is full (React's Node build), and 2048-byte views for renderToReadableStream (its
+//      browser and edge builds), so the chunks are React's too.
 //
 // What differs from React (see the README for the full list): a promise created during render
 // (uncached) is not replayed on retry, so `use()` of one suspends again; `formState`,
@@ -2212,15 +2214,20 @@ const FLUSHED = 2;
 const ABORTED = 3;
 const ERRORED = 4;
 
-/** Where flushed HTML goes: push returns whether it has room for more. */
+/** Where flushed HTML goes, through views of bytes as React's builds write them. */
 interface Destination {
+  /** Write a chunk; whether the destination has had room for every write since the views began. */
   push(chunk: string): boolean;
+  /** Write into new views, the destination's room forgotten (a flush's start, and its middle). */
+  begin(): void;
+  /** Hand over the view written so far. */
+  complete(): void;
+  /** The end of one flush, after complete: the destination's own flush. */
+  flush(): void;
   /** The render is done: no more chunks. */
   close(): void;
   /** The render failed. */
   error(e: unknown): void;
-  /** The end of one flush: hand over what was pushed. */
-  flush(): void;
 }
 
 /** A run of output: its chunks, with the segments of nested suspended work at their positions. */
@@ -4333,6 +4340,8 @@ function flushPartiallyCompletedSegment(
 
 /** The preamble and the shell, once; then whatever completed since the last flush. */
 function flushCompletedQueues(request: Request, destination: Destination): void {
+  destination.begin();
+  let i: number;
   try {
     if (request.pendingRootTasks > 0) return;
     const root = request.completedRootSegment;
@@ -4421,7 +4430,11 @@ function flushCompletedQueues(request: Request, destination: Destination): void 
     for (const c of state.hoistableChunks) destination.push(c);
     state.hoistableChunks.length = 0;
     const rs = request.resumableState;
-    for (const boundary of request.clientRenderedBoundaries) {
+    // A destination with no room left stops the flush after the boundary that filled it; a drain
+    // flushes the rest.
+    const clientRendered = request.clientRenderedBoundaries;
+    for (i = 0; i < clientRendered.length; i++) {
+      const boundary = clientRendered[i]!;
       destination.push(state.startInlineScript);
       destination.push(">");
       if ((rs.instructions & 4) === 0) {
@@ -4435,30 +4448,26 @@ function flushCompletedQueues(request: Request, destination: Destination): void 
         destination.push(",");
         destination.push(escapeJSString(boundary.errorDigest));
       }
-      destination.push(")</script>");
+      if (!destination.push(")</script>")) return stopFlowing(request, clientRendered, i);
     }
-    request.clientRenderedBoundaries.length = 0;
-    for (const boundary of request.completedBoundaries) flushCompletedBoundary(request, destination, boundary);
-    request.completedBoundaries.length = 0;
+    clientRendered.splice(0, i);
+    const completed = request.completedBoundaries;
+    for (i = 0; i < completed.length; i++)
+      if (!flushCompletedBoundary(request, destination, completed[i]!)) return stopFlowing(request, completed, i);
+    completed.splice(0, i);
+    // Partial boundaries start new views.
+    destination.complete();
+    destination.begin();
     flushingPartialBoundaries = true;
-    for (const boundary of request.partialBoundaries) {
-      flushedByteSize = boundary.byteSize;
-      const segments = boundary.completedSegments;
-      for (const segment of segments) flushPartiallyCompletedSegment(request, destination, boundary, segment);
-      segments.length = 0;
-      const row = boundary.row;
-      if (row !== null && row.together && boundary.pendingTasks === 1) {
-        if (row.pendingTasks === 1) unblockSuspenseListRow(request, row, row.hoistables);
-        else row.pendingTasks--;
-      }
-      writeHoistablesForBoundary(destination, boundary.contentState, state);
-    }
-    request.partialBoundaries.length = 0;
+    const partial = request.partialBoundaries;
+    for (i = 0; i < partial.length; i++)
+      if (!flushPartialBoundary(request, destination, partial[i]!)) return stopFlowing(request, partial, i);
+    partial.splice(0, i);
     flushingPartialBoundaries = false;
     // Boundaries completed while flushing partial ones, written after them.
-    const large = request.completedBoundaries;
-    for (let i = 0; i < large.length; i++) flushCompletedBoundary(request, destination, large[i]!);
-    large.length = 0;
+    for (i = 0; i < completed.length; i++)
+      if (!flushCompletedBoundary(request, destination, completed[i]!)) return stopFlowing(request, completed, i);
+    completed.splice(0, i);
   } finally {
     flushingPartialBoundaries = false;
     if (
@@ -4470,13 +4479,146 @@ function flushCompletedQueues(request: Request, destination: Destination): void 
       const rs = request.resumableState;
       if (rs.hasBody) destination.push(endChunkForTag("body"));
       if (rs.hasHtml) destination.push(endChunkForTag("html"));
+      destination.complete();
       destination.flush();
       endRenderLifetime(request);
       request.status = CLOSED;
       destination.close();
       request.destination = null;
-    } else destination.flush();
+    } else {
+      destination.complete();
+      destination.flush();
+    }
   }
+}
+
+/** The destination is full after `queue[i]`: drop what was written, and wait for a drain. */
+function stopFlowing(request: Request, queue: Boundary[], i: number): void {
+  request.destination = null;
+  queue.splice(0, i + 1);
+}
+
+/** A partial boundary's completed segments and styles; false when the destination filled. */
+function flushPartialBoundary(request: Request, destination: Destination, boundary: Boundary): boolean {
+  flushedByteSize = boundary.byteSize;
+  const segments = boundary.completedSegments;
+  let i = 0;
+  for (; i < segments.length; i++)
+    if (!flushPartiallyCompletedSegment(request, destination, boundary, segments[i]!)) {
+      segments.splice(0, i + 1);
+      return false;
+    }
+  segments.splice(0, i);
+  const row = boundary.row;
+  if (row !== null && row.together && boundary.pendingTasks === 1) {
+    if (row.pendingTasks === 1) unblockSuspenseListRow(request, row, row.hoistables);
+    else row.pendingTasks--;
+  }
+  return writeHoistablesForBoundary(destination, boundary.contentState, request.renderState);
+}
+
+// The views React's builds write in. Its browser and edge builds enqueue each piece's bytes into
+// 2048-byte views, a longer piece on its own; its Node build encodes strings into 4096-byte views,
+// a string that may not fit in one (3 bytes a character) written as it is, and remembers when the
+// writable reports it is full.
+const encoder = new TextEncoder();
+
+/** renderToReadableStream's destination: React's browser build's 2048-byte views. */
+function controllerDestination(controller: ReadableByteStreamController): Destination {
+  let view = new Uint8Array(2048),
+    written = 0;
+  const enqueue = (bytes: Uint8Array<ArrayBuffer>): void => controller.enqueue(bytes);
+  return {
+    push(chunk) {
+      // A piece that surely fits is encoded in place.
+      if (chunk.length * 3 <= view.length - written) {
+        written += encoder.encodeInto(chunk, view.subarray(written)).written;
+        return true;
+      }
+      let bytes = encoder.encode(chunk);
+      if (bytes.byteLength > 2048) {
+        if (written > 0) {
+          enqueue(new Uint8Array(view.buffer, 0, written));
+          view = new Uint8Array(2048);
+          written = 0;
+        }
+        enqueue(bytes);
+        return true;
+      }
+      const room = view.length - written;
+      if (room < bytes.byteLength) {
+        if (room > 0) {
+          view.set(bytes.subarray(0, room), written);
+          bytes = bytes.subarray(room);
+        }
+        enqueue(view);
+        view = new Uint8Array(2048);
+        written = 0;
+      }
+      view.set(bytes, written);
+      written += bytes.byteLength;
+      return true;
+    },
+    begin() {
+      view = new Uint8Array(2048);
+      written = 0;
+    },
+    complete() {
+      if (written > 0) enqueue(new Uint8Array(view.buffer, 0, written));
+      written = 0;
+    },
+    flush: noop,
+    close: () => controller.close(),
+    error: (e) => controller.error(e),
+  };
+}
+
+/** renderToPipeableStream's destination: React's Node build's 4096-byte views and backpressure. */
+function writableDestination(writable: PipeableWritable): Destination {
+  let view = new Uint8Array(4096),
+    written = 0,
+    room = true;
+  const write = (chunk: Uint8Array | string): void => {
+    if (!writable.write(chunk as Any)) room = false;
+  };
+  const writeView = (): void => {
+    write(view.subarray(0, written));
+    view = new Uint8Array(4096);
+    written = 0;
+  };
+  return {
+    push(chunk) {
+      if (chunk.length === 0) return room;
+      if (chunk.length * 3 > 4096) {
+        if (written > 0) writeView();
+        write(chunk);
+        return room;
+      }
+      const r = encoder.encodeInto(chunk, view.subarray(written));
+      written += r.written;
+      if (r.read < chunk.length) {
+        writeView();
+        written = encoder.encodeInto(chunk.slice(r.read), view).written;
+      }
+      if (written === 4096) writeView();
+      return room;
+    },
+    begin() {
+      view = new Uint8Array(4096);
+      written = 0;
+      room = true;
+    },
+    complete() {
+      if (written > 0) writable.write(view.subarray(0, written));
+      written = 0;
+      room = true;
+    },
+    flush() {
+      if (typeof writable.flush === "function") writable.flush();
+    },
+    close: () => writable.end(),
+    error: (e) => (typeof writable.destroy === "function" ? writable.destroy(e) : writable.end()),
+  };
 }
 
 /** Attach a destination and flush what is ready; a render that failed fails it. */
@@ -4556,8 +4698,10 @@ function renderToStringImpl(
       result += chunk;
       return true;
     },
-    close: noop,
+    begin: noop,
+    complete: noop,
     flush: noop,
+    close: noop,
     error(e) {
       didFatal = true;
       fatal = e;
@@ -4614,7 +4758,6 @@ export function renderToReadableStream(
       onAllReady = res;
       onFatalError = rej;
     });
-    const encoder = new TextEncoder();
     const request: Request = createRequest(children, {
       legacy: false,
       generateStaticMarkup: false,
@@ -4622,23 +4765,12 @@ export function renderToReadableStream(
       progressiveChunkSize: options?.progressiveChunkSize,
       onAllReady,
       onShellReady() {
-        let buffer = "";
+        let destination: Destination | undefined;
         const stream = new ReadableStream<Uint8Array>(
           {
             type: "bytes",
             pull(controller: ReadableByteStreamController) {
-              startFlowing(request, {
-                push(chunk) {
-                  buffer += chunk;
-                  return true;
-                },
-                flush() {
-                  if (buffer !== "") controller.enqueue(encoder.encode(buffer));
-                  buffer = "";
-                },
-                close: () => controller.close(),
-                error: (e) => controller.error(e),
-              });
+              startFlowing(request, (destination ??= controllerDestination(controller)));
             },
             cancel(reason: unknown) {
               request.destination = null;
@@ -4665,7 +4797,8 @@ export function renderToReadableStream(
 
 /** The writable renderToPipeableStream pipes to: a Node stream.Writable, or anything shaped like one. */
 export interface PipeableWritable {
-  write(chunk: Uint8Array): unknown;
+  /** Takes a chunk (bytes, or a string too long for one of React's views); false when it is full. */
+  write(chunk: Uint8Array | string): unknown;
   end(): unknown;
   destroy?(error?: unknown): unknown;
   flush?(): unknown;
@@ -4703,21 +4836,8 @@ export function renderToPipeableStream(
     pipe(writable) {
       if (started) throw new Error("React currently only supports piping to one writable stream.");
       started = true;
-      const encoder = new TextEncoder();
-      let buffer = "";
-      const destination: Destination = {
-        push(chunk) {
-          buffer += chunk;
-          return true;
-        },
-        flush() {
-          if (buffer !== "") writable.write(encoder.encode(buffer));
-          buffer = "";
-          if (typeof writable.flush === "function") writable.flush();
-        },
-        close: () => writable.end(),
-        error: (e) => (typeof writable.destroy === "function" ? writable.destroy(e) : writable.end()),
-      };
+      const destination = writableDestination(writable);
+      safelyEmitEarlyPreloads(request, request.pendingRootTasks === 0);
       startFlowing(request, destination);
       writable.on("drain", () => startFlowing(request, destination));
       writable.on("error", () => {

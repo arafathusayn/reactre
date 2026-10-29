@@ -1425,6 +1425,18 @@ describe("Suspense", () => {
     await same(make, { onError: () => 42 });
   });
 
+  test("unstable_externalRuntimeSrc changes nothing, as React's production build ignores it", async () => {
+    const make: Make = (L) => {
+      let p: Any;
+      const Late = (): Any => L.use((p ??= later("late")));
+      return L.createElement("div", null, L.createElement(L.Suspense, { fallback: "f" }, L.createElement(Late)));
+    };
+    const options = { unstable_externalRuntimeSrc: "/runtime.js" };
+    expect(await streamAll(Server, make(Compat), options)).toBe(await streamAll(ReactServer, make(React), options));
+    expect(await pipeAll(Server, make(Compat), options)).toBe(await pipeAll(ReactNodeServer, make(React), options));
+    expect(await streamAll(Server, make(Compat), options)).toBe(await streamAll(Server, make(Compat)));
+  });
+
   test("the default onError logs to the console", async () => {
     const make: Make = (L) => {
       const Boom = (): never => {
@@ -2896,5 +2908,155 @@ describe("component stacks", () => {
           .pipe(writable);
       });
     expect(await run(Server, Compat)).toEqual(await run(ReactNodeServer, React));
+  });
+});
+
+describe("stream chunks and backpressure", () => {
+  /** A chunk as the test sees it: its type and its text. */
+  const show = (c: Any): string =>
+    (typeof c === "string" ? "s:" : "b:") + (typeof c === "string" ? c : new TextDecoder().decode(c));
+
+  // Long text, text that crosses views with multibyte characters, attributes, inner HTML, and
+  // content that streams in later, with the scripts that put it in place. The later content
+  // waits for `open()`, called once the shell is out, so both servers flush the same way.
+  let open: () => void = () => {};
+  // React's browser build enqueues its view transition script, a shared constant, as it is, and a
+  // byte stream takes over (detaches) what it is given, so the readable test leaves it out.
+  let transition = true;
+  const make: Make = (L) => {
+    const p = new Promise<void>((resolve) => (open = resolve));
+    const Late = ({ n }: Any): Any => {
+      L.use(p);
+      return L.createElement("section", { title: "é".repeat(700 + n) }, "ü".repeat(1500), "x".repeat(4100));
+    };
+    return L.createElement(
+      "div",
+      null,
+      "a".repeat(1300),
+      "é".repeat(2000),
+      L.createElement("p", { "data-long": "y".repeat(5000) }, "short"),
+      L.createElement("div", { dangerouslySetInnerHTML: { __html: "<b>" + "z".repeat(9000) + "</b>" } }),
+      Array.from({ length: 2000 }, (_, i) => L.createElement("i", { key: i }, i)),
+      Array.from({ length: 12 }, (_, i) => L.createElement("u", { key: i }, "é".repeat(600 + i))),
+      L.createElement(
+        transition ? Symbol.for("react.view_transition") : L.Fragment,
+        null,
+        L.createElement(L.Suspense, { fallback: "f1" }, L.createElement(Late, { n: 1 })),
+      ),
+      L.createElement(L.Suspense, { fallback: "f2" }, L.createElement(Late, { n: 2 })),
+      L.createElement(L.Suspense, { fallback: "f3" }, L.createElement("b", null, L.createElement(Late, { n: 3 }))),
+    );
+  };
+
+  test("renderToPipeableStream writes React's Node build's chunks: 4096-byte views and long strings", async () => {
+    const writes = (server: Any, L: Lib): Promise<string[]> =>
+      new Promise((resolve) => {
+        const seen: string[] = [];
+        const writable = {
+          write: (c: Any) => (seen.push(show(c)), true),
+          end: () => resolve(seen),
+          flush: () => void seen.push("flush"),
+          on: () => writable,
+        };
+        const s = server.renderToPipeableStream(make(L), {
+          onShellReady() {
+            s.pipe(writable);
+            open();
+          },
+        });
+      });
+    const expected = await writes(ReactNodeServer, React);
+    expect(expected.length).toBeGreaterThan(10);
+    expect(await writes(Server, Compat)).toEqual(expected);
+  });
+
+  test("renderToReadableStream enqueues React's browser build's chunks: 2048-byte views and long pieces", async () => {
+    const chunks = async (server: Any, L: Lib): Promise<string[]> => {
+      const stream = await server.renderToReadableStream(make(L));
+      const seen: string[] = [];
+      const reader = stream.getReader();
+      for (let r = await reader.read(); !r.done; r = await reader.read()) {
+        seen.push(show(r.value));
+        open();
+      }
+      return seen;
+    };
+    transition = false;
+    const expected = await chunks(ReactServer, React);
+    expect(expected.length).toBeGreaterThan(10);
+    expect(await chunks(Server, Compat)).toEqual(expected);
+    transition = true;
+  });
+
+  test("renderToPipeableStream stops writing when the writable is full, until it drains", async () => {
+    // Boundaries that complete together, and errored ones, each a script: a full writable stops
+    // the flush after the one that filled it.
+    const many: Make = (L) => {
+      let p: Any, q: Any;
+      const Late = ({ n }: Any): Any => {
+        L.use((p ??= later(null, 5)));
+        if (n % 3 === 0) throw new Error("boom " + n);
+        return L.createElement("p", null, String(n).repeat(3000));
+      };
+      // A boundary whose first part completes before its second: its part streams in alone.
+      const Later = (): Any => L.use((q ??= later("last", 30)));
+      return L.createElement(
+        "div",
+        null,
+        Array.from({ length: 6 }, (_, n) =>
+          L.createElement(L.Suspense, { key: n, fallback: "f" + n }, L.createElement(Late, { n })),
+        ),
+        L.createElement(
+          L.Suspense,
+          { fallback: "partial" },
+          L.createElement("p", null, L.createElement(Late, { n: 7 })),
+          L.createElement("p", null, L.createElement(Late, { n: 8 })),
+          L.createElement(Later),
+        ),
+      );
+    };
+    const run = (server: Any, L: Lib, full: (i: number) => boolean): Promise<string[]> =>
+      new Promise((resolve) => {
+        const seen: string[] = [];
+        let drain: () => void = () => {};
+        let i = 0,
+          ended = false;
+        const writable = {
+          write: (c: Any): boolean => {
+            seen.push(show(c));
+            if (!full(i++)) return true;
+            seen.push("full");
+            setTimeout(() => ended || (seen.push("drain"), drain()), 2);
+            return false;
+          },
+          end: () => ((ended = true), resolve(seen)),
+          on: (name: string, fn: () => void) => (name === "drain" && (drain = fn), writable),
+        };
+        const s = server.renderToPipeableStream(many(L), {
+          onShellReady: () => s.pipe(writable),
+          onError: () => {},
+        });
+      });
+    for (const full of [() => true, (i: number) => i % 2 === 1, (i: number) => i === 3]) {
+      const expected = await run(ReactNodeServer, React, full);
+      expect(expected).toContain("drain");
+      expect(await run(Server, Compat, full)).toEqual(expected);
+    }
+  });
+
+  test("piping before the work starts gives onHeaders what is hinted by then", async () => {
+    const run = (server: Any, L: Lib): Promise<string> =>
+      new Promise((resolve) => {
+        const seen: string[] = [];
+        const writable = { write: () => true, end: () => resolve(seen.join("|")), on: () => writable };
+        function Hints(): Any {
+          dom(L).preconnect("https://late.example");
+          return "x";
+        }
+        server
+          .renderToPipeableStream(L.createElement(Hints), { onHeaders: (h: Any) => void seen.push(JSON.stringify(h)) })
+          .pipe(writable);
+      });
+    expect(await run(Server, Compat)).toBe(await run(ReactNodeServer, React));
   });
 });
