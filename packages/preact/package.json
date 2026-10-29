@@ -1,0 +1,62 @@
+{
+  "name": "@reactre/preact",
+  "version": "0.0.1",
+  "description": "Preact's API and semantics on reactre's compiled templates: smaller and faster than Preact, with a JSX compiler.",
+  "keywords": [
+    "reactre",
+    "preact",
+    "react",
+    "compat",
+    "jsx",
+    "templates"
+  ],
+  "homepage": "https://github.com/arafathusayn/reactre/tree/main/packages/preact#readme",
+  "bugs": "https://github.com/arafathusayn/reactre/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/arafathusayn/reactre.git",
+    "directory": "packages/preact"
+  },
+  "license": "Apache-2.0",
+  "author": "Arafat Husayn",
+  "type": "module",
+  "sideEffects": [
+    "./src/engine.ts",
+    "./src/hooks.ts",
+    "./src/compat.ts",
+    "./dist/*.js"
+  ],
+  "exports": {
+    "./core": {
+      "types": "./src/core.ts",
+      "bun": "./src/core.ts",
+      "default": "./dist/core.js"
+    },
+    "./compat": {
+      "types": "./src/compat.ts",
+      "bun": "./src/compat.ts",
+      "default": "./dist/compat.js"
+    },
+    "./jsx-runtime": {
+      "types": "./src/jsx-runtime.ts",
+      "bun": "./src/jsx-runtime.ts",
+      "default": "./dist/jsx-runtime.js"
+    },
+    "./compiler": {
+      "types": "./src/compiler.ts",
+      "bun": "./src/compiler.ts",
+      "default": "./dist/compiler.js"
+    }
+  },
+  "files": [
+    "src",
+    "dist",
+    "NOTICE"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && bun build src/core.ts src/compat.ts src/jsx-runtime.ts --outdir dist --target browser --format esm --splitting --chunk-naming \"chunk-[hash].[ext]\" --packages external && bun build src/compiler.ts --outdir dist --target node --format esm --packages external"
+  },
+  "dependencies": {
+    "@reactre/compiler": "workspace:*"
+  }
+}

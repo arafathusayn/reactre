@@ -22,6 +22,14 @@
         "react-dom": "catalog:",
       },
     },
+    "apps/preact-compat": {
+      "name": "preact-compat-check",
+      "dependencies": {
+        "@reactre/preact": "workspace:*",
+        "preact": "11.1.0",
+        "puppeteer-core": "catalog:",
+      },
+    },
     "apps/profiling": {
       "name": "profiling",
       "dependencies": {
@@ -210,6 +218,13 @@
         "rollup": "catalog:",
         "vite": "catalog:",
         "webpack": "catalog:",
+      },
+    },
+    "packages/preact": {
+      "name": "@reactre/preact",
+      "version": "0.0.1",
+      "dependencies": {
+        "@reactre/compiler": "workspace:*",
       },
     },
     "packages/testdom": {
@@ -976,6 +991,8 @@
     "@reactre/dom": ["@reactre/dom@workspace:packages/dom"],
 
     "@reactre/plugin": ["@reactre/plugin@workspace:packages/plugin"],
+
+    "@reactre/preact": ["@reactre/preact@workspace:packages/preact"],
 
     "@reactre/testdom": ["@reactre/testdom@workspace:packages/testdom"],
 
@@ -2008,6 +2025,10 @@
     "postcss-value-parser": ["postcss-value-parser@4.2.0", "", {}, "sha512-1NNCs6uurfkVbeXG4S8JFT9t19m45ICnif8zWLd5oPSZ50QnwMfK+H3jv408d4jw/7Bttv5axS5IiHoLaVNHeQ=="],
 
     "potpack": ["potpack@2.1.0", "", {}, "sha512-pcaShQc1Shq0y+E7GqJqvZj8DTthWV1KeHGdi0Z6IAin2Oi3JnLCOfwnCo84qc+HAp52wT9nK9H7FAJp5a44GQ=="],
+
+    "preact": ["preact@11.1.0", "", { "peerDependencies": { "preact-render-to-string": ">=6.7.0" }, "optionalPeers": ["preact-render-to-string"] }, "sha512-hz1VsjWx5pSYPDVEzb9w+XyOmQpP1qW/ZEaMiYm+C8ykJr8KP+TKGZIbCW0QmZ/Yr/jg3XkZoziEWn9iWHZ9Mw=="],
+
+    "preact-compat-check": ["preact-compat-check@workspace:apps/preact-compat"],
 
     "prismjs": ["prismjs@1.30.0", "", {}, "sha512-DEvV2ZF2r2/63V+tK8hQvrR2ZGn10srHbXviTlcv7Kpzw8jWiNTqbVgjO3IY8RxrrOUF8VPMQQFysYYYv0YZxw=="],
 

@@ -1,0 +1,10 @@
+{
+  "name": "preact-compat-check",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@reactre/preact": "workspace:*",
+    "preact": "11.1.0",
+    "puppeteer-core": "catalog:"
+  }
+}
