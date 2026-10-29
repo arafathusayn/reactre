@@ -49,7 +49,13 @@ async function bundle(entry: string, spec: string): Promise<string> {
       ...(extras.includes("compiler") ? [reactreCompatCompiler()] : []),
       reactAlias(runtime, { classes: extras.includes("classes") }),
     ],
-    define: { "process.env.NODE_ENV": JSON.stringify("production") },
+    // A classic script cannot hold `import.meta`, which some libraries read: for Vite's mode, or
+    // pdf.js for paths it uses only under Node.
+    define: {
+      "process.env.NODE_ENV": JSON.stringify("production"),
+      "import.meta.env": "undefined",
+      "import.meta.url": JSON.stringify("about:blank"),
+    },
   });
   if (!r.success) throw new Error(r.logs.join("\n"));
   return await r.outputs[0]!.text();

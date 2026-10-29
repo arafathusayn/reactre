@@ -1,5 +1,5 @@
-// Runs every scenario in ./cases.tsx and ./libraries.tsx in order and leaves a transcript per
-// scenario in window.__results for run.ts to compare.
+// Runs every scenario in ./cases.tsx, ./libraries.tsx and ./more-libraries.tsx in order and leaves a
+// transcript per scenario in window.__results for run.ts to compare.
 //
 // The same page is built once per runtime, so this harness must not depend on any runtime's
 // specifics: it records only what a user could see, the logged values and the DOM's HTML.
@@ -7,6 +7,7 @@
 
 import { cases, type T } from "./cases.tsx";
 import { libraryCases } from "./libraries.tsx";
+import { moreLibraryCases } from "./more-libraries.tsx";
 
 declare global {
   interface Window {
@@ -29,15 +30,16 @@ const settle = async (): Promise<void> => {
 /** Runs each scenario on a fresh body and collects its transcript. */
 async function main(): Promise<void> {
   const results: Record<string, string[]> = {};
-  for (const [name, run] of Object.entries({ ...cases, ...libraryCases })) {
+  for (const [name, run] of Object.entries({ ...cases, ...libraryCases, ...moreLibraryCases })) {
     // run.ts --only: just the scenarios whose names contain one of the comma-separated texts.
     if (window.__only !== undefined && !window.__only.split(",").some((s) => name.includes(s))) continue;
     const out: string[] = (results[name] = []);
     // useId values follow each runtime's own scheme (they only have to be
-    // unique and stable), so they are numbered by first appearance.
+    // unique and stable), so they are numbered by first appearance. react-aria adds a random
+    // number per page load to its ids, which is dropped.
     const ids = new Map<string, string>();
     const norm = (s: string) =>
-      s.replace(/_[rR]_[0-9a-z]+_|«[rR][0-9a-z]+»|:[rR][0-9a-z]+:/g, (id) => {
+      s.replace(/react-aria\d+-/g, "react-aria-").replace(/_[rR]_[0-9a-z]+_|«[rR][0-9a-z]+»|:[rR][0-9a-z]+:/g, (id) => {
         let v = ids.get(id);
         if (v === undefined) ids.set(id, (v = "<id" + ids.size + ">"));
         return v;

@@ -1,6 +1,6 @@
-// Scenarios with the 25 React libraries npm downloads most (weekly downloads, one package per
-// project, libraries an app imports itself; not dependencies of other libraries, frameworks,
-// renderers, build or test tools):
+// Scenarios with the first 25 of the React libraries npm downloads most (weekly downloads, one
+// package per project, libraries an app imports itself; not dependencies of other libraries,
+// frameworks, renderers, build or test tools):
 //
 //   2026-10-27, the first ten: lucide-react, @radix-ui/react-dialog, zustand,
 //   @tanstack/react-query, react-router, framer-motion, recharts, react-hook-form, sonner and
@@ -71,26 +71,26 @@ import { type T, type } from "./cases.tsx";
 // #region Helpers
 
 /** Resolves after `ms` milliseconds, for library work scheduled on timers. */
-const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+export const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /**
  * Resolves after `n` animation frames, for library work that ResizeObserver callbacks and
  * animation frames schedule: a step that only waits for timers could read the page before that
  * work runs, on either runtime.
  */
-const frames = (n: number): Promise<void> =>
+export const frames = (n: number): Promise<void> =>
   new Promise((r) => (n > 0 ? requestAnimationFrame(() => void frames(n - 1).then(r)) : r()));
 
 /** Renders `el` into the scenario's container and flushes it, so the mount is in the DOM at once. */
-function mount(t: T, el: React.ReactNode): void {
+export function mount(t: T, el: React.ReactNode): void {
   const r = createRoot(t.root);
   flushSync(() => r.render(el));
 }
 
 /** A bubbling, cancelable keydown of key `k` on `el`, as a keyboard press sends it. */
-const key = (el: Element, k: string) =>
+export const key = (el: Element, k: string) =>
   el.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true }));
 /** The focused element as "tag:text", or "body" when nothing has focus. */
-const active = () => {
+export const active = () => {
   const a = document.activeElement as HTMLElement | null;
   return a === null || a === document.body ? "body" : a.nodeName.toLowerCase() + ":" + (a.textContent ?? "");
 };
