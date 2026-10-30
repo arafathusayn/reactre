@@ -74,7 +74,16 @@ export interface CompatOptions {
    * (React's transition lanes) are on unless listed here.
    */
   readonly exclude?: readonly string[];
+  /**
+   * The package `react` resolves to: `"@reactre/compat"` (the default), or
+   * `"@reactre/full-compat"`, the same with React's time slicing (a transition's render yields to
+   * the page every 5 ms), whose check costs on every render. The app depends on the one it names.
+   */
+  readonly package?: CompatPackage;
 }
+
+/** The packages compat mode can resolve `react` to. */
+export type CompatPackage = "@reactre/compat" | "@reactre/full-compat";
 
 /** Options for the plugin. */
 export interface ReactreOptions {
@@ -93,11 +102,14 @@ export interface ReactreOptions {
 
 // #region The plugin
 
-/** @reactre/compat's client entries and feature modules, which the module written for an app's options imports. */
-const COMPAT = /^@reactre\/compat(?:\/core|\/features\/[a-zA-Z]+)?$/;
+/**
+ * @reactre/compat's (or @reactre/full-compat's) client entries and feature modules, which the
+ * module written for an app's options imports.
+ */
+const COMPAT = /^@reactre\/(?:full-)?compat(?:\/core|\/features\/[a-zA-Z]+)?$/;
 
 /** The requests the plugin resolves: `react`, `react-dom` and their subpaths, and compat's client entries. */
-const REQUEST = /^(?:react(?:-dom)?(?:\/.*)?|@reactre\/compat(?:\/core|\/features\/[a-zA-Z]+)?)$/;
+const REQUEST = /^(?:react(?:-dom)?(?:\/.*)?|@reactre\/(?:full-)?compat(?:\/core|\/features\/[a-zA-Z]+)?)$/;
 
 /** The modules the API scan reads. */
 const SCRIPT = /\.[cm]?[jt]sx?(?:$|\?)/;
@@ -109,16 +121,14 @@ const OWN = Symbol("@reactre/plugin");
 const SERVER = /^react-dom\/(?:server|static)(?:\.(?:browser|edge|node|bun))?(?:\.js)?$/;
 
 /**
- * The compat entry for a request SERVER matches: for the bare `react-dom/server` and
- * `react-dom/static`, compat's of the same name, whose export conditions pick the build as
- * react-dom's do; for a named build, compat's entry for it (React's Bun build throws as its edge
+ * The entry of compat package `pkg` for a request SERVER matches: for the bare `react-dom/server`
+ * and `react-dom/static`, the package's of the same name, whose export conditions pick the build
+ * as react-dom's do; for a named build, its entry for it (React's Bun build throws as its edge
  * build does).
  */
-function serverEntry(id: string): string {
+function serverEntry(id: string, pkg: CompatPackage): string {
   const [, entry, build] = /^react-dom\/(server|static)(?:\.(browser|edge|node|bun))?/.exec(id)!;
-  return build === undefined
-    ? "@reactre/compat/" + entry
-    : "@reactre/compat/server." + (build === "bun" ? "edge" : build);
+  return build === undefined ? `${pkg}/${entry}` : `${pkg}/server.` + (build === "bun" ? "edge" : build);
 }
 
 /** The export condition React Server Components resolve with. */
@@ -136,6 +146,7 @@ export const reactre: UnpluginInstance<ReactreOptions | undefined, boolean> = cr
 >((options = {}, meta) => {
   const compat = options.compat === true ? {} : options.compat === false ? undefined : options.compat;
   const compile = compat === undefined || compat.compile !== false;
+  const pkg: CompatPackage = compat?.package ?? "@reactre/compat";
   // The APIs and behaviours that are on. All of them is @reactre/compat; anything off, class
   // support included, is a module written for the options (./api.ts), built on
   // @reactre/compat/core with the feature modules of what is on.
@@ -152,9 +163,9 @@ export const reactre: UnpluginInstance<ReactreOptions | undefined, boolean> = cr
   const narrowed = KEYS.some((k) => !on.has(k) && k !== "Component" && k !== "PureComponent");
   let entry: string | undefined;
   /** What `react` resolves to: the package entry, or the module written for the options. */
-  const client = (): string => (custom ? (entry ??= writeEntry(root, entrySource(on))) : "@reactre/compat");
+  const client = (): string => (custom ? (entry ??= writeEntry(root, entrySource(on, pkg))) : pkg);
   /** What a request for `react`, one of its subpaths, or a compat entry resolves to. */
-  const target = (id: string): string => (SERVER.test(id) ? serverEntry(id) : COMPAT.test(id) ? id : client());
+  const target = (id: string): string => (SERVER.test(id) ? serverEntry(id, pkg) : COMPAT.test(id) ? id : client());
   /** Throws where `code` uses an API the options switch off. */
   const scan = (code: string, id: string): null => {
     if (!code.includes("react")) return null;
@@ -165,7 +176,7 @@ export const reactre: UnpluginInstance<ReactreOptions | undefined, boolean> = cr
   // The app's root, where Vite says, else the working directory.
   let root = process.cwd();
   /** The directory a request from `importer` resolves the target from (see `baseFor`). */
-  const base = (importer: string | undefined): string => baseFor(importer, root);
+  const base = (importer: string | undefined): string => baseFor(importer, root, pkg);
   // Rollup, Rolldown and Vite: the bundler resolves the target, with its own conditions.
   const resolveId = {
     filter: { id: REQUEST },
@@ -353,30 +364,31 @@ function replaceReact(
 /** The plugin's own directory, which reaches @reactre/compat: the plugin depends on it. */
 const SELF = dirname(fileURLToPath(import.meta.url));
 
-/** Whether `dir`, or a directory above it, has node_modules/@reactre/compat. By directory, cached. */
+/** Whether `dir`, or a directory above it, has node_modules/`pkg`. By package and directory, cached. */
 const reachable = new Map<string, boolean>();
-function reaches(dir: string): boolean {
-  let r = reachable.get(dir);
+function reaches(dir: string, pkg: CompatPackage): boolean {
+  const key = pkg + "\0" + dir;
+  let r = reachable.get(key);
   if (r === undefined) {
     const up = dirname(dir);
-    r = existsSync(join(dir, "node_modules", "@reactre", "compat")) || (up !== dir && reaches(up));
-    reachable.set(dir, r);
+    r = existsSync(join(dir, "node_modules", pkg)) || (up !== dir && reaches(up, pkg));
+    reachable.set(key, r);
   }
   return r;
 }
 
 /**
- * The directory to resolve @reactre/compat from, for a request from `importer`: the importer's
- * own, else the app's root, else the plugin's. A dependency installed in isolation, as Bun and
- * pnpm install them, sees only its own dependencies; resolved from its directory, `react` would
- * find nothing, or React itself. Every module then gets the copy the app's own files get.
+ * The directory to resolve compat package `pkg` from, for a request from `importer`: the
+ * importer's own, else the app's root, else the plugin's. A dependency installed in isolation, as
+ * Bun and pnpm install them, sees only its own dependencies; resolved from its directory, `react`
+ * would find nothing, or React itself. Every module then gets the copy the app's own files get.
  */
-export function baseFor(importer: string | undefined, root: string): string {
+export function baseFor(importer: string | undefined, root: string, pkg: CompatPackage = "@reactre/compat"): string {
   if (importer !== undefined && !importer.startsWith("\0")) {
     const dir = dirname(importer);
-    if (reaches(dir)) return dir;
+    if (reaches(dir, pkg)) return dir;
   }
-  return reaches(root) ? root : SELF;
+  return reaches(root, pkg) ? root : SELF;
 }
 
 function toArray(pattern: RegExp | readonly RegExp[]): RegExp[] {

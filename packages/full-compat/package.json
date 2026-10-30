@@ -1,0 +1,95 @@
+{
+  "name": "@reactre/full-compat",
+  "version": "0.0.2",
+  "description": "@reactre/compat with React's time slicing: a transition's render yields to the page every 5 ms, as React's concurrent render does.",
+  "keywords": [
+    "reactre",
+    "react",
+    "react-dom",
+    "compat",
+    "concurrent",
+    "time-slicing"
+  ],
+  "homepage": "https://github.com/arafathusayn/reactre/tree/main/packages/full-compat#readme",
+  "bugs": "https://github.com/arafathusayn/reactre/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/arafathusayn/reactre.git",
+    "directory": "packages/full-compat"
+  },
+  "license": "Apache-2.0",
+  "author": "Arafat Husayn",
+  "type": "module",
+  "sideEffects": [
+    "./src/index.ts",
+    "./src/core.ts",
+    "./src/slicing.ts",
+    "./src/features/*.ts",
+    "./dist/index.js",
+    "./dist/core.js",
+    "./dist/features/*.js",
+    "./dist/chunk-*.js"
+  ],
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "bun": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./core": {
+      "types": "./src/core.ts",
+      "bun": "./src/core.ts",
+      "default": "./dist/core.js"
+    },
+    "./features/*": {
+      "types": "./src/features/*.ts",
+      "bun": "./src/features/*.ts",
+      "default": "./dist/features/*.js"
+    },
+    "./server": {
+      "types": "./src/server.ts",
+      "workerd": "./dist/server.edge.js",
+      "edge-light": "./dist/server.edge.js",
+      "worker": "./dist/server.browser.js",
+      "browser": "./dist/server.browser.js",
+      "bun": "./src/server.edge.ts",
+      "default": "./dist/server.js"
+    },
+    "./static": {
+      "types": "./src/server.ts",
+      "workerd": "./dist/server.edge.js",
+      "edge-light": "./dist/server.edge.js",
+      "deno": "./dist/server.browser.js",
+      "worker": "./dist/server.browser.js",
+      "browser": "./dist/server.browser.js",
+      "bun": "./src/server.ts",
+      "default": "./dist/server.js"
+    },
+    "./server.node": {
+      "types": "./src/server.ts",
+      "bun": "./src/server.ts",
+      "default": "./dist/server.js"
+    },
+    "./server.browser": {
+      "types": "./src/server.browser.ts",
+      "bun": "./src/server.browser.ts",
+      "default": "./dist/server.browser.js"
+    },
+    "./server.edge": {
+      "types": "./src/server.edge.ts",
+      "bun": "./src/server.edge.ts",
+      "default": "./dist/server.edge.js"
+    }
+  },
+  "files": [
+    "src",
+    "dist"
+  ],
+  "scripts": {
+    "build": "bun build.ts"
+  },
+  "dependencies": {
+    "@reactre/compat": "workspace:*",
+    "@reactre/dom": "workspace:*"
+  }
+}

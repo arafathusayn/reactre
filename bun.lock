@@ -198,6 +198,14 @@
       "name": "@reactre/dom",
       "version": "0.0.2",
     },
+    "packages/full-compat": {
+      "name": "@reactre/full-compat",
+      "version": "0.0.2",
+      "dependencies": {
+        "@reactre/compat": "workspace:*",
+        "@reactre/dom": "workspace:*",
+      },
+    },
     "packages/plugin": {
       "name": "@reactre/plugin",
       "version": "0.0.2",
@@ -210,6 +218,7 @@
       },
       "devDependencies": {
         "@reactre/core": "workspace:*",
+        "@reactre/full-compat": "workspace:*",
         "@rollup/plugin-node-resolve": "catalog:",
         "@rspack/core": "catalog:",
         "esbuild": "catalog:",
@@ -1003,6 +1012,8 @@
     "@reactre/core": ["@reactre/core@workspace:packages/core"],
 
     "@reactre/dom": ["@reactre/dom@workspace:packages/dom"],
+
+    "@reactre/full-compat": ["@reactre/full-compat@workspace:packages/full-compat"],
 
     "@reactre/plugin": ["@reactre/plugin@workspace:packages/plugin"],
 

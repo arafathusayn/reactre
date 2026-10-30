@@ -30,25 +30,25 @@ async function resolveWith(plugin: Any, id: string): Promise<{ asked: string | n
 }
 
 /** The ids the redirect is checked with, and their targets (the client build is `client`). */
-const targets = (client: string): [string, string][] => [
+const targets = (client: string, pkg = "@reactre/compat"): [string, string][] => [
   ["react", client],
   ["react/jsx-runtime", client],
   ["react-dom", client],
   ["react-dom/client", client],
   // The bare forms: compat's entries whose export conditions pick the build, as react-dom's do.
-  ["react-dom/server", "@reactre/compat/server"],
-  ["react-dom/server.js", "@reactre/compat/server"],
-  ["react-dom/static", "@reactre/compat/static"],
-  ["react-dom/static.js", "@reactre/compat/static"],
+  ["react-dom/server", pkg + "/server"],
+  ["react-dom/server.js", pkg + "/server"],
+  ["react-dom/static", pkg + "/static"],
+  ["react-dom/static.js", pkg + "/static"],
   // A named build: compat's entry for it (React's Bun build throws as its edge build does).
-  ["react-dom/server.browser", "@reactre/compat/server.browser"],
-  ["react-dom/server.browser.js", "@reactre/compat/server.browser"],
-  ["react-dom/static.browser", "@reactre/compat/server.browser"],
-  ["react-dom/server.edge", "@reactre/compat/server.edge"],
-  ["react-dom/static.edge", "@reactre/compat/server.edge"],
-  ["react-dom/server.bun", "@reactre/compat/server.edge"],
-  ["react-dom/server.node", "@reactre/compat/server.node"],
-  ["react-dom/static.node", "@reactre/compat/server.node"],
+  ["react-dom/server.browser", pkg + "/server.browser"],
+  ["react-dom/server.browser.js", pkg + "/server.browser"],
+  ["react-dom/static.browser", pkg + "/server.browser"],
+  ["react-dom/server.edge", pkg + "/server.edge"],
+  ["react-dom/static.edge", pkg + "/server.edge"],
+  ["react-dom/server.bun", pkg + "/server.edge"],
+  ["react-dom/server.node", pkg + "/server.node"],
+  ["react-dom/static.node", pkg + "/server.node"],
 ];
 
 /** The plugin's transform handler for `options`, as Vite would get it. */
@@ -217,6 +217,23 @@ describe("compat: where react resolves", () => {
     expect(noViews).toContain(
       'import "@reactre/compat/features/concurrent";\nimport "@reactre/compat/features/undo";\nexport * from',
     );
+  });
+
+  test("package: @reactre/full-compat, with every entry and the written module built on its own", async () => {
+    const full = "@reactre/full-compat";
+    const plugin = raw("vite", { compat: { package: full } });
+    for (const [id, target] of targets(full, full)) expect((await resolveWith(plugin, id)).asked).toBe(target);
+    expect((await resolveWith(plugin, full + "/core")).asked).toBe(full + "/core");
+    const custom = raw("vite", { compat: { package: full, classes: false } });
+    custom.vite.configResolved({ root: new URL("..", import.meta.url).pathname });
+    const { asked } = await resolveWith(custom, "react");
+    const src = readFileSync(asked!, "utf8");
+    expect(src).toContain(`import "${full}/features/stacks";\n`);
+    expect(src).toContain(`export * from "${full}/core";`);
+    expect(src).not.toContain("@reactre/compat");
+    // Resolved from a directory that reaches the package it names.
+    const here = new URL(".", import.meta.url).pathname.replace(/\/$/, "");
+    expect(baseFor(here + "/x.js", "/nowhere", full)).toBe(here);
   });
 
   test("esbuild: its own resolve, not registered for a react-server build", async () => {

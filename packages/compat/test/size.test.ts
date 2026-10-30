@@ -12,6 +12,7 @@
 //         templates: the benchmark's explicit choice to leave out class components, component
 //         stacks, React's handling of repeated keys and its render retry (apps/jfb/prepare.ts
 //         resolves the same)
+//   full-compat  @reactre/full-compat's entry: full with time slicing compiled in and on
 
 import { expect, test } from "bun:test";
 import { gzipSync } from "node:zlib";
@@ -32,6 +33,16 @@ const toCompat: Bun.BunPlugin = {
 // As @reactre/compat's builds compile the sources: without time slicing (src/slicing.ts).
 const define = { "globalThis.__REACTRE_SLICING__": "false" };
 
+/** Resolves @reactre/compat's client entries to its sources, as @reactre/full-compat's build does. */
+const toSources: Bun.BunPlugin = {
+  name: "compat-sources",
+  setup(build) {
+    build.onResolve({ filter: /^@reactre\/compat(?:\/core|\/features\/[a-zA-Z]+)?$/ }, (args) => ({
+      path: src(args.path === "@reactre/compat" ? "index.ts" : args.path.slice("@reactre/compat/".length) + ".ts"),
+    }));
+  },
+};
+
 const profiles: Record<string, () => Promise<Bun.BuildOutput>> = {
   full: () => Bun.build({ entrypoints: [src("index.ts")], minify: true, target: "browser", format: "esm", define }),
   core: () => Bun.build({ entrypoints: [src("core.ts")], minify: true, target: "browser", format: "esm", define }),
@@ -43,6 +54,15 @@ const profiles: Record<string, () => Promise<Bun.BuildOutput>> = {
       format: "esm",
       plugins: [reactreCompatCompiler(), toCompat],
       define: { "process.env.NODE_ENV": '"production"', ...define },
+    }),
+  "full-compat": () =>
+    Bun.build({
+      entrypoints: [Bun.fileURLToPath(new URL("../../full-compat/src/index.ts", import.meta.url))],
+      minify: true,
+      target: "browser",
+      format: "esm",
+      plugins: [toSources],
+      define: { "globalThis.__REACTRE_SLICING__": "true" },
     }),
 };
 

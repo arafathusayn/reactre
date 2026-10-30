@@ -81,6 +81,9 @@ reactre({
     apis: "all",
     // APIs and behaviours to switch off, by key: what only they need leaves the bundle.
     exclude: [],
+    // The package react resolves to: "@reactre/compat", or "@reactre/full-compat", the same with
+    // React's time slicing (a transition's render yields every 5 ms). Install the one you name.
+    package: "@reactre/compat",
   },
   // Files to compile, and files to leave alone, by path.
   include: /\.[jt]sx$/,

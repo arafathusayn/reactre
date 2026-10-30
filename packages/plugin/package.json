@@ -85,6 +85,7 @@
   },
   "devDependencies": {
     "@reactre/core": "workspace:*",
+    "@reactre/full-compat": "workspace:*",
     "@rollup/plugin-node-resolve": "catalog:",
     "@rspack/core": "catalog:",
     "esbuild": "catalog:",

@@ -28,15 +28,18 @@ const CLIENT = /^react(?:-dom)?(?:\/(?!server|static).*)?$/;
 /** The class keys: off, class support is not loaded, and core's own Component throws when a class renders. */
 const CLASSES = new Set(["Component", "PureComponent"]);
 
-/** The source of the module `react` resolves to, with the keys in `on` and the rest switched off. */
-export function entrySource(on: ReadonlySet<string>): string {
-  const from = "@reactre/compat/core";
+/**
+ * The source of the module `react` resolves to, with the keys in `on` and the rest switched off,
+ * built on compat package `pkg` (@reactre/full-compat's entries are @reactre/compat's).
+ */
+export function entrySource(on: ReadonlySet<string>, pkg = "@reactre/compat"): string {
+  const from = pkg + "/core";
   const imported = [...ALWAYS, ...KEYS.filter((k) => on.has(k) || CLASSES.has(k))];
   const off = KEYS.filter((k) => !on.has(k) && !CLASSES.has(k));
   const modules = Object.keys(MODULES).filter((k) => on.has(k));
   return (
     `// Written by @reactre/plugin from the app's compat options. Switched off: ${[...KEYS, ...BEHAVIOURS].filter((k) => !on.has(k)).join(", ")}.\n` +
-    modules.map((k) => `import "${MODULES[k]}";\n`).join("") +
+    modules.map((k) => `import "${pkg + MODULES[k]!.slice("@reactre/compat".length)}";\n`).join("") +
     `export * from "${from}";\n` +
     `import { ${imported.join(", ")} } from "${from}";\n` +
     `function off(name) {\n` +
