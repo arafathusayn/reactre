@@ -117,13 +117,14 @@ Leave `@vitejs/plugin-react` out: its Fast Refresh works through React's rendere
 
 ## Packages
 
-| Package                                  | For                                                                                        |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------ |
-| [`@reactre/core`](packages/core)         | Signals, effects and keyed lists: the components you write.                                |
-| [`@reactre/dom`](packages/dom)           | Templates and keyed lists on the DOM, with no build step. `@reactre/core` renders on it.   |
-| [`@reactre/compiler`](packages/compiler) | Writing reactre as TSX: compiles each JSX tree to a template at build time (a Bun plugin). |
-| [`@reactre/compat`](packages/compat)     | Running an existing React 19 app on reactre's templates, unchanged.                        |
-| [`@reactre/plugin`](packages/plugin)     | Both of the above in Vite, Rollup, Rolldown, esbuild, webpack, Rspack and Bun.             |
+| Package                                  | For                                                                                             |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| [`@reactre/core`](packages/core)         | Signals, effects and keyed lists: the components you write.                                     |
+| [`@reactre/dom`](packages/dom)           | Templates and keyed lists on the DOM, with no build step. `@reactre/core` renders on it.        |
+| [`@reactre/compiler`](packages/compiler) | Writing reactre as TSX: compiles each JSX tree to a template at build time (a Bun plugin).      |
+| [`@reactre/compat`](packages/compat)     | Running an existing React 19 app on reactre's templates, unchanged.                             |
+| [`@reactre/plugin`](packages/plugin)     | Both of the above in Vite, Rollup, Rolldown, esbuild, webpack, Rspack and Bun.                  |
+| [`@reactre/preact`](packages/preact)     | Preact 11's API and behaviour on reactre's templates, with a JSX compiler and a bundler plugin. |
 
 ## Performance
 

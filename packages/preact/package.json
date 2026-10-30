@@ -81,7 +81,6 @@
     "unplugin": "catalog:"
   },
   "devDependencies": {
-    "@reactre/testdom": "workspace:*",
     "@rollup/plugin-node-resolve": "catalog:",
     "@rspack/core": "catalog:",
     "esbuild": "catalog:",
@@ -90,5 +89,8 @@
     "rollup": "catalog:",
     "vite": "catalog:",
     "webpack": "catalog:"
+  },
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
   }
 }

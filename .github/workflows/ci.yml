@@ -33,7 +33,7 @@ jobs:
       - run: bun test --coverage
       - name: Build and pack the published packages
         run: |
-          for dir in dom core compiler compat plugin; do
+          for dir in dom core compiler compat plugin preact; do
             if jq -e .scripts.build "packages/$dir/package.json" >/dev/null; then
               (cd "packages/$dir" && bun run build)
             fi

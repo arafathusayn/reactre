@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to @reactre/dom, @reactre/core, @reactre/compiler, @reactre/compat and @reactre/plugin are recorded here. The packages are released together, at the same version.
+All notable changes to @reactre/dom, @reactre/core, @reactre/compiler, @reactre/compat, @reactre/plugin and @reactre/preact are recorded here. The packages are released together, at the same version.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
@@ -168,6 +168,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Changed: an update made outside React's event handlers renders as React's lanes order it: in a microtask during a discrete event such as a click or a key, and otherwise (timers, promises, continuous events such as mouseover) in a task of its own, so updates from timers that fire one after another render together (react-tooltip moving between anchors).
 - Added: an ES module build of `@reactre/compat/compiler` in `dist/`, so Node can load `compileJs`.
 - Docs: setting up Vite, with @reactre/plugin or an alias.
+
+### @reactre/preact
+
+- Added: first release. Preact 11.1.0's API and behaviour, its renderer, hooks and compat layer ported, on reactre's templates: `@reactre/preact/core` stands in for `preact` and `preact/hooks`, `/compat` for `preact/compat` and `react`, and `/jsx-runtime` for the JSX runtimes. `/compiler` (a Bun plugin) and `/plugin` (Vite, Rollup, Rolldown, esbuild, webpack and Rspack, under Node and Bun) compile JSX element trees into templates, and their `off` option switches APIs off one by one or by group, such as `@classes`; the build fails where a module uses a switched-off API, or reads the module in a way it cannot follow. `html` writes templates in plain JavaScript with no build step, and `/dom` is the DOM-only build: templates and events, no components.
 
 ## [0.0.1] - 2026-10-29
 
