@@ -3040,6 +3040,38 @@ describe("the render loop", () => {
       ]);
   });
 
+  test("getSnapshotBeforeUpdate is called after the whole render, before the DOM changes, children first", async () => {
+    await stepsSame((L, log) => {
+      const h = L.createElement;
+      const box = L.createRef();
+      class Snap extends L.Component<Any> {
+        getSnapshotBeforeUpdate() {
+          log.push(`snapshot ${this.props.name} ${box.current.textContent}`);
+          return this.props.name;
+        }
+        componentDidUpdate(_p: Any, _s: Any, snap: Any) {
+          log.push(`did update ${snap} ${box.current.textContent}`);
+        }
+        render() {
+          log.push("render " + this.props.name);
+          return h("span", null, this.props.name + this.props.n, this.props.children);
+        }
+      }
+      function App(props: Any) {
+        log.push("render App");
+        return h(
+          "div",
+          { ref: box },
+          h("b", null, props.n),
+          h(Snap, { name: "outer", n: props.n }, h(Snap, { name: "inner", n: props.n })),
+          h(Snap, { name: "after", n: props.n }),
+          h("i", null, props.n),
+        );
+      }
+      return [1, 2].map((n) => (root: Any, flush: Any) => flush(() => root.render(h(App, { n }))));
+    });
+  });
+
   test("an update rendered again calls getSnapshotBeforeUpdate once, with the props and state before it", async () => {
     // Compat takes the snapshot before the class renders (it writes the DOM as it renders), React
     // as it commits: the log keeps the snapshots and updates, not where they fall among renders.

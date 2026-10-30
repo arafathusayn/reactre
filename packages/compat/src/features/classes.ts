@@ -225,10 +225,16 @@ function support(core: ClassCore): ClassSupport {
           inst.props = props;
           inst.state = state;
           inst.context = context;
-          // Taken before render, so it reads the DOM before this update changes it. React takes it
-          // once, as the update commits: an update rendered again (React's retry of a render that
-          // threw, or a transition undone) keeps the one it took first.
-          if (typeof inst.getSnapshotBeforeUpdate === "function") {
+          // React takes it once the render is over, before the commit changes the DOM: so here,
+          // where the DOM is watched (see snapshot in ../core.ts). Elsewhere it is taken before
+          // render, so it reads the DOM before this update changes it, once: an update rendered
+          // again (React's retry of a render that threw, or a transition undone) keeps the first.
+          if (
+            typeof inst.getSnapshotBeforeUpdate === "function" &&
+            !core.snapshot(f, () => {
+              inst[SNAPSHOT] = [prevProps, prevState, inst.getSnapshotBeforeUpdate(prevProps, prevState)];
+            })
+          ) {
             const kept = inst[SNAPSHOT];
             if (kept !== undefined && kept[0] === prevProps && kept[1] === prevState) snapshot = kept[2];
             else
@@ -240,11 +246,15 @@ function support(core: ClassCore): ClassSupport {
           // Did-mount and did-update run after the commit, with layout effects.
           if (mount) {
             if (typeof inst.componentDidMount === "function") core.laterShown(f, () => inst.componentDidMount());
-          } else if (typeof inst.componentDidUpdate === "function" || inst[SNAPSHOT] !== undefined) {
+          } else if (
+            typeof inst.componentDidUpdate === "function" ||
+            typeof inst.getSnapshotBeforeUpdate === "function"
+          ) {
             core.laterShown(f, () => {
+              const kept = inst[SNAPSHOT];
               inst[SNAPSHOT] = undefined;
               if (typeof inst.componentDidUpdate === "function")
-                inst.componentDidUpdate(prevProps, prevState, snapshot);
+                inst.componentDidUpdate(prevProps, prevState, kept === undefined ? snapshot : kept[2]);
             });
           }
           classRef(f, old, inst);

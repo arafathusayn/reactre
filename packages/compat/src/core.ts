@@ -4404,6 +4404,12 @@ export interface ClassCore {
   checkRef(ref: Any): void;
   detachRef(f: Any, ref: Any): void;
   schedule(f: Any): void;
+  /**
+   * Take a class's snapshot (getSnapshotBeforeUpdate, run by `fn`) as React does, once the render
+   * is over and before its mutation phase, with the DOM as it was before the render: true when
+   * queued so (with ./undo.ts, where the DOM is watched), else false.
+   */
+  snapshot(f: Any, fn: () => void): boolean;
   /** A class update `fn` made in a transition waits for it (with ./concurrent.ts): true, else false. */
   waits(f: Any, fn: () => void): boolean;
   /** Run fn with f as the component rendering now. */
@@ -4488,6 +4494,7 @@ export function __installClasses(make: (core: ClassCore) => ClassSupport): void 
       if (e !== null && typeof e === "object") settled.add(e);
     },
     renderThrew: (f, e) => renderThrew(f, e),
+    snapshot: snapshotLater,
     // Class support asks for a stack only for an error a boundary caught: counted for hydration.
     componentStack: (e, f) => (failures++, stackOf(e, f)),
     failed: (f, e) => (retries === null ? null : retries.failed(f, e)),
@@ -7308,6 +7315,9 @@ interface Held {
   readonly t: Any[];
   /** The stores it read (see useSyncExternalStore), checked once more before it commits. */
   readonly s: Any[];
+  /** A transition's: its watch, and the snapshots its commit takes (see snapshotLater). */
+  w?: Watch | null;
+  sn?: Any[];
 }
 let holding: Held | null = null;
 // The Suspense boundaries whose content suspended in a transition's attempt, with what it waits
@@ -7619,7 +7629,7 @@ function attempt(b: Batch, check: boolean): boolean {
   let watch = typeof MutationObserver === "function";
   for (const r of rs) if (r.hydrate) watch = false;
   const w = watch ? watchRoots(rs) : null,
-    at: Held = { q: [], bad: [], t: [], s: [] },
+    at: Held = { q: [], bad: [], t: [], s: [], w },
     undo: Any[] = [];
   if (w !== null) holding = at;
   laneRender = flushing = true;
@@ -7832,9 +7842,102 @@ function undoBefore(q: Fiber[]): void {
   });
 }
 
+// The classes' snapshots this render's commit takes before its mutation phase, in pairs (fiber,
+// function), the last of a fiber's kept (see snapshotLater).
+let snaps: Any[] = [];
+// Where the held work that takes them stands: no parent, so no removal's work moves before it.
+const SNAPSHOTS = { f: 0, r: null } as Any;
+
+/** Queue fiber f's snapshot `fn` for the commit of the render under way, if its DOM is watched. */
+function snapshotLater(f: Fiber, fn: () => void): boolean {
+  // The commit takes them first of the work it holds.
+  let s: Any[];
+  if (holding === MUT && undoWatch !== null) {
+    if (snaps.length === 0) MUT.q.unshift(SNAPSHOTS, () => takeSnapshots(null));
+    s = snaps;
+  } else if (holding !== null && holding !== MUT && holding.w) {
+    const at = holding;
+    if (at.sn === undefined) at.q.unshift(SNAPSHOTS, () => takeSnapshots(at));
+    s = at.sn ??= [];
+  } else return false;
+  for (let i = 0; i < s.length; i += 2)
+    if (s[i] === f) {
+      s[i + 1] = fn;
+      return true;
+    }
+  s.push(f, fn);
+  return true;
+}
+
+/**
+ * React's before-mutation phase: the snapshots, children first, each with the DOM as it was before
+ * the render. The render's DOM changes are undone around them and made again after.
+ */
+function takeSnapshots(at: Held | null): void {
+  // An urgent render's (its records taken now, its attributes put back from props), else a
+  // transition's (its watch kept the attributes too).
+  let s: Any[], w: Watch, records: MutationRecord[], headRecords: MutationRecord[];
+  const props = at === null;
+  if (at === null) {
+    s = snaps;
+    snaps = [];
+    w = undoWatch!;
+    records = w.mo.takeRecords();
+    headRecords = w.ho === null ? [] : w.ho.takeRecords();
+  } else {
+    s = at.sn!;
+    w = at.w!;
+    records = w.records;
+    headRecords = w.headRecords;
+  }
+  const redo: Any[] = [];
+  // The hosts the render gave new props, read as undoNow reads them, where the attributes were
+  // not watched.
+  const hosts: Any[] = [];
+  if (props)
+    for (let i = 0; i < w.sv.length;) {
+      const f: Fiber = w.sv[i];
+      if (f.n === HOST && f.p !== w.sv[i + 1] && !(f.f & DEAD)) hosts.push(f, f.p, w.sv[i + 1]);
+      i += 16;
+      if (w.sv[i - 1] !== null) i++;
+    }
+  const fields = fieldsNow(w.fv);
+  undoDom(records, null, redo);
+  undoDom(headRecords, w.head, redo);
+  for (let i = 0; i < hosts.length; i += 3) setProps(hosts[i], hosts[i].d, hosts[i + 1], hosts[i + 2], false);
+  restoreFields(w.fv);
+  const order: Any[] = [];
+  for (let i = 0; i < s.length; i += 2) if (!(s[i].f & DEAD)) order.push(s[i], s[i + 1]);
+  // React's pass goes down first and takes a fiber's snapshot as it leaves it: post-order.
+  const pathOf = (f: Fiber): number[] => {
+    const path: number[] = [];
+    for (let x: Fiber | null = f; x !== null; x = x.r) path.push(x.i);
+    return path.reverse();
+  };
+  const keys = new Map<Fiber, number[]>();
+  for (let i = 0; i < order.length; i += 2) keys.set(order[i], pathOf(order[i]));
+  const pairs: Any[][] = [];
+  for (let i = 0; i < order.length; i += 2) pairs.push([order[i], order[i + 1]]);
+  pairs.sort((a, b) => {
+    const x = keys.get(a[0])!,
+      y = keys.get(b[0])!;
+    for (let i = 0; i < x.length && i < y.length; i++) if (x[i] !== y[i]) return x[i]! - y[i]!;
+    return y.length - x.length;
+  });
+  try {
+    for (const [f, fn] of pairs) safely(f, fn);
+  } finally {
+    restoreFields(fields);
+    for (let i = 0; i < hosts.length; i += 3) setProps(hosts[i], hosts[i].d, hosts[i + 2], hosts[i + 1], false);
+    redoDom(redo);
+  }
+}
+
 /** Undo the render: its DOM changes, fibers, hooks and queued effects; its updates wait to render again. */
 function undoNow(): void {
   const w = undoWatch!;
+  // Its commit never comes: nor do the snapshots it would take.
+  snaps.length = 0;
   undoing = false;
   undoWatch = null;
   unwatch(w);

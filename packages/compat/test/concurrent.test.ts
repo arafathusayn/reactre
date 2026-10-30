@@ -326,6 +326,41 @@ function logs(L: Lib, log: string[], name: string, body: (props: Any) => Any, ef
 // #region Transitions
 
 describe("transitions", () => {
+  test("a transition's getSnapshotBeforeUpdate is called after its render, before the DOM changes, children first", () =>
+    same(async ({ L, log, root, flushSync, settle }) => {
+      const h = L.createElement;
+      const box = L.createRef();
+      class Snap extends L.Component<Any> {
+        getSnapshotBeforeUpdate() {
+          log.push(`snapshot ${this.props.name} ${box.current.textContent}`);
+          return this.props.name;
+        }
+        componentDidUpdate(_p: Any, _s: Any, snap: Any) {
+          log.push(`did update ${snap} ${box.current.textContent}`);
+        }
+        render() {
+          log.push("render " + this.props.name);
+          return h("span", null, this.props.name + this.props.n, this.props.children);
+        }
+      }
+      let set: Any;
+      function App() {
+        const [n, s] = L.useState(1);
+        set = s;
+        log.push("render App");
+        return h(
+          "div",
+          { ref: box },
+          h("b", null, n),
+          h(Snap, { name: "outer", n }, h(Snap, { name: "inner", n })),
+          h(Snap, { name: "after", n }),
+        );
+      }
+      flushSync(() => root.render(h(App)));
+      L.startTransition(() => set(2));
+      await settle();
+    }));
+
   test("a transition started outside an event renders in a task, after the code that started it", () =>
     same(async ({ L, log, root, flushSync, snap, micro, task }) => {
       let set: Any;
