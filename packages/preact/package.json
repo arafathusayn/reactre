@@ -1,6 +1,6 @@
 {
   "name": "@reactre/preact",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Preact's API and semantics on reactre's compiled templates: smaller and faster than Preact, with a JSX compiler.",
   "keywords": [
     "reactre",

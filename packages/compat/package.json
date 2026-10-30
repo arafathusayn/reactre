@@ -1,6 +1,6 @@
 {
   "name": "@reactre/compat",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "React 19's API on reactre's templates: alias react and react-dom to it and a React app runs unchanged.",
   "keywords": [
     "reactre",

@@ -1,6 +1,6 @@
 {
   "name": "@reactre/compiler",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "The Bun plugin that compiles reactre TSX into templates and the code that updates them.",
   "keywords": [
     "reactre",

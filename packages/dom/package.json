@@ -1,6 +1,6 @@
 {
   "name": "@reactre/dom",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Templates parsed once and cloned, typed holes, and keyed lists that make the fewest DOM moves.",
   "keywords": [
     "reactre",

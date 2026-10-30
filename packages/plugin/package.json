@@ -1,6 +1,6 @@
 {
   "name": "@reactre/plugin",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "reactre's compilers and React alias for Vite, Rollup, Rolldown, esbuild, webpack, Rspack and Bun.",
   "keywords": [
     "reactre",

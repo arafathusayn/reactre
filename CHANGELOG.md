@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.0.2] - 2026-10-30
+
 ### @reactre/core
 
 - Fixed: a `<For>` row with several handlers for one event type, such as two `onClick` links, calls the clicked one once per event. Before, the list added one listener per handler, so each click ran the handler once per handler of its type.
@@ -198,4 +200,6 @@ First release.
 
 All packages ship ES modules for browsers and bundlers, and TypeScript sources for types.
 
+[Unreleased]: https://github.com/arafathusayn/reactre/compare/v0.0.2...HEAD
+[0.0.2]: https://github.com/arafathusayn/reactre/releases/tag/v0.0.2
 [0.0.1]: https://github.com/arafathusayn/reactre/releases/tag/v0.0.1

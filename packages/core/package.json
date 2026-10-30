@@ -1,6 +1,6 @@
 {
   "name": "@reactre/core",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "A tiny, fast UI library: signals for state, compiled templates for the DOM.",
   "keywords": [
     "reactre",
