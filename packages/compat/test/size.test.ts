@@ -29,9 +29,12 @@ const toCompat: Bun.BunPlugin = {
   },
 };
 
+// As @reactre/compat's builds compile the sources: without time slicing (src/slicing.ts).
+const define = { "globalThis.__REACTRE_SLICING__": "false" };
+
 const profiles: Record<string, () => Promise<Bun.BuildOutput>> = {
-  full: () => Bun.build({ entrypoints: [src("index.ts")], minify: true, target: "browser", format: "esm" }),
-  core: () => Bun.build({ entrypoints: [src("core.ts")], minify: true, target: "browser", format: "esm" }),
+  full: () => Bun.build({ entrypoints: [src("index.ts")], minify: true, target: "browser", format: "esm", define }),
+  core: () => Bun.build({ entrypoints: [src("core.ts")], minify: true, target: "browser", format: "esm", define }),
   jfb: () =>
     Bun.build({
       entrypoints: [Bun.fileURLToPath(new URL("../../../apps/jfb/app/main.jsx", import.meta.url))],
@@ -39,7 +42,7 @@ const profiles: Record<string, () => Promise<Bun.BuildOutput>> = {
       target: "browser",
       format: "esm",
       plugins: [reactreCompatCompiler(), toCompat],
-      define: { "process.env.NODE_ENV": '"production"' },
+      define: { "process.env.NODE_ENV": '"production"', ...define },
     }),
 };
 

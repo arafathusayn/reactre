@@ -5,7 +5,7 @@ embeddedLanguageFormatting = "off"
 
 [test]
 root = "packages"
-preload = ["./packages/testdom/src/setup.ts"]
+preload = ["./packages/testdom/src/setup.ts", "./packages/compat/test/setup.ts"]
 # `bun test --coverage` measures the packages' sources: every function and line is covered, and
 # a run below that fails. Tests and their helpers, the packages' built dist folders (some tests
 # build them), and the bundles the plugin tests build in a temp folder, are not sources.

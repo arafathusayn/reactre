@@ -140,7 +140,8 @@ export async function buildEntry(name: string, entry: Entry, options: BuildOptio
     format: "iife",
     minify: options.minify ?? true,
     plugins,
-    define: { "process.env.NODE_ENV": JSON.stringify("production") },
+    // @reactre/compat's sources as its own builds compile them: without time slicing (src/slicing.ts).
+    define: { "process.env.NODE_ENV": JSON.stringify("production"), "globalThis.__REACTRE_SLICING__": "false" },
   });
   if (!r.success) throw new Error(r.logs.join("\n"));
   await Bun.write(join(dir, "dist/main.js"), r.outputs[0]!);

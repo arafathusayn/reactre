@@ -16,6 +16,7 @@ import { FakeElement, FakeEvent, FakeNode, installFakeDocument } from "@reactre/
 
 import { __lanePhase } from "../src/core.ts";
 import * as Compat from "../src/index.ts";
+import { slicing } from "../src/slicing.ts";
 
 // biome-ignore lint: both libraries are used through one untyped interface.
 type Any = any;
@@ -1395,6 +1396,492 @@ describe("timing", () => {
       value = 5;
       await settle();
     }));
+});
+
+// #endregion
+
+// #region Time slicing
+
+describe("time slicing (@reactre/full-compat)", () => {
+  // React's concurrent render yields to the page every 5 ms of performance.now(). Here a fake
+  // clock stands in for it in both libraries: a list item's render takes 3 ms of it and nothing
+  // else moves it, so both yield after every second item, whatever the machine. What runs between
+  // two slices is seen through microtasks a render queues: they run once the slice's task ends, or
+  // after the commit when the render does not yield.
+  const realNow = performance.now;
+  let clock = 0;
+  const setNow = (fn: () => number): void =>
+    void Object.defineProperty(performance, "now", { configurable: true, writable: true, value: fn });
+  beforeAll(() => {
+    slicing.on = true;
+  });
+  afterAll(() => {
+    slicing.on = false;
+  });
+  afterEach(() => setNow(realNow));
+
+  /**
+   * A scene on the fake clock, until everything it started settles: the clock starts where the
+   * real one is (React's timers keep their order) and stays there until something moves it. Each
+   * library gets it afresh.
+   */
+  const sliced = (scene: (k: Kit, tick: (ms: number) => void) => Promise<void>) => async (k: Kit) => {
+    clock = realNow.call(performance);
+    setNow(() => clock);
+    try {
+      await scene(k, (ms) => void (clock += ms));
+      await k.settle();
+    } finally {
+      setNow(realNow);
+    }
+  };
+
+  /**
+   * A list whose items each take 3 ms to render, logging their renders and layout effects. `at`
+   * maps a value and an item to what runs in a microtask queued from that render, once.
+   */
+  function list(L: Lib, log: string[], tick: (ms: number) => void, at: Record<string, () => void> = {}) {
+    const h = L.createElement;
+    const Item = (p: { i: number; v: number }) => {
+      tick(3);
+      log.push(`render item ${p.i} ${p.v}`);
+      const fn = at[`${p.v}:${p.i}`];
+      if (fn !== undefined) {
+        delete at[`${p.v}:${p.i}`];
+        queueMicrotask(fn);
+      }
+      L.useLayoutEffect(() => void log.push(`layout item ${p.i} ${p.v}`));
+      return h("i", null, p.v);
+    };
+    let set: Any;
+    const List = () => {
+      const [v, s] = L.useState(0);
+      set = s;
+      log.push("render list " + v);
+      return h(
+        "p",
+        null,
+        [1, 2, 3, 4, 5, 6].map((i) => h(Item, { key: i, i, v })),
+      );
+    };
+    return { List, set: (v: number) => set(v) };
+  }
+
+  test("a transition yields every 5 ms: code between its slices sees the last commit", () =>
+    same(
+      sliced(async ({ L, log, root, flushSync, snap }, tick) => {
+        const at = { "1:2": () => snap("between 2"), "1:4": () => snap("between 4") };
+        const { List, set } = list(L, log, tick, at);
+        flushSync(() => root.render(L.createElement(List)));
+        L.startTransition(() => set(1));
+      }),
+    ));
+
+  test("an urgent update between slices commits first, and the transition renders again from the start", () =>
+    same(
+      sliced(async ({ L, log, root, flushSync, snap, click }, tick) => {
+        const h = L.createElement;
+        const at = {
+          "1:2": () => {
+            snap("between");
+            click("button");
+            snap("clicked");
+          },
+        };
+        const { List, set } = list(L, log, tick, at);
+        const Counter = () => {
+          const [n, setN] = L.useState(0);
+          log.push("render counter " + n);
+          return h("button", { onClick: () => setN(n + 1) }, n);
+        };
+        flushSync(() => root.render(h("div", null, h(Counter), h(List))));
+        L.startTransition(() => set(1));
+      }),
+    ));
+
+  test("a transition started between slices waits for the one rendering, which goes on", () =>
+    same(
+      sliced(async ({ L, log, root, flushSync, snap }, tick) => {
+        const h = L.createElement;
+        let setN: Any;
+        const at = {
+          "1:2": () => {
+            snap("between");
+            L.startTransition(() => setN(1));
+          },
+        };
+        const { List, set } = list(L, log, tick, at);
+        const Counter = () => {
+          const [n, s] = L.useState(0);
+          setN = s;
+          log.push("render counter " + n);
+          return h("b", null, n);
+        };
+        flushSync(() => root.render(h("div", null, h(Counter), h(List))));
+        L.startTransition(() => set(1));
+      }),
+    ));
+
+  test("content that suspends in a later slice keeps the screen until its data comes", () =>
+    same(
+      sliced(async ({ L, log, root, flushSync, snap, settle }, tick) => {
+        const h = L.createElement;
+        const data = deferred<string>();
+        const at = { "1:2": () => snap("between") };
+        const { List, set } = list(L, log, tick, at);
+        const Late = (p: { v: number }) => {
+          log.push("render late " + p.v);
+          return p.v === 0 ? "-" : L.use(data.p);
+        };
+        let setLate: Any;
+        const App = () => {
+          const [v, s] = L.useState(0);
+          setLate = s;
+          return h(L.Suspense, { fallback: "…" }, h(List), h(Late, { v }));
+        };
+        flushSync(() => root.render(h(App)));
+        L.startTransition(() => {
+          set(1);
+          setLate(1);
+        });
+        await settle();
+        snap("waiting");
+        data.resolve("ok");
+      }),
+    ));
+
+  test("a store that moved while the render was paused renders it again before it commits", () =>
+    same(
+      sliced(async ({ L, log, root, flushSync, snap }, tick) => {
+        const h = L.createElement;
+        let value = 0;
+        const at = {
+          "1:2": () => {
+            snap("between");
+            value = 7;
+          },
+        };
+        const { List, set } = list(L, log, tick, at);
+        const Store = () => {
+          const v = L.useSyncExternalStore(
+            () => () => {},
+            () => value,
+          );
+          log.push("render store " + v);
+          return h("s", null, v);
+        };
+        flushSync(() => root.render(h("div", null, h(Store), h(List))));
+        L.startTransition(() => set(1));
+      }),
+    ));
+
+  test("a transition 5 s old renders the rest without yielding", () =>
+    same(
+      sliced(async ({ L, log, root, flushSync, snap }, tick) => {
+        const at = {
+          "1:2": () => {
+            snap("between 2");
+            tick(5000);
+          },
+          "1:4": () => snap("between 4"),
+          "1:6": () => snap("after 6"),
+        };
+        const { List, set } = list(L, log, tick, at);
+        flushSync(() => root.render(L.createElement(List)));
+        L.startTransition(() => set(1));
+      }),
+    ));
+
+  test("a transition that mounts a list mounts it across slices, a parent's effects after its children's", () =>
+    same(
+      sliced(async ({ L, log, root, flushSync, snap }, tick) => {
+        const h = L.createElement;
+        const at = { "1:2": () => snap("between 2"), "1:5": () => snap("between 5") };
+        const { List } = list(L, log, tick, at);
+        const Shown = (p: { on: boolean }) => {
+          L.useLayoutEffect(() => void log.push("layout shown " + p.on));
+          return p.on ? h("section", null, h("h1", null, "list"), h(List), h("footer", null, "end")) : "none";
+        };
+        let show: Any;
+        const App = () => {
+          const [on, s] = L.useState(false);
+          show = s;
+          return h(Shown, { on });
+        };
+        flushSync(() => root.render(h(App)));
+        L.startTransition(() => show(true));
+      }),
+    ));
+
+  test("context reaches a component a later slice renders, and two components updated apart slice too", () =>
+    same(
+      sliced(async ({ L, log, root, flushSync, snap, settle }, tick) => {
+        const h = L.createElement;
+        const Ctx = L.createContext("-");
+        const Reader = (p: { i: number }) => {
+          tick(3);
+          const v = L.useContext(Ctx);
+          log.push(`render reader ${p.i} ${v}`);
+          if (p.i === 2 && v === "b") queueMicrotask(() => snap("between"));
+          return h("i", null, v);
+        };
+        const sets: Any[] = [];
+        const Box = (p: { i: number }) => {
+          const [n, s] = L.useState(0);
+          sets[p.i] = s;
+          tick(3);
+          log.push(`render box ${p.i} ${n}`);
+          return h("b", null, n);
+        };
+        let setV: Any;
+        const App = () => {
+          const [v, s] = L.useState("a");
+          setV = s;
+          return h(
+            "div",
+            null,
+            h(
+              Ctx.Provider,
+              { value: v },
+              h(
+                "p",
+                null,
+                [1, 2, 3, 4].map((i) => h(Reader, { key: i, i })),
+              ),
+            ),
+            h(Box, { i: 0 }),
+            h(Box, { i: 1 }),
+            h(Box, { i: 2 }),
+          );
+        };
+        flushSync(() => root.render(h(App)));
+        L.startTransition(() => setV("b"));
+        await settle();
+        // Three components with updates of their own: the second one past the slice waits for the next.
+        L.startTransition(() => {
+          sets[0](1);
+          sets[1](1);
+          sets[2](1);
+        });
+      }),
+    ));
+
+  test("an error a later slice's component throws goes to its boundary, updating or mounting", () =>
+    // Without the renders: after a transition's render error React renders the whole root again
+    // and compat the component again, sliced or not (plans/compat-remaining.md, 41).
+    same(
+      sliced(async ({ L, log, root, flushSync, settle }, tick) => {
+        const h = L.createElement;
+        class Boundary extends L.Component<Any> {
+          state = { error: null as Any };
+          static getDerivedStateFromError(error: Any) {
+            return { error };
+          }
+          componentDidCatch(error: Any) {
+            log.push("caught " + error.message);
+          }
+          render() {
+            return this.state.error ? h("em", null, "failed") : this.props.children;
+          }
+        }
+        const Item = (p: { i: number; v: number }) => {
+          tick(3);
+          log.push(`render item ${p.i} ${p.v}`);
+          if (p.v === p.i) throw new Error(`item ${p.i}`);
+          return h("i", null, p.v);
+        };
+        let set: Any;
+        const App = () => {
+          const [v, s] = L.useState(0);
+          set = s;
+          return h(
+            "div",
+            null,
+            [1, 2, 3, 4].map((i) => h(Boundary, { key: i }, h(Item, { i, v }))),
+            v >= 3 ? [5, 6].map((i) => h(Boundary, { key: i }, h(Item, { i, v: i }))) : null,
+          );
+        };
+        flushSync(() => root.render(h(App)));
+        // Item 4 throws in the second slice, as it updates.
+        L.startTransition(() => set(4));
+        await settle();
+        // Items 5 and 6 throw in later slices, as they mount.
+        L.startTransition(() => set(3));
+      }),
+      false,
+    ));
+
+  test("an error from a component a later slice renders goes to the boundary above it", () =>
+    same(
+      sliced(async ({ L, log, root, flushSync, snap, settle }, tick) => {
+        const h = L.createElement;
+        class Boundary extends L.Component<Any> {
+          state = { error: null as Any };
+          static getDerivedStateFromError(error: Any) {
+            return { error };
+          }
+          componentDidCatch(error: Any) {
+            log.push("caught " + error.message);
+          }
+          render() {
+            return this.state.error ? h("em", null, "failed") : this.props.children;
+          }
+        }
+        const Tick = (p: { v: number }) => {
+          tick(3);
+          return h("i", null, p.v);
+        };
+        // Where the first throw is seen: after its slice, the screen as the last commit left it.
+        const seen = new Set<string>();
+        const Thrower = (p: { name: string; v: number }) => {
+          if (p.v > 0 && !seen.has(p.name)) {
+            seen.add(p.name);
+            queueMicrotask(() => snap("thrower " + p.name));
+          }
+          if (p.v > 0) throw new Error(p.name + " " + p.v);
+          return h("b", null, p.v);
+        };
+        let set: Any;
+        const App = () => {
+          const [v, s] = L.useState(0);
+          set = s;
+          return h(
+            "div",
+            null,
+            // The thrower updates in the slice after the ticks, then mounts in one.
+            h(Boundary, null, h(Tick, { v }), h(Tick, { v }), h(Thrower, { name: "updating", v: v === 1 ? 1 : 0 })),
+            h(
+              Boundary,
+              null,
+              h(Tick, { v }),
+              h(Tick, { v }),
+              v === 2 ? h("u", null, h(Thrower, { name: "mounting", v })) : null,
+            ),
+          );
+        };
+        flushSync(() => root.render(h(App)));
+        L.startTransition(() => set(1));
+        await settle();
+        L.startTransition(() => set(2));
+      }),
+      // Without the renders, as in the test above.
+      false,
+    ));
+
+  test("getSnapshotBeforeUpdate reads the last commit's DOM after the last slice", () =>
+    same(
+      sliced(async ({ L, log, root, flushSync, snap }, tick) => {
+        const h = L.createElement;
+        const box = L.createRef();
+        const at = { "1:2": () => snap("between") };
+        const { List, set } = list(L, log, tick, at);
+        class Snap extends L.Component<Any> {
+          getSnapshotBeforeUpdate() {
+            log.push("snapshot " + box.current.textContent);
+            return null;
+          }
+          componentDidUpdate() {
+            log.push("did update " + box.current.textContent);
+          }
+          render() {
+            return h("div", { ref: box }, h(List));
+          }
+        }
+        let bump: Any;
+        const App = () => {
+          bump = L.useState(0)[1];
+          return h(Snap);
+        };
+        flushSync(() => root.render(h(App)));
+        L.startTransition(() => {
+          set(1);
+          bump(1);
+        });
+      }),
+    ));
+});
+
+test("on a core without the retry module, a mount a later slice renders that throws counts at once", async () => {
+  // An instance of its own (the query string makes one), with transitions and without the retry.
+  const only = "core-sliced";
+  const Core: typeof import("../src/core.ts") = await import(`../src/core.ts?${only}`);
+  Core.__installConcurrent();
+  const realNow = performance.now;
+  let clock = realNow.call(performance);
+  Object.defineProperty(performance, "now", { configurable: true, writable: true, value: () => clock });
+  slicing.on = true;
+  const seen: string[] = [];
+  const c = new FakeElement("DIV");
+  const root = Core.createRoot(c as unknown as Element, {
+    onUncaughtError: (e: Any) => void seen.push("uncaught " + e.message),
+  });
+  try {
+    const h = Core.createElement as Any;
+    const Tick = () => {
+      clock += 3;
+      return h("i", null, "t");
+    };
+    const Boom = () => {
+      throw new Error("boom");
+    };
+    let set: Any;
+    const App = () => {
+      const [on, s] = Core.useState(false);
+      set = s;
+      return h("div", null, h(Tick), h(Tick), on ? h(Boom) : null);
+    };
+    Core.flushSync(() => root.render(h(App)));
+    Core.startTransition(() => set(true));
+    for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0));
+    expect(seen).toEqual(["uncaught boom"]);
+    expect(markup(c)).toBe("");
+  } finally {
+    slicing.on = false;
+    Object.defineProperty(performance, "now", { configurable: true, writable: true, value: realNow });
+    root.unmount();
+  }
+});
+
+test("without @reactre/full-compat's time slicing, a transition renders whole in its task", async () => {
+  const log: string[] = [];
+  const c = new FakeElement("DIV");
+  const root = Compat.createRoot(c as unknown as Element);
+  const realNow = performance.now;
+  let clock = realNow.call(performance);
+  Object.defineProperty(performance, "now", { configurable: true, writable: true, value: () => clock });
+  try {
+    const { List, set } = (() => {
+      const at = { "1:2": () => void log.push("between " + markup(c)) };
+      const h = Compat.createElement as Any;
+      const Item = (p: Any) => {
+        clock += 3;
+        const fn = (at as Any)[`${p.v}:${p.i}`];
+        if (fn !== undefined) {
+          delete (at as Any)[`${p.v}:${p.i}`];
+          queueMicrotask(fn);
+        }
+        return h("i", null, p.v);
+      };
+      let s: Any;
+      const List = () => {
+        const [v, set] = Compat.useState(0);
+        s = set;
+        return h(
+          "p",
+          null,
+          [1, 2, 3, 4].map((i) => h(Item, { key: i, i, v })),
+        );
+      };
+      return { List, set: (v: number) => s(v) };
+    })();
+    Compat.flushSync(() => root.render(Compat.createElement(List)));
+    Compat.startTransition(() => set(1));
+    for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0));
+    expect(log).toEqual(["between <p><i>1</i><i>1</i><i>1</i><i>1</i></p>"]);
+  } finally {
+    Object.defineProperty(performance, "now", { configurable: true, writable: true, value: realNow });
+    root.unmount();
+  }
 });
 
 // #endregion

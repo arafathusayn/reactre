@@ -49,6 +49,18 @@
 
 import { lis } from "@reactre/dom";
 
+import { slicing } from "./slicing.ts";
+
+declare global {
+  /**
+   * Whether this build can slice transitions' renders, as React's concurrent render yields every
+   * 5 ms (see Slice). @reactre/full-compat's builds define it true and @reactre/compat's false, so
+   * the minifier drops every branch on it and they carry none of the slicing code. It is read where
+   * it is tested, not through a constant: the minifier folds a constant only in a one-module build.
+   */
+  var __REACTRE_SLICING__: boolean | undefined;
+}
+
 /** The React version this module implements, as libraries read it. */
 export const version: string = "19.3.1";
 
@@ -1433,6 +1445,7 @@ function removeAll(p: Fiber, old: Fiber[] = p.c): void {
 function patch(o: Fiber, it: Any): void {
   switch (o.n) {
     case TEXT: {
+      if (globalThis.__REACTRE_SLICING__ && units !== null && performance.now() >= sliceEnd) late = true;
       const s = "" + it;
       if (o.p !== s) {
         o.p = s;
@@ -1464,6 +1477,7 @@ function create(it: Any, p: Fiber, key: Key): Fiber {
   let f: Fiber;
   // Text: strings, numbers and bigints (holes were skipped by the caller).
   if (typeof it !== "object") {
+    if (globalThis.__REACTRE_SLICING__ && units !== null && performance.now() >= sliceEnd) late = true;
     f = new Fiber(TEXT, null, key, p, p.o);
     f.p = "" + it;
     f.d = (hydrating && hydrating.text(f)) || document.createTextNode(f.p);
@@ -1524,6 +1538,13 @@ function create(it: Any, p: Fiber, key: Key): Fiber {
 
 // Render an element into fiber f: mount it, or update it unless nothing changed.
 function update(f: Fiber, el: ReactElement, mount: boolean): void {
+  // A sliced render past its slice's end (see Slice): a component waits for the next slice; a
+  // host renders now (no user code), the slice ending once the render is over. A render error's
+  // retry renders whole, as React's synchronous retry.
+  if (globalThis.__REACTRE_SLICING__ && units !== null && !retrying && performance.now() >= sliceEnd) {
+    if (f.n !== HOST && f.n !== BLOCK) return void units.push(f, el, mount);
+    late = true;
+  }
   let old: Props | null = null;
   if (!mount) {
     // The identity bailout: the same element object and no update of its own.
@@ -4255,8 +4276,11 @@ function runFunc(f: Fiber, mount = false): void {
       if (curHost.f & FRAGREF) fragmentRefs!.hosts(f, true);
     }
   } else reconcile(f, out);
-  // After the children: React runs a child's effects before its parent's.
-  if (f.x !== null) commitEffects(f);
+  // After the children: React runs a child's effects before its parent's, so a parent whose
+  // children wait for a later slice queues its effects after them.
+  if (f.x !== null)
+    if (globalThis.__REACTRE_SLICING__ && units !== null && unitUnder(f)) units.push(f, EFFECTS, f.x);
+    else commitEffects(f);
 }
 
 /**
@@ -5375,6 +5399,8 @@ function hiddenLevel(f: Fiber): number {
 
 /** Queue `fn` with layout effects, unless `f` is hidden content, which runs it when it shows. */
 function laterShown(f: Fiber, fn: () => void): void {
+  // A sliced render left some of f's children for a later slice: f's goes after theirs.
+  if (globalThis.__REACTRE_SLICING__ && units !== null && unitUnder(f)) return void units.push(f, LATER_FN, fn);
   if (hiddenCount === 0 || hiddenLevel(f) === 0) later(f, fn);
 }
 
@@ -5745,6 +5771,8 @@ const byDepth = (a: Fiber, b: Fiber): number => depth(a) - depth(b);
 function flushWork(sync: boolean): void {
   // Reentrant calls (flushSync inside an effect) leave the work to the flush already running.
   if (flushing) return;
+  // An urgent render while a transition's render is paused: React throws that render away.
+  if (globalThis.__REACTRE_SLICING__ && paused !== null && queue.length) dropSlice(true);
   flushing = true;
   let committed = false;
   try {
@@ -5854,7 +5882,8 @@ function afterPaint(fn: () => void): void {
   if (paintQ.length === 1) paintChannel.port2.postMessage(null);
 }
 
-// Re-render a fiber from the update queue, in its place in the tree.
+// Re-render a fiber from the update queue, in its place in the tree. With time slicing, also a
+// unit a slice left (see runUnits): element unitEl renders into `f`, mounting it if unitMount.
 function rerender(f: Fiber): void {
   // The nearest fiber above that places nodes: f's new nodes are placed in it.
   let h = f.r;
@@ -5864,8 +5893,23 @@ function rerender(f: Fiber): void {
   curHost = h ?? f;
   curNs = h === null ? HTML_NS : hostNs(h);
   try {
-    run(f, f.p, false);
+    if (globalThis.__REACTRE_SLICING__ && unitEl !== null) {
+      const el = unitEl;
+      unitEl = null;
+      update(f, el, unitMount);
+      // The parent placed its children before this one had nodes.
+      if (unitMount) curHost.f |= STRUCT;
+    } else run(f, f.p, false);
   } catch (e) {
+    // A unit that mounts and throws is dropped, as a mount that throws in create, and what it threw
+    // goes up from its parent.
+    if (globalThis.__REACTRE_SLICING__ && unitMount) {
+      renderThrew(f, e);
+      if (retries !== null) retries.drop(f);
+      else unmount(f, true);
+      curHost.f |= STRUCT;
+      f = f.r!;
+    }
     // With ./features/retry.ts, a render that failed renders again before its error counts: what
     // that throws goes on, if anything.
     const x = retries === null ? e : retries.queued(f, e);
@@ -7403,7 +7447,9 @@ function batchNow(): Batch {
 }
 function newBatch(l: number): Batch {
   laneSoon();
-  return { l, f: new Set(), h: new Set(), k: [], w: false };
+  const b: Batch = { l, f: new Set(), h: new Set(), k: [], w: false };
+  if (globalThis.__REACTRE_SLICING__) (b as Any).t0 = performance.now();
+  return b;
 }
 
 // React's transition lanes: an event's transitions get the next of 10 in a cycle the page shares,
@@ -7445,12 +7491,15 @@ function eventLane(): number {
  * lanes), or all of them (a promise that settled).
  */
 function unhold(r: RootImpl | null = null): void {
+  if (globalThis.__REACTRE_SLICING__ && paused !== null) dropSlice(false);
   dropPending();
   let still = false;
   for (const b of batches)
     if (b.w) {
       if (r === null || b.rs === undefined || b.rs.has(r)) {
         b.w = false;
+        // React computes a pinged lane's expiration afresh.
+        if (globalThis.__REACTRE_SLICING__) (b as Any).t0 = performance.now();
         laneSoon();
       } else still = true;
     }
@@ -7485,7 +7534,9 @@ function laneSoon(): void {
 }
 
 function laneSet(h: Hook, a: Any): boolean {
+  if (globalThis.__REACTRE_SLICING__) setting = h;
   unhold(rootOf(h.f));
+  if (globalThis.__REACTRE_SLICING__) setting = null;
   let p = pend.get(h);
   if (transition === null) {
     if (p !== undefined) p.u.push(a, null);
@@ -7591,6 +7642,9 @@ function laneAct(p: PromiseLike<unknown>): void {
  */
 function runLanes(): boolean {
   laneTask = false;
+  // A paused render goes on before any other (React keeps its lanes in progress).
+  if (globalThis.__REACTRE_SLICING__ && paused !== null) return false;
+  if (globalThis.__REACTRE_SLICING__) taskStart = performance.now();
   let any = false;
   const tried = new Set<Batch>();
   while (!actions) {
@@ -7621,6 +7675,9 @@ function runLanes(): boolean {
  * throttle ends (see Pending).
  */
 function attempt(b: Batch, check: boolean): boolean {
+  // The next slice of a render paused (see Slice): it goes on where the last ended.
+  const sl = globalThis.__REACTRE_SLICING__ ? resuming : null;
+  if (globalThis.__REACTRE_SLICING__) resuming = null;
   // Its roots, saved whole before anything changes: what it renders, and the boundaries above.
   const rs = new Set<RootImpl>();
   for (const f of b.f) rs.add(f.o);
@@ -7628,22 +7685,34 @@ function attempt(b: Batch, check: boolean): boolean {
   for (let i = 0; i < b.k.length; i += 2) rs.add(b.k[i].o);
   let watch = typeof MutationObserver === "function";
   for (const r of rs) if (r.hydrate) watch = false;
-  const w = watch ? watchRoots(rs) : null,
-    at: Held = { q: [], bad: [], t: [], s: [], w },
-    undo: Any[] = [];
+  const w = globalThis.__REACTRE_SLICING__ && sl !== null ? resumeWatch(sl) : watch ? watchRoots(rs) : null,
+    at: Held = globalThis.__REACTRE_SLICING__ && sl !== null ? sl.at : { q: [], bad: [], t: [], s: [], w },
+    undo: Any[] = globalThis.__REACTRE_SLICING__ && sl !== null ? sl.undo : [];
   if (w !== null) holding = at;
   laneRender = flushing = true;
+  // With time slicing, a render that can be undone yields every 5 ms; React's check before it
+  // commits renders it again whole, and so does one 5 s old (React's expired lanes).
+  if (globalThis.__REACTRE_SLICING__ && w !== null && check && slicing.on) {
+    units = [];
+    late = false;
+    sliceEnd = taskStart + FRAME > (b as Any).t0 + EXPIRE ? Infinity : taskStart + FRAME;
+  }
   try {
     // A component whose state the updates leave as it was renders, and bails out (see bailRender).
-    const changed = new Set<Fiber>(b.f),
-      same: Any[] = [];
-    for (const h of b.h)
-      if (rebase(h, undo)) {
-        changed.add(h.f);
-        schedule(h.f);
-      } else same.push(h.f, h.f.e);
-    for (let i = 0; i < b.k.length; i += 2) if (!(b.k[i].f & DEAD)) b.k[i + 1]();
-    for (const f of b.f) schedule(f);
+    const changed = globalThis.__REACTRE_SLICING__ && sl !== null ? sl.changed : new Set<Fiber>(b.f),
+      same: Any[] = globalThis.__REACTRE_SLICING__ && sl !== null ? sl.same : [];
+    if (globalThis.__REACTRE_SLICING__ && sl !== null) {
+      skipped = sl.skipped;
+      runUnits(sl.units);
+    } else {
+      for (const h of b.h)
+        if (rebase(h, undo)) {
+          changed.add(h.f);
+          schedule(h.f);
+        } else same.push(h.f, h.f.e);
+      for (let i = 0; i < b.k.length; i += 2) if (!(b.k[i].f & DEAD)) b.k[i + 1]();
+      for (const f of b.f) schedule(f);
+    }
     while (queue.length) {
       const q = queue;
       queue = spareQueue;
@@ -7651,28 +7720,60 @@ function attempt(b: Batch, check: boolean): boolean {
       for (let ix = 0; ix < q.length; ix++) {
         const f = q[ix]!;
         f.f &= ~(QUEUED | LATER);
-        if ((f.f & (DIRTY | DEAD)) === DIRTY) rerender(f);
+        if ((f.f & (DIRTY | DEAD)) === DIRTY)
+          if (globalThis.__REACTRE_SLICING__ && units !== null && performance.now() >= sliceEnd)
+            units.push(f, null, false);
+          else rerender(f);
       }
       q.length = 0;
       spareQueue = q;
     }
-    // Not rendered by a parent meanwhile, nor for another update.
-    for (let i = 0; i < same.length; i += 2) {
-      const f: Fiber = same[i];
-      if (f.e === same[i + 1] && !changed.has(f) && !(f.f & DEAD)) {
-        changed.add(f);
-        bailRender(f);
+    if (globalThis.__REACTRE_SLICING__ && units !== null && (units.length || late))
+      pausing = {
+        b,
+        check,
+        at,
+        undo,
+        changed,
+        same,
+        skipped,
+        units,
+        w: null as Any,
+        redo: [],
+        sv: [],
+        hv: [],
+        fv: [],
+        q: null as Any,
+        hidden: 0,
+        shownAt: 0,
+        targets: sl === null ? lastTargets : sl.targets,
+      };
+    else {
+      // Not rendered by a parent meanwhile, nor for another update.
+      for (let i = 0; i < same.length; i += 2) {
+        const f: Fiber = same[i];
+        if (f.e === same[i + 1] && !changed.has(f) && !(f.f & DEAD)) {
+          changed.add(f);
+          bailRender(f);
+        }
       }
+      // Content that suspended where it showed, its boundary not rendered (a component under it
+      // rendered alone): the attempt waits for it, as React's keeps the screen.
+      if (skipped !== null) for (const t of skipped.values()) at.bad.push(t);
     }
-    // Content that suspended where it showed, its boundary not rendered (a component under it
-    // rendered alone): the attempt waits for it, as React's keeps the screen.
-    if (skipped !== null) for (const t of skipped.values()) at.bad.push(t);
   } finally {
     laneRender = flushing = unwinding = false;
     skipped = null;
     holding = null;
+    if (globalThis.__REACTRE_SLICING__) units = null;
     if (w !== null) unwatch(w);
   }
+  if (globalThis.__REACTRE_SLICING__ && w !== null && sl !== null) {
+    // Every slice's DOM changes, for the undo, the view transition and the snapshots.
+    w.records = sl.w.records.concat(w.records);
+    w.headRecords = sl.w.headRecords.concat(w.headRecords);
+  }
+  if (globalThis.__REACTRE_SLICING__ && pausing !== null) return pauseSlice(w!);
   // React's check before a concurrent render commits: a store that moved renders it again.
   let moved = false;
   if (check) for (const box of at.s) if (!Object.is(box.g(), box.v)) moved = true;
@@ -7759,6 +7860,158 @@ interface Watch {
   records: MutationRecord[];
   headRecords: MutationRecord[];
 }
+
+// #region Time slicing (./features/timeSlicing.ts, @reactre/full-compat)
+
+// React's frame (the scheduler's frameInterval) and a transition lane's expiration.
+const FRAME = 5,
+  EXPIRE = 5000;
+// What a unit's element is when it is a parent's effects (see runFunc), or a parent's work after
+// its children's (see laterShown).
+const EFFECTS = {},
+  LATER_FN = {};
+
+/** Whether a unit the sliced render left is below fiber `f`. */
+function unitUnder(f: Fiber): boolean {
+  for (let i = 0; i < units!.length; i += 3) if (units![i] !== f && under(units![i], f)) return true;
+  return false;
+}
+
+/**
+ * A transition's render paused between slices: what attempt set up, the units left in render
+ * order (in threes: a fiber with its element and whether it mounts, a queued fiber with null, or a
+ * component with EFFECTS and its effects), and what makes the render again, as Pending keeps it.
+ */
+interface Slice {
+  readonly b: Batch;
+  readonly check: boolean;
+  readonly at: Held;
+  readonly undo: Any[];
+  readonly changed: Set<Fiber>;
+  readonly same: Any[];
+  readonly skipped: Map<Fiber, Any> | null;
+  readonly units: Any[];
+  readonly targets: Any[];
+  w: Watch;
+  redo: Any[];
+  sv: Any[];
+  hv: Any[];
+  fv: Any[];
+  q: [Hook[], Hook[], Any[]];
+  hidden: number;
+  shownAt: number;
+}
+// The units the slice under way leaves for the next, while a sliced render runs; when the slice
+// ends; whether a fiber that runs no user code began after it (React yields before that fiber).
+let units: Any[] | null = null,
+  sliceEnd = 0,
+  late = false,
+  // When the task that runs the slice started (React's frame starts with the scheduler's task).
+  taskStart = 0,
+  // The render pausing, the one paused and the one going on (see attempt); the hook an update is
+  // for (laneSet).
+  pausing: Slice | null = null,
+  paused: Slice | null = null,
+  resuming: Slice | null = null,
+  setting: Hook | null = null,
+  // The containers the last watch observes.
+  lastTargets: Any[] = [],
+  // The unit rerender renders (see runUnits).
+  unitEl: Any = null,
+  unitMount = false;
+
+/** Render the units a slice left, in order, until this slice ends: the rest go on to the next. */
+function runUnits(todo: Any[]): void {
+  let i = 0;
+  for (; i < todo.length; i += 3) {
+    if (performance.now() >= sliceEnd) break;
+    const f: Fiber = todo[i],
+      el = todo[i + 1];
+    if (el === EFFECTS) {
+      f.x = todo[i + 2];
+      if (!(f.f & DEAD)) commitEffects(f);
+    } else if (el === LATER_FN) {
+      if (!(f.f & DEAD)) laterShown(f, todo[i + 2]);
+    } else if (el === null) {
+      if ((f.f & (DIRTY | DEAD)) === DIRTY) rerender(f);
+    } else if (!(f.f & DEAD)) {
+      unitEl = el;
+      unitMount = todo[i + 2];
+      rerender(f);
+      unitMount = false;
+    }
+  }
+  for (; i < todo.length; i++) units!.push(todo[i]);
+}
+
+/**
+ * End this slice of render `rec`: what it made is kept to make again, the DOM and the fibers put
+ * back as the last commit left them, and the next slice queued as a task of its own.
+ */
+function pauseSlice(w: Watch): boolean {
+  const rec = pausing!;
+  pausing = null;
+  rec.w = w;
+  rec.sv = resave(w.sv);
+  for (let i = 0; i < w.hv.length; i += 8) rec.hv.push(w.hv[i], ...hookNow(w.hv[i]));
+  rec.fv = fieldsNow(w.fv);
+  rec.q = [layoutQ, passiveQ, passiveUnmountQ];
+  rec.hidden = hiddenCount;
+  rec.shownAt = fallbackShownAt;
+  undoWatched(w, rec.redo);
+  paused = rec;
+  afterPaint(nextSlice);
+  return true;
+}
+
+/** The task of a paused render's next slice. */
+function nextSlice(): void {
+  const rec = paused;
+  if (rec === null) return;
+  taskStart = performance.now();
+  paused = null;
+  resuming = rec;
+  if (!attempt(rec.b, rec.check) && !rec.b.r) batches.push(rec.b);
+  if (batches.length) laneSoon();
+}
+
+/** Make paused render `rec` again and watch its roots for the slice that goes on. */
+function resumeWatch(rec: Slice): Watch {
+  redoDom(rec.redo);
+  restoreFields(rec.fv);
+  restoreFibers(rec.sv, rec.hv);
+  [layoutQ, passiveQ, passiveUnmountQ] = rec.q;
+  hiddenCount = rec.hidden;
+  fallbackShownAt = rec.shownAt;
+  const old = rec.w,
+    mo = new MutationObserver(noop),
+    ho = old.ho === null ? null : new MutationObserver(noop);
+  for (const t of rec.targets) mo.observe(t, WATCH);
+  if (ho !== null) ho.observe(old.head!, WATCH);
+  const w: Watch = { ...old, mo, ho, records: [], headRecords: [] };
+  rec.at.w = w;
+  units = [];
+  late = false;
+  sliceEnd = taskStart + FRAME > (rec.b as Any).t0 + EXPIRE ? Infinity : taskStart + FRAME;
+  return w;
+}
+
+/**
+ * An update while a render is paused: React throws that render away (prepareFreshStack) for an
+ * urgent one (`urgent`, or an update outside a transition), or for a transition's update to state
+ * the render changes (React entangles them). Its updates wait again and it renders again from the
+ * start, after. Another transition's update leaves it to go on.
+ */
+function dropSlice(urgent: boolean): void {
+  const rec = paused!;
+  if (!urgent && transition !== null && (setting === null || !rec.b.h.has(setting))) return;
+  paused = null;
+  for (let i = 0; i < rec.undo.length; i += 3) pend.set(rec.undo[i], { b: rec.undo[i + 1], u: rec.undo[i + 2] });
+  batches.unshift(rec.b);
+  laneSoon();
+}
+
+// #endregion
 
 // #region Urgent render undo (./features/undo.ts)
 
@@ -7991,6 +8244,7 @@ function watchRoots(rs: Set<RootImpl>): Watch {
     targets.push(r.f.d);
     save(r.f, sv, hv, fv, targets);
   }
+  if (globalThis.__REACTRE_SLICING__) lastTargets = targets;
   // The roots' containers and portals': what other code does elsewhere meanwhile is not undone.
   const mo = new MutationObserver(noop);
   for (const t of targets) mo.observe(t, WATCH);

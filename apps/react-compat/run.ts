@@ -57,6 +57,8 @@ async function bundle(entry: string, spec: string): Promise<string> {
       "process.env.NODE_ENV": JSON.stringify("production"),
       "import.meta.env": "undefined",
       "import.meta.url": JSON.stringify("about:blank"),
+      // @reactre/compat's sources as its own builds compile them, without time slicing.
+      "globalThis.__REACTRE_SLICING__": "false",
     },
   });
   if (!r.success) throw new Error(r.logs.join("\n"));
