@@ -131,7 +131,7 @@ The open point was whether a second build of core is acceptable. The user chose 
 
 - The switch is `slicing.on` in `packages/compat/src/slicing.ts`, which `features/timeSlicing.ts` sets. There is no `unstable_setFrameInterval`: the frame is React's 5 ms.
 - The code is compiled in by `globalThis.__REACTRE_SLICING__`, read where it is used: a module-level constant folds only in a one-module build. Compat's builds, the jfb app and the react-compat harness define it `false`; full-compat's build defines it `true`, and its sources set it under Bun.
-- Bun's minifier names symbols by use count, dead code included, so compat's builds keep their minified sizes but gzip moves by a few bytes (jfb +2 B, core +31 B, full +26 B). Byte-identical output is not reachable this way.
+- Bun's minifier names symbols by use count, dead code included, so compat's builds keep their minified sizes but gzip moves by a few bytes (jfb +2 B, core +31 B, full +26 B). Byte-identical output is not reachable this way. The user accepted this trade-off on 2026-10-30, after the jfb A/B (with an A/A control) came out a tie; the alternative, patching the slicing code into core.ts at build time, was turned down.
 - Units of work: a deferred component, a queued fiber, a parent's effects and its class callbacks and refs (`laterShown`), so effects and `getSnapshotBeforeUpdate` keep React's order across slices.
 - A render error's retry renders whole, without slicing, as React's synchronous retry does.
 - Found while testing: after a transition's render error React renders the whole root again, compat only the component (`plans/compat-remaining.md` row 41).
