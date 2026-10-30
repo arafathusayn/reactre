@@ -1,6 +1,6 @@
 # Opt-in time slicing for @reactre/compat (item 33)
 
-Status: the plan and critique are done. On 2026-10-30 the user decided that time slicing ships as its own package, `@reactre/full-compat`. Building.
+Status: built (2026-10-30). Time slicing ships as its own package, `@reactre/full-compat`; see "As built" at the end for where the code differs from this plan.
 
 ## 1. What React 19.3.1 does
 
@@ -126,3 +126,13 @@ A hostile review of the design above, and what answers each point.
 ## Decision
 
 The open point was whether a second build of core is acceptable. The user chose a separate package, `@reactre/full-compat`. Compat's own builds are unchanged, and only the package that slices carries the check.
+
+## As built
+
+- The switch is `slicing.on` in `packages/compat/src/slicing.ts`, which `features/timeSlicing.ts` sets. There is no `unstable_setFrameInterval`: the frame is React's 5 ms.
+- The code is compiled in by `globalThis.__REACTRE_SLICING__`, read where it is used: a module-level constant folds only in a one-module build. Compat's builds, the jfb app and the react-compat harness define it `false`; full-compat's build defines it `true`, and its sources set it under Bun.
+- Bun's minifier names symbols by use count, dead code included, so compat's builds keep their minified sizes but gzip moves by a few bytes (jfb +2 B, core +31 B, full +26 B). Byte-identical output is not reachable this way.
+- Units of work: a deferred component, a queued fiber, a parent's effects and its class callbacks and refs (`laterShown`), so effects and `getSnapshotBeforeUpdate` keep React's order across slices.
+- A render error's retry renders whole, without slicing, as React's synchronous retry does.
+- Found while testing: after a transition's render error React renders the whole root again, compat only the component (`plans/compat-remaining.md` row 41).
+- `@reactre/plugin` takes `compat.package: "@reactre/full-compat"`.

@@ -10,7 +10,7 @@
 //     again: between slices, the page shows and holds the last commit, as React's does.
 //   - The check before each fiber costs on every render, so it is compiled in only where the
 //     build defines globalThis.__REACTRE_SLICING__ true (@reactre/full-compat): @reactre/compat's
-//     builds stay as they were, byte for byte.
+//     builds compile it out, at the same minified size.
 
 import { slicing } from "../slicing.ts";
 

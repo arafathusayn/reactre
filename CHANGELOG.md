@@ -1,10 +1,22 @@
 # Changelog
 
-All notable changes to @reactre/dom, @reactre/core, @reactre/compiler, @reactre/compat, @reactre/plugin and @reactre/preact are recorded here. The packages are released together, at the same version.
+All notable changes to @reactre/dom, @reactre/core, @reactre/compiler, @reactre/compat, @reactre/full-compat, @reactre/plugin and @reactre/preact are recorded here. The packages are released together, at the same version.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+### @reactre/full-compat
+
+- Added: a new package, @reactre/compat with React's time slicing. A transition's render yields to the page every 5 ms: events, timers and paints run between slices, an urgent update made meanwhile commits first and the transition renders again from the start, and one that has waited 5 seconds renders the rest at once, as React's concurrent render does. Between slices the render is undone, so the page shows the last commit. The check before each component costs on every render, so only this package's builds compile it in. About 1 KB gzipped more than @reactre/compat.
+
+### @reactre/compat
+
+- Added: `@reactre/compat/features/timeSlicing`, which turns time slicing on where the build compiles it in (@reactre/full-compat's). @reactre/compat's own builds leave slicing out: their minified sizes are unchanged.
+
+### @reactre/plugin
+
+- Added: `compat.package`, `"@reactre/compat"` (the default) or `"@reactre/full-compat"`: the package `react`, `react-dom` and their server entries resolve to, and the module written for the options builds on.
 
 ## [0.0.2] - 2026-10-30
 

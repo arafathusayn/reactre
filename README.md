@@ -109,7 +109,7 @@ import { defineConfig } from "vite";
 export default defineConfig({ plugins: [reactre({ compat: true })] });
 ```
 
-Your imports from `react` and `react-dom` stay as they are, in your code and in your dependencies. The plugin also compiles your JSX's HTML element trees into templates, for extra speed. If your app or a library it uses has class components, pass `compat: { classes: true }`.
+Your imports from `react` and `react-dom` stay as they are, in your code and in your dependencies. The plugin also compiles your JSX's HTML element trees into templates, for extra speed. If your app or a library it uses has class components, pass `compat: { classes: true }`. If long transitions must not block input, use [`@reactre/full-compat`](packages/full-compat) instead, with `compat: { package: "@reactre/full-compat" }`: it slices a transition's render every 5 ms, as React does, at about 1 KB gzipped more.
 
 Leave `@vitejs/plugin-react` out: its Fast Refresh works through React's renderer, and with compat an edited component would stay as it was on screen. Without it, Vite reloads the page when you save. Rollup, Rolldown, esbuild, webpack, Rspack and Bun have their own entries: see [the plugin's docs](packages/plugin).
 
@@ -117,14 +117,15 @@ Leave `@vitejs/plugin-react` out: its Fast Refresh works through React's rendere
 
 ## Packages
 
-| Package                                  | For                                                                                             |
-| ---------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| [`@reactre/core`](packages/core)         | Signals, effects and keyed lists: the components you write.                                     |
-| [`@reactre/dom`](packages/dom)           | Templates and keyed lists on the DOM, with no build step. `@reactre/core` renders on it.        |
-| [`@reactre/compiler`](packages/compiler) | Writing reactre as TSX: compiles each JSX tree to a template at build time (a Bun plugin).      |
-| [`@reactre/compat`](packages/compat)     | Running an existing React 19 app on reactre's templates, unchanged.                             |
-| [`@reactre/plugin`](packages/plugin)     | Both of the above in Vite, Rollup, Rolldown, esbuild, webpack, Rspack and Bun.                  |
-| [`@reactre/preact`](packages/preact)     | Preact 11's API and behaviour on reactre's templates, with a JSX compiler and a bundler plugin. |
+| Package                                        | For                                                                                             |
+| ---------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| [`@reactre/core`](packages/core)               | Signals, effects and keyed lists: the components you write.                                     |
+| [`@reactre/dom`](packages/dom)                 | Templates and keyed lists on the DOM, with no build step. `@reactre/core` renders on it.        |
+| [`@reactre/compiler`](packages/compiler)       | Writing reactre as TSX: compiles each JSX tree to a template at build time (a Bun plugin).      |
+| [`@reactre/compat`](packages/compat)           | Running an existing React 19 app on reactre's templates, unchanged.                             |
+| [`@reactre/full-compat`](packages/full-compat) | `@reactre/compat` with React's time slicing: long transitions yield to the page every 5 ms.     |
+| [`@reactre/plugin`](packages/plugin)           | Both of the above in Vite, Rollup, Rolldown, esbuild, webpack, Rspack and Bun.                  |
+| [`@reactre/preact`](packages/preact)           | Preact 11's API and behaviour on reactre's templates, with a JSX compiler and a bundler plugin. |
 
 ## Performance
 
