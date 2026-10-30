@@ -90,7 +90,7 @@ The template is parsed once. `mount` clones it with values for its holes, in ord
 
 ## Already on React?
 
-Keep your app as it is. `@reactre/compat` is React 19's API on reactre's templates: hooks, context, Suspense, portals, transitions, controlled fields and hydration, and libraries such as React Router, TanStack Query, Radix and Recharts run on it. It is about 19 KB gzipped, against 67 KB for React and React DOM; class component support adds 1 KB more ([sizes](packages/compat#size)).
+Keep your app as it is. `@reactre/compat` is React 19's API on reactre's templates: hooks, context, Suspense, portals, transitions, controlled fields and hydration, and libraries such as React Router, TanStack Query, Radix and Recharts run on it. It is about 44 KB gzipped with every feature, against 67 KB for React and React DOM, and an app ships only what it imports: a counter comes to 31 KB ([sizes](packages/compat#size)).
 
 ```sh
 bun add @reactre/compat
@@ -109,11 +109,21 @@ import { defineConfig } from "vite";
 export default defineConfig({ plugins: [reactre({ compat: true })] });
 ```
 
-Your imports from `react` and `react-dom` stay as they are, in your code and in your dependencies. The plugin also compiles your JSX's HTML element trees into templates, for extra speed. If your app or a library it uses has class components, pass `compat: { classes: true }`. If long transitions must not block input, use [`@reactre/full-compat`](packages/full-compat) instead, with `compat: { package: "@reactre/full-compat" }`: it slices a transition's render every 5 ms, as React does, at about 1 KB gzipped more.
+Your imports from `react` and `react-dom` stay as they are, in your code and in your dependencies. The plugin also compiles your JSX's HTML element trees into templates, for extra speed. Class components work by default; if nothing in your app uses them, `compat: { classes: false }` leaves their support out. If long transitions must not block input, use [`@reactre/full-compat`](packages/full-compat) instead, with `compat: { package: "@reactre/full-compat" }`: it slices a transition's render every 5 ms, as React does, at about 1 KB gzipped more.
 
 Leave `@vitejs/plugin-react` out: its Fast Refresh works through React's renderer, and with compat an edited component would stay as it was on screen. Without it, Vite reloads the page when you save. Rollup, Rolldown, esbuild, webpack, Rspack and Bun have their own entries: see [the plugin's docs](packages/plugin).
 
 **[Read the compat docs →](packages/compat)**
+
+## Already on Preact?
+
+`@reactre/preact` is Preact 11's API and behaviour, its renderer ported, with a JSX compiler that turns your HTML element trees into templates. Alias `preact` (or `react`, through its compat layer) to it at build time:
+
+```sh
+bun add @reactre/preact
+```
+
+**[Read the Preact docs →](packages/preact)**
 
 ## Packages
 
@@ -124,7 +134,7 @@ Leave `@vitejs/plugin-react` out: its Fast Refresh works through React's rendere
 | [`@reactre/compiler`](packages/compiler)       | Writing reactre as TSX: compiles each JSX tree to a template at build time (a Bun plugin).      |
 | [`@reactre/compat`](packages/compat)           | Running an existing React 19 app on reactre's templates, unchanged.                             |
 | [`@reactre/full-compat`](packages/full-compat) | `@reactre/compat` with React's time slicing: long transitions yield to the page every 5 ms.     |
-| [`@reactre/plugin`](packages/plugin)           | Both of the above in Vite, Rollup, Rolldown, esbuild, webpack, Rspack and Bun.                  |
+| [`@reactre/plugin`](packages/plugin)           | The compiler and compat in Vite, Rollup, Rolldown, esbuild, webpack, Rspack and Bun.            |
 | [`@reactre/preact`](packages/preact)           | Preact 11's API and behaviour on reactre's templates, with a JSX compiler and a bundler plugin. |
 
 ## Performance
