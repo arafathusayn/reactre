@@ -1,6 +1,5 @@
 @reactre/preact
-Copyright (c) Arafat Husayn. Licensed under the Apache License, Version 2.0 (see LICENSE in the
-repository root).
+Copyright (c) Arafat Husayn. Licensed under the Apache License, Version 2.0 (see LICENSE).
 
 src/engine.ts, src/claim.ts, src/hooks.ts, src/effects.ts, src/layout.ts, src/lifecycle.ts,
 src/compat.ts and src/jsx-runtime.ts are ports of Preact 11.1.0 (https://github.com/preactjs/preact),
