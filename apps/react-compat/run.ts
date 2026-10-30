@@ -27,6 +27,7 @@ import { join } from "node:path";
 import { reactreCompatCompiler } from "@reactre/compat/compiler";
 import puppeteer from "puppeteer-core";
 
+import { withoutSlicing } from "../../packages/compat/src/withoutSlicing.ts";
 import { reactAlias, type Runtime } from "./alias.ts";
 import { findChrome } from "./chrome.ts";
 
@@ -50,6 +51,8 @@ async function bundle(entry: string, spec: string): Promise<string> {
     plugins: [
       ...(extras.includes("compiler") ? [reactreCompatCompiler()] : []),
       reactAlias(runtime, { core: extras.includes("core") }),
+      // @reactre/compat's core as its own builds compile it, without time slicing.
+      withoutSlicing,
     ],
     // A classic script cannot hold `import.meta`, which some libraries read: for Vite's mode, or
     // pdf.js for paths it uses only under Node.
@@ -57,8 +60,6 @@ async function bundle(entry: string, spec: string): Promise<string> {
       "process.env.NODE_ENV": JSON.stringify("production"),
       "import.meta.env": "undefined",
       "import.meta.url": JSON.stringify("about:blank"),
-      // @reactre/compat's sources as its own builds compile them, without time slicing.
-      "globalThis.__REACTRE_SLICING__": "false",
     },
   });
   if (!r.success) throw new Error(r.logs.join("\n"));

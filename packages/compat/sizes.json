@@ -1,15 +1,15 @@
 {
   "full": {
     "min": 125668,
-    "gzip": 45881
+    "gzip": 45855
   },
   "core": {
     "min": 109027,
-    "gzip": 39821
+    "gzip": 39790
   },
   "jfb": {
     "min": 62149,
-    "gzip": 23007
+    "gzip": 23005
   },
   "full-compat": {
     "min": 128323,

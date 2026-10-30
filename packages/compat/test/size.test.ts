@@ -18,6 +18,7 @@ import { expect, test } from "bun:test";
 import { gzipSync } from "node:zlib";
 
 import { reactreCompatCompiler } from "../src/compiler.ts";
+import { withoutSlicing } from "../src/withoutSlicing.ts";
 
 const src = (f: string): string => Bun.fileURLToPath(new URL(`../src/${f}`, import.meta.url));
 const budgets = Bun.fileURLToPath(new URL("../sizes.json", import.meta.url));
@@ -30,9 +31,6 @@ const toCompat: Bun.BunPlugin = {
   },
 };
 
-// As @reactre/compat's builds compile the sources: without time slicing (src/slicing.ts).
-const define = { "globalThis.__REACTRE_SLICING__": "false" };
-
 /** Resolves @reactre/compat's client entries to its sources, as @reactre/full-compat's build does. */
 const toSources: Bun.BunPlugin = {
   name: "compat-sources",
@@ -44,16 +42,31 @@ const toSources: Bun.BunPlugin = {
 };
 
 const profiles: Record<string, () => Promise<Bun.BuildOutput>> = {
-  full: () => Bun.build({ entrypoints: [src("index.ts")], minify: true, target: "browser", format: "esm", define }),
-  core: () => Bun.build({ entrypoints: [src("core.ts")], minify: true, target: "browser", format: "esm", define }),
+  // As @reactre/compat's builds compile its sources: core.ts without time slicing (src/withoutSlicing.ts).
+  full: () =>
+    Bun.build({
+      entrypoints: [src("index.ts")],
+      minify: true,
+      target: "browser",
+      format: "esm",
+      plugins: [withoutSlicing],
+    }),
+  core: () =>
+    Bun.build({
+      entrypoints: [src("core.ts")],
+      minify: true,
+      target: "browser",
+      format: "esm",
+      plugins: [withoutSlicing],
+    }),
   jfb: () =>
     Bun.build({
       entrypoints: [Bun.fileURLToPath(new URL("../../../apps/jfb/app/main.jsx", import.meta.url))],
       minify: true,
       target: "browser",
       format: "esm",
-      plugins: [reactreCompatCompiler(), toCompat],
-      define: { "process.env.NODE_ENV": '"production"', ...define },
+      plugins: [reactreCompatCompiler(), toCompat, withoutSlicing],
+      define: { "process.env.NODE_ENV": '"production"' },
     }),
   "full-compat": () =>
     Bun.build({

@@ -12,7 +12,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### @reactre/compat
 
-- Added: `@reactre/compat/features/timeSlicing`, which turns time slicing on where the build compiles it in (@reactre/full-compat's). @reactre/compat's own builds leave slicing out: their minified sizes are unchanged.
+- Added: `@reactre/compat/features/timeSlicing`, which turns time slicing on where the build compiles it in (@reactre/full-compat's). @reactre/compat's own builds strip the slicing code from core.ts before they compile it, so its dist, sizes and speed are as before, byte for byte.
 
 ### @reactre/plugin
 

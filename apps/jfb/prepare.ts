@@ -30,6 +30,8 @@ import { join } from "node:path";
 
 import type { BunPlugin } from "bun";
 
+import { withoutSlicing } from "../../packages/compat/src/withoutSlicing.ts";
+
 // #region Entries and paths
 
 /** The js-framework-benchmark commit of the Chrome 156 results; run.ts and trace.ts match it. */
@@ -131,7 +133,8 @@ export async function buildEntry(name: string, entry: Entry, options: BuildOptio
       reactreCompatCompiler(options.inlineElements === undefined ? {} : { inlineElements: options.inlineElements }),
     );
   }
-  plugins.push(resolveFrom(packages, entry.react));
+  // @reactre/compat's core as its own builds compile it, without time slicing.
+  plugins.push(resolveFrom(packages, entry.react), withoutSlicing);
   const dir = join(keyed, name);
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(join(dir, "dist"), { recursive: true });
@@ -140,8 +143,7 @@ export async function buildEntry(name: string, entry: Entry, options: BuildOptio
     format: "iife",
     minify: options.minify ?? true,
     plugins,
-    // @reactre/compat's sources as its own builds compile them: without time slicing (src/slicing.ts).
-    define: { "process.env.NODE_ENV": JSON.stringify("production"), "globalThis.__REACTRE_SLICING__": "false" },
+    define: { "process.env.NODE_ENV": JSON.stringify("production") },
   });
   if (!r.success) throw new Error(r.logs.join("\n"));
   await Bun.write(join(dir, "dist/main.js"), r.outputs[0]!);
