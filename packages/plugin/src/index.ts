@@ -34,16 +34,26 @@
 //     React's browser build does, and a Node SSR build the Node entry, with React's full
 //     messages. A named build (`react-dom/server.browser`, `.edge`, `.node`, `.bun`) goes to
 //     compat's entry for that build whatever the target, as it reaches that build of React's.
-//   - No source maps yet: the compilers rewrite text without tracking positions. A transformed
-//     file maps to nothing rather than to the wrong line.
+//   - A compiled file's source map is three chained: oxc's (TypeScript and JSX stripped), the
+//     rename's (./transpile.ts) and the compiler's, each built from marks the rewrite puts before
+//     every token it copies (@reactre/compiler/map), composed by @jridgewell/remapping. With a map
+//     or without, the code is the same. The map is built only when the bundler takes one
+//     (`wantsMaps`): not for webpack's or Rspack's `devtool: false`, esbuild without `sourcemap`,
+//     a Vite build without `build.sourcemap`, or Bun, whose plugins cannot return a map.
 
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import remapping from "@jridgewell/remapping";
 import { BEHAVIOURS, enabledApis, KEYS } from "@reactre/compat/api";
-import { compileJs as compileCompat } from "@reactre/compat/compiler";
-import { compileJs as compileCore, ReactreCompileError } from "@reactre/compiler";
+import { compileJs as compileCompat, compileJsWithMap as compileCompatWithMap } from "@reactre/compat/compiler";
+import {
+  compileJs as compileCore,
+  compileJsWithMap as compileCoreWithMap,
+  ReactreCompileError,
+} from "@reactre/compiler";
+import type { SourceMapV3 } from "@reactre/compiler/map";
 import { createUnplugin, type UnpluginInstance, type UnpluginOptions } from "unplugin";
 
 import { entrySource, offError, usedApis, writeEntry } from "./api.ts";
@@ -197,15 +207,18 @@ export const reactre: UnpluginInstance<ReactreOptions | undefined, boolean> = cr
           filter: { id: { include, exclude } },
           handler(code, id) {
             const path = id.replace(/[?#].*$/, "");
-            const out = transpile(path, code, compat === undefined ? "@reactre/core" : "react");
-            if (compat !== undefined) return { code: compileCompat(out.code), map: null };
-            if (out.classic) {
+            const maps = wantsMaps(this);
+            const out = transpile(path, code, compat === undefined ? "@reactre/core" : "react", maps);
+            if (compat === undefined && out.classic) {
               throw new ReactreCompileError(`reactre: ${path}: a key after {...spread} props cannot be compiled`);
             }
             try {
-              return { code: compileCore(out.code), map: null };
+              if (!maps)
+                return { code: compat !== undefined ? compileCompat(out.code) : compileCore(out.code), map: null };
+              const compiled = compat !== undefined ? compileCompatWithMap(out.code) : compileCoreWithMap(out.code);
+              return { code: compiled.code, map: chain(compiled.map, out.map) };
             } catch (e) {
-              if (e instanceof ReactreCompileError) e.message = `${path}: ${e.message}`;
+              if (compat === undefined && e instanceof ReactreCompileError) e.message = `${path}: ${e.message}`;
               throw e;
             }
           },
@@ -325,6 +338,59 @@ export default reactre;
 // #endregion
 
 // #region Helpers
+
+/** What `wantsMaps` reads of a transform hook's context, in each bundler that has it. */
+interface MapsContext {
+  /** Vite's environment: its dev server always takes maps, a build when `build.sourcemap` is set. */
+  readonly environment?: {
+    readonly mode?: string;
+    readonly config?: { readonly build?: { readonly sourcemap?: unknown } };
+  };
+  /** unplugin's way to the bundler's own build: webpack's and Rspack's loader, esbuild's options, Bun. */
+  readonly getNativeBuildContext?: () => {
+    readonly framework: string;
+    readonly loaderContext?: { readonly sourceMap?: boolean };
+    readonly build?: { readonly initialOptions?: { readonly sourcemap?: unknown } };
+  };
+}
+
+/**
+ * Whether the bundler takes a source map from this transform: false when it says it does not
+ * (webpack's and Rspack's `devtool: false`, esbuild's `sourcemap` unset, a Vite build without
+ * `build.sourcemap`), and in Bun, whose plugins return code without a map (Bun reads no
+ * `sourceMappingURL` in what a plugin returns). Rollup and Rolldown decide at output, after every
+ * transform, so they always get one.
+ */
+function wantsMaps(ctx: unknown): boolean {
+  const c = ctx as MapsContext | undefined;
+  const env = c?.environment;
+  if (env?.mode === "dev") return true;
+  if (env?.mode === "build") return Boolean(env.config?.build?.sourcemap);
+  const native = typeof c?.getNativeBuildContext === "function" ? c.getNativeBuildContext() : undefined;
+  switch (native?.framework) {
+    case "webpack":
+    case "rspack":
+      return native.loaderContext?.sourceMap !== false;
+    case "esbuild":
+      return Boolean(native.build?.initialOptions?.sourcemap);
+    case "bun":
+      return false;
+    default:
+      return true;
+  }
+}
+
+/**
+ * The map from the compiled code back to the source: the compiler's map, then the transpiler's.
+ * No compiler map means the compile left the code as it was. Without the transpiler's (an input
+ * the marks cannot map), the code maps to nothing, which the bundler shows as no position rather
+ * than a wrong one.
+ */
+function chain(compiled: SourceMapV3 | null, transpiled: SourceMapV3 | undefined): SourceMapV3 | { mappings: "" } {
+  if (transpiled === undefined) return { mappings: "" };
+  if (compiled === null) return transpiled;
+  return remapping([compiled, transpiled], () => null) as unknown as SourceMapV3;
+}
 
 /** What the resolveId hook uses of a Rollup-style plugin context. */
 interface RollupResolver {

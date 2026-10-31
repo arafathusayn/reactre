@@ -85,6 +85,7 @@
     "build": "rm -rf dist && bun build src/index.ts src/vite.ts src/rollup.ts src/rolldown.ts src/esbuild.ts src/webpack.ts src/rspack.ts src/bun.ts --outdir dist --target node --format esm --splitting --packages external && bun ../../scripts/declarations.ts"
   },
   "dependencies": {
+    "@jridgewell/remapping": "catalog:",
     "@reactre/compat": "workspace:*",
     "@reactre/compiler": "workspace:*",
     "oxc-parser": "catalog:",
@@ -92,6 +93,7 @@
     "unplugin": "catalog:"
   },
   "devDependencies": {
+    "@jridgewell/trace-mapping": "catalog:",
     "@reactre/core": "workspace:*",
     "@reactre/full-compat": "workspace:*",
     "@rollup/plugin-node-resolve": "catalog:",

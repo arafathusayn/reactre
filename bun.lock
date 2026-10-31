@@ -212,6 +212,7 @@
       "name": "@reactre/plugin",
       "version": "0.0.2",
       "dependencies": {
+        "@jridgewell/remapping": "catalog:",
         "@reactre/compat": "workspace:*",
         "@reactre/compiler": "workspace:*",
         "oxc-parser": "catalog:",
@@ -219,6 +220,7 @@
         "unplugin": "catalog:",
       },
       "devDependencies": {
+        "@jridgewell/trace-mapping": "catalog:",
         "@reactre/core": "workspace:*",
         "@reactre/full-compat": "workspace:*",
         "@rollup/plugin-node-resolve": "catalog:",
@@ -271,6 +273,8 @@
     "@headlessui/react": "2.2.10",
     "@hello-pangea/dnd": "18.0.1",
     "@heroicons/react": "2.2.0",
+    "@jridgewell/remapping": "2.3.5",
+    "@jridgewell/trace-mapping": "0.3.31",
     "@lexical/react": "0.53.0",
     "@mantine/core": "9.7.4",
     "@mantine/hooks": "9.7.4",

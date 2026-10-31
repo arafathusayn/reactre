@@ -21,6 +21,8 @@
       "@headlessui/react": "2.2.10",
       "@hello-pangea/dnd": "18.0.1",
       "@heroicons/react": "2.2.0",
+      "@jridgewell/remapping": "2.3.5",
+      "@jridgewell/trace-mapping": "0.3.31",
       "@lexical/react": "0.53.0",
       "@mantine/core": "9.7.4",
       "@mantine/hooks": "9.7.4",
