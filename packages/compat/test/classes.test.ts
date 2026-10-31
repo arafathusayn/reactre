@@ -154,6 +154,73 @@ describe("lifecycles", () => {
     expect(log).toEqual(["was 1"]);
   });
 
+  test("the instance's getSnapshotBeforeUpdate, not a static one, leaves out componentWillMount", () => {
+    const log: string[] = [];
+    class Snap extends Component {
+      componentWillMount() {
+        log.push("never");
+      }
+      override getSnapshotBeforeUpdate() {
+        return null;
+      }
+      override render() {
+        return h("b", null, "s");
+      }
+    }
+    class Static extends Component {
+      static getSnapshotBeforeUpdate() {
+        return null;
+      }
+      componentWillMount() {
+        log.push("static: will mount");
+      }
+      override render() {
+        return h("i", null, "t");
+      }
+    }
+    render(h("p", null, h(Snap), h(Static)));
+    expect(html()).toBe("<p><b>s</b><i>t</i></p>");
+    expect(log).toEqual(["static: will mount"]);
+  });
+
+  test("a will-method and its UNSAFE_ twin both run, the plain one first, as in React", () => {
+    const log: string[] = [];
+    class Both extends Component<{ n: number }> {
+      componentWillMount() {
+        log.push("will mount");
+      }
+      UNSAFE_componentWillMount() {
+        log.push("UNSAFE will mount");
+      }
+      componentWillReceiveProps() {
+        log.push("will receive");
+      }
+      UNSAFE_componentWillReceiveProps() {
+        log.push("UNSAFE will receive");
+      }
+      componentWillUpdate() {
+        log.push("will update");
+      }
+      UNSAFE_componentWillUpdate() {
+        log.push("UNSAFE will update");
+      }
+      override render() {
+        return h("b", null, this.props.n);
+      }
+    }
+    render(h(Both, { n: 1 }));
+    render(h(Both, { n: 2 }));
+    expect(html()).toBe("<b>2</b>");
+    expect(log).toEqual([
+      "will mount",
+      "UNSAFE will mount",
+      "will receive",
+      "UNSAFE will receive",
+      "will update",
+      "UNSAFE will update",
+    ]);
+  });
+
   test("shouldComponentUpdate false skips the render but still takes the new props and state", () => {
     let inst!: Gate;
     const done: string[] = [];

@@ -50,6 +50,18 @@ function support(core: ClassCore): ClassSupport {
     return state;
   }
 
+  /**
+   * Calls a legacy will-method and then its UNSAFE_ twin, each one the instance defines, as React
+   * does. Returns whether either was defined.
+   */
+  function callLegacy(inst: Any, name: string, ...args: Any[]): boolean {
+    const plain = inst[name],
+      unsafe = inst["UNSAFE_" + name];
+    if (typeof plain === "function") plain.apply(inst, args);
+    if (typeof unsafe === "function") unsafe.apply(inst, args);
+    return typeof plain === "function" || typeof unsafe === "function";
+  }
+
   // Class props leave out `ref`: the ref gets the instance.
   function classProps(p: Props): Props {
     if (!("ref" in p)) return p;
@@ -174,13 +186,10 @@ function support(core: ClassCore): ClassSupport {
             const d = C.getDerivedStateFromProps(props, inst.state);
             if (d != null) inst.state = { ...inst.state, ...d };
           } else if (typeof inst.getSnapshotBeforeUpdate !== "function") {
-            const will = inst.UNSAFE_componentWillMount ?? inst.componentWillMount;
-            if (typeof will === "function") {
-              // Called as during render, so a setState in it is queued, not scheduled: it applies
-              // before the first render, with no second render after it.
-              core.rendering(f, () => will.call(inst));
+            // Called as during render, so a setState in it is queued, not scheduled: it applies
+            // before the first render, with no second render after it.
+            if (core.rendering(f, () => callLegacy(inst, "componentWillMount")))
               inst.state = nextState(f, inst, inst.state, props);
-            }
           }
         } else {
           prevProps = inst.props;
@@ -191,10 +200,7 @@ function support(core: ClassCore): ClassSupport {
           const legacy =
             typeof C.getDerivedStateFromProps !== "function" && typeof inst.getSnapshotBeforeUpdate !== "function";
           // Only new props from the parent, not the component's own setState.
-          if (legacy && old !== f.p) {
-            const wrp = inst.UNSAFE_componentWillReceiveProps ?? inst.componentWillReceiveProps;
-            if (typeof wrp === "function") wrp.call(inst, props, context);
-          }
+          if (legacy && old !== f.p) callLegacy(inst, "componentWillReceiveProps", props, context);
           let state = nextState(f, inst, prevState, props);
           if (typeof C.getDerivedStateFromProps === "function") {
             const d = C.getDerivedStateFromProps(props, state);
@@ -218,10 +224,7 @@ function support(core: ClassCore): ClassSupport {
             callbacks(f);
             return;
           }
-          if (legacy) {
-            const wu = inst.UNSAFE_componentWillUpdate ?? inst.componentWillUpdate;
-            if (typeof wu === "function") wu.call(inst, props, state, context);
-          }
+          if (legacy) callLegacy(inst, "componentWillUpdate", props, state, context);
           inst.props = props;
           inst.state = state;
           inst.context = context;
