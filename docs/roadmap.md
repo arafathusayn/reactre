@@ -92,7 +92,7 @@ These don't affect the benchmark app, but would affect a real app.
 - **Rows can hold only host elements.** A component, a nested `<For>` or a JSX expression in a row is a compile error today. A row-level slot needs the ownership above.
 - **Selector.** It records one key per row, so a row that reads two selectors, or one selector with two keys, keeps only the last. An observer outside a row is removed only when its key changes, so one that stops reading a key re-runs once more than needed.
 - **Batching.** Collecting pending effects is quadratic in a long batch, and nothing guards against an effect that writes what it reads.
-- **Compiler coverage.** Not handled yet: fragments and spread props (compile errors today), `style` objects, `ref`, SVG (templates are parsed as HTML), `checked` and `value` as properties, events that don't bubble (`focus`, `blur`) inside rows, and `key` on a host element outside `<For>`. A hole that reads a plain mutable variable is written once, by design; document it.
+- **Compiler coverage.** Not handled yet: fragments and spread props (compile errors today), `style` objects, `ref`, SVG (templates are parsed as HTML), `checked` and `value` as properties, events that don't bubble (`focus`, `blur`) inside rows, and `key` on a host element outside `<For>`. A hole that reads a plain mutable variable is written once, by design; document it. As `ref` and `style` objects compile, widen their JSX types in [`packages/core/src/jsx-runtime.ts`](../packages/core/src/jsx-runtime.ts), which type them `never` and `string` today, and turn their `@ts-expect-error` cases in `packages/core/test/jsx-types.tsx` into passing ones. Fragments type-check (TypeScript does not consult the runtime's `Fragment`) but are a compile error.
 - **Handlers outside lists** are bound once. A handler expression that reads a signal doesn't update.
 
 **Done when** each has a test, and `ab.ts` shows the benchmark numbers unchanged.
@@ -111,6 +111,5 @@ These don't affect the benchmark app, but would affect a real app.
 
 ## 6. Packages
 
-- **JSX types.** Give editors the types of reactre's intrinsic elements and `<For>`, so TSX written for reactre type-checks.
 - **Source maps.** @reactre/plugin returns no source map for a compiled file, because the compilers rewrite text without tracking positions. **Done when** each compiled file maps back to its source through oxc's map and the compilers' own, and a Vite build with `build.sourcemap` maps a runtime error to the right line.
 - **Fast Refresh.** @vitejs/plugin-react's Fast Refresh needs a React renderer registered with react-refresh, which @reactre/compat does not do yet, so an edited component keeps its old code on screen. Until then the docs leave the plugin out and Vite reloads the page on save. **Done when** compat registers with react-refresh, an edit re-renders in place keeping state, and a Vite dev-server check proves it.

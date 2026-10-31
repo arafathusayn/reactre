@@ -10,6 +10,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 - Changed: each export's `types` condition names a declaration file in `dist/` (`dist/index.d.ts`, `dist/features/*.d.ts`, ...), written by the build, not the TypeScript source. A project that imports reactre type-checks its declarations under its own settings, `skipLibCheck: false` included, with `moduleResolution` `bundler`, `node16` or `nodenext`; before, its compiler read reactre's sources and failed on their `.ts` imports unless it set `allowImportingTsExtensions`. Bun still runs the sources, through the `bun` condition.
 
+### @reactre/core
+
+- Added: JSX types for reactre's TSX. With `"jsxImportSource": "@reactre/core"`, TypeScript checks every HTML and SVG element's attributes, `on*` handlers by their event's type, children, and `<For>`'s rows by the type of `each`. What the compiler cannot compile is a type error: a style object, `ref`, a function as an attribute or a child, a capture handler, a `key` outside `<For>`, children of a void element.
+- Added: `@reactre/core/jsx-runtime` and `@reactre/core/jsx-dev-runtime`, where TypeScript finds those types. Their `jsx` functions throw, naming the compiler: compiled TSX never calls them.
+
 ### @reactre/full-compat
 
 - Added: a new package, @reactre/compat with React's time slicing. A transition's render yields to the page every 5 ms: events, timers and paints run between slices, an urgent update made meanwhile commits first and the transition renders again from the start, and one that has waited 5 seconds renders the rest at once, as React's concurrent render does. Between slices the render is undone, so the page shows the last commit. The check before each component costs on every render, so only this package's builds compile it in. About 1 KB gzipped more than @reactre/compat.

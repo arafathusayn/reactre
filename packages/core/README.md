@@ -73,6 +73,27 @@ import { defineConfig } from "vite";
 export default defineConfig({ plugins: [reactre()] });
 ```
 
+For TypeScript, point the JSX types at `@reactre/core`:
+
+```jsonc
+// tsconfig.json
+{
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "jsxImportSource": "@reactre/core",
+  },
+}
+```
+
+TypeScript then reads `@reactre/core/jsx-runtime`'s JSX namespace: every HTML and SVG element with its attributes, `on*` handlers typed by their event (`onClick` gets a `MouseEvent`, `onKeyDown` a `KeyboardEvent`), and `<For>`, whose rows take the type of `each`. The types follow what the compiler compiles:
+
+- `class` (or `className`) and `style` take strings; a style object is a type error.
+- An attribute or a child takes a value, not a function: `{count()}` updates, while `{count}` is an error, since it would be written once as text.
+- `ref` is not compiled yet, so it is typed `never`, and void elements such as `<input>` take no children.
+- A `key` belongs on `<For>`; on any other element it is an error.
+
+The plugin leaves no call to a JSX runtime in the bundle. A file that reaches the bundle without it throws on its first element, naming the fix.
+
 ## Without TSX
 
 The templates the compiler produces are a public API of their own, in [`@reactre/dom`](https://www.npmjs.com/package/@reactre/dom). Signals drive them just as well:
