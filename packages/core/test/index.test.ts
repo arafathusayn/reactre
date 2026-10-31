@@ -294,6 +294,65 @@ describe("reactre: runtime helpers", () => {
   });
 });
 
+describe("reactre: selectors", () => {
+  test("a row keeps every selector and key it reads", () => {
+    const root = box();
+    const api = run<{ setSel: (n: number) => void; setHover: (n: number) => void }>(
+      `
+      import { For, render, selector, signal } from "@reactre/core";
+      const [sel, setSel] = signal(0);
+      const [hover, setHover] = signal(0);
+      const isSel = selector(sel);
+      const isHover = selector(hover);
+      const rows = [1, 2, 3].map((id) => ({ id }));
+      function App() {
+        return (
+          <ul>
+            <For each={rows} key={(r) => r.id}>
+              {(r) => (
+                <li class={isSel(r.id) ? "sel" : ""} title={isHover(r.id) ? "hover" : "-"}>
+                  {isSel(r.id) ? "me" : isSel(r.id + 1) ? "next" : ""}
+                </li>
+              )}
+            </For>
+          </ul>
+        );
+      }
+      render(App, root);
+      return { setSel, setHover };
+    `,
+      root,
+    );
+    const lis = () => [...(root.firstChild as FakeElement).childNodes] as FakeElement[];
+    api.setHover(2);
+    api.setSel(2);
+    expect(lis().map((li) => li.getAttribute("class") ?? "")).toEqual(["", "sel", ""]);
+    expect(lis().map((li) => li.getAttribute("title"))).toEqual(["-", "hover", "-"]);
+    // Row 1 asked about key 2 as well, so it follows it.
+    expect(lis().map((li) => li.textContent)).toEqual(["next", "me", ""]);
+    api.setHover(3);
+    api.setSel(3);
+    expect(lis().map((li) => li.getAttribute("title"))).toEqual(["-", "-", "hover"]);
+    expect(lis().map((li) => li.textContent)).toEqual(["", "next", "me"]);
+  });
+
+  test("an observer outside a row stops following a key it no longer reads", () => {
+    const [sel, setSel] = runtime.signal("x");
+    const [asks, setAsks] = runtime.signal(true);
+    const is = runtime.selector(sel);
+    let runs = 0;
+    runtime.effect(() => {
+      runs++;
+      if (asks()) is("a");
+    });
+    setAsks(false);
+    const before = runs;
+    setSel("a");
+    setSel("b");
+    expect(runs).toBe(before);
+  });
+});
+
 describe("reactre: batching", () => {
   test("a long batch queues each effect once and stays linear", () => {
     const n = 100000;

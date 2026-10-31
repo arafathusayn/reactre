@@ -425,13 +425,22 @@ export function selector<K>(source: () => K): (k: K) => boolean {
   };
 }
 
+/** One key of a selector, as a source: the observers outside rows that asked about it. */
+class KeySource implements Source {
+  subs: Observer[] = [];
+}
+
 /**
  * A selector's state: its current key and who asked about which key.
  *
  * Rows of a `<For>` are not subscribed one by one. A row records the
  * selector and the key it asked about on itself, and the selector keeps only
  * the list, once. On a change, each list scans its rows for the two keys:
- * one comparison per row, no subscription objects at all.
+ * one comparison per row, no subscription objects at all. A row that asks
+ * more than one (selector, key) pair keeps them all in a list (see `more`).
+ *
+ * Any other reader subscribes to the key's source like to a signal, so it
+ * stops following a key when a run no longer asks about it.
  */
 class Selector<K> {
   key!: K;
@@ -439,37 +448,59 @@ class Selector<K> {
   // Rows of lists that asked: by list, the rows remember their key themselves.
   readonly lists: ForList<unknown, unknown>[] = [];
   // Anything else that asked, by key.
-  readonly byKey = new Map<K, Observer[]>();
+  readonly byKey = new Map<K, KeySource>();
   /** Record that reader `o` asked about key `k`. */
   watch(o: Reader, k: K): void {
     if (o === rowContext) {
       // A row asks: it keeps the key itself; the list is told of changes.
-      // A row keeps one (selector, key) pair: of several selectors it asks,
-      // the last one is recorded.
-      const e = rowContext.entry;
-      e.sel = this as Selector<unknown>;
-      e.sk = k;
-      if (!this.lists.includes(rowContext.list)) this.lists.push(rowContext.list);
+      const e = rowContext.entry,
+        list = rowContext.list;
+      if (e.sel === null) {
+        e.sel = this as Selector<unknown>;
+        e.sk = k;
+      } else if (e.sel !== this || e.sk !== k) more(list, e, this as Selector<unknown>, k);
+      if (!this.lists.includes(list)) {
+        this.lists.push(list);
+        list.sels.push(this as Selector<unknown>);
+      }
       return;
     }
-    // Any reader but the row context is an observer.
-    const obs = o as Observer;
-    const list = this.byKey.get(k);
-    if (list === undefined) this.byKey.set(k, [obs]);
-    else if (!list.includes(obs)) list.push(obs);
+    let src = this.byKey.get(k);
+    if (src === undefined) this.byKey.set(k, (src = new KeySource()));
+    o.read(src);
   }
   /** The key moved from `prev` to `next`: re-run what asked about either. */
   changed(prev: K, next: K): void {
+    if (prev === next) return;
     for (let i = 0; i < this.lists.length; i++) this.lists[i]!.selectorChanged(this as Selector<unknown>, prev, next);
-    for (const k of [prev, next]) {
-      const obs = this.byKey.get(k);
-      if (obs === undefined) continue;
-      // Watches are one-shot: an observer that still cares asks again when
-      // it re-runs, which records it anew.
-      this.byKey.delete(k);
-      for (let i = 0; i < obs.length; i++) obs[i]!.stale();
-    }
+    this.wake(prev);
+    this.wake(next);
   }
+  /** Re-run the observers that asked about `k`; a key no one asks about any more is forgotten. */
+  private wake(k: K): void {
+    const src = this.byKey.get(k);
+    if (src === undefined) return;
+    notify(src);
+    if (src.subs.length === 0) this.byKey.delete(k);
+  }
+}
+
+/**
+ * Stands in a row's `sel` when the row asked more than one (selector, key)
+ * pair; its `sk` then holds the pairs, flat: [selector, key, selector, key, ...].
+ */
+const MANY = new Selector<unknown>();
+
+/** Row `e` asks about a second (or later) pair: keep them all, and mark the list as having such rows. */
+function more(list: ForList<unknown, unknown>, e: Row<unknown>, sel: Selector<unknown>, k: unknown): void {
+  if (e.sel !== MANY) {
+    e.sk = [e.sel, e.sk];
+    e.sel = MANY;
+    list.many = true;
+  }
+  const pairs = e.sk as unknown[];
+  for (let i = 0; i < pairs.length; i += 2) if (pairs[i] === sel && pairs[i + 1] === k) return;
+  pairs.push(sel, k);
 }
 
 // #endregion
@@ -488,7 +519,7 @@ interface Row<T> {
   nodes: unknown[] | null;
   /** The last values of its reactive holes. */
   dv: unknown[] | null;
-  /** The selector it asked, and the key it asked about. */
+  /** The selector it asked, and the key it asked about (MANY and the pairs, for several). */
   sel: Selector<unknown> | null;
   sk: unknown;
   /** Its observer, when its reactive holes read a signal (not a selector). */
@@ -580,6 +611,10 @@ class ForList<T, K> {
   private readonly dv: unknown[] = [];
   /** Number of reactive holes. */
   private readonly nd: number;
+  /** Whether a row has ever asked several selector pairs: then changes take the slower scan. */
+  many = false;
+  /** The selectors whose `lists` hold this list. */
+  readonly sels: Selector<unknown>[] = [];
 
   constructor(parent: Element, anchor: Node | null, spec: ForSpec<T, K>) {
     this.spec = spec;
@@ -690,6 +725,8 @@ class ForList<T, K> {
     const dv = this.dv,
       prev = e.dv!,
       holes = this.spec.dynHoles!;
+    // The run records the selectors it asks afresh, as an observer's run records its sources.
+    e.sel = null;
     this.runDyn(e, e.item, dv);
     for (let i = 0; i < holes.length; i++) {
       if (dv[i] !== prev[i]) {
@@ -729,10 +766,36 @@ class ForList<T, K> {
   /** A selector this list's rows asked has moved from prev to next. */
   selectorChanged(sel: Selector<unknown>, prev: unknown, next: unknown): void {
     const es = this.list.entries;
+    if (this.many) {
+      this.selectorChangedMany(sel, prev, next);
+      return;
+    }
     for (let i = 0; i < es.length; i++) {
       const e = es[i]!;
       if (e.sel === sel && (e.sk === prev || e.sk === next)) this.refresh(e);
     }
+  }
+
+  /** `selectorChanged` for a list where some row has asked several pairs. */
+  private selectorChangedMany(sel: Selector<unknown>, prev: unknown, next: unknown): void {
+    // The rows to refresh are found first: a refresh rewrites the pairs it scans.
+    const hit: Row<T>[] = [],
+      es = this.list.entries;
+    for (let i = 0; i < es.length; i++) {
+      const e = es[i]!;
+      if (e.sel === sel) {
+        if (e.sk === prev || e.sk === next) hit.push(e);
+      } else if (e.sel === MANY) {
+        const pairs = e.sk as unknown[];
+        for (let j = 0; j < pairs.length; j += 2) {
+          if (pairs[j] === sel && (pairs[j + 1] === prev || pairs[j + 1] === next)) {
+            hit.push(e);
+            break;
+          }
+        }
+      }
+    }
+    for (let i = 0; i < hit.length; i++) this.refresh(hit[i]!);
   }
 
   /** Render the rows for `items`. */
