@@ -69,12 +69,13 @@ describe("compile errors", () => {
     fails(`export const x = <ul><For each={[]}>{(r) => <li />}</For></ul>;`, /needs each, key and a row function/);
   });
 
-  test("a <For> row is one element with no components, lists or JSX expressions in it", () => {
+  test("a <For> row is one element; one that holds a component takes the list with mounts", () => {
     fails(`export const x = <ul><For each={[]} key={(r) => r}>{(r) => <Row />}</For></ul>;`, /row must be one element/);
-    fails(
+    const out = compileSource(
       `const C = () => null; export const x = <ul><For each={[]} key={(r) => r}>{(r) => <li><C /></li>}</For></ul>;`,
-      /cannot hold components, lists or JSX expressions/,
     );
+    expect(out).toContain("__rrForM(");
+    expect(out).toContain("__forMount as __rrForM");
   });
 
   test("a <For> beside other children inserts its rows before its anchor", () => {

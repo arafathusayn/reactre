@@ -32,7 +32,16 @@
 //     changes. A `selector` read costs a row one field, not a subscription:
 //     a change of selection re-runs the two rows whose key it was or is.
 //   - Event handlers in rows are delegated: one listener per event type on
-//     the list's parent, which finds the row and calls its handler.
+//     the list's parent, which finds the row and calls its handler (in the
+//     capture phase for an event that does not bubble, such as focus).
+//   - A row may also hold components, nested lists, JSX expressions,
+//     properties, styles, refs and spread props ("mounts"). Such a row gets
+//     an owner, and its mounts run under it; a new item for the row cleans
+//     the owner and runs them again. Only lists whose rows have mounts take
+//     that path (`__forMount`); host-only rows cost what they always have.
+//   - Every effect run owns the effects and cleanups (`onCleanup`) it makes,
+//     and disposes them before it re-runs: a slot that replaces its content
+//     stops the old content's effects. `render` returns the root's disposer.
 //
 // The list is @reactre/dom's keyed List (reuse, minimal moves, swaps and
 // removals in place). Nothing here depends on React.
@@ -40,7 +49,9 @@
 // Design decisions that shape the code below:
 //
 //   - Reactivity is push-based and synchronous. A signal write re-runs its
-//     observers at once, or at the end of the outermost `batch`.
+//     observers at once, or at the end of the outermost `batch`. An effect
+//     notified while it runs (it wrote what it read) runs again after, up to
+//     100 times in a row, then throws.
 //   - An observer re-collects what it reads on every run, so a branch that
 //     stops reading a signal stops depending on it.
 //   - Rows cost as little as possible. A row is one plain object of fixed
@@ -543,6 +554,18 @@ export interface ForSpec<T, K> {
   readonly dynHoles?: readonly number[];
   /** Delegated handlers: [event type, hole of the element, handler of the row]. */
   readonly events?: readonly (readonly [string, number, (item: T) => (e: Event) => void])[];
+  /**
+   * With `__forMount`: the parts of a row that create something of their own (a slot, a nested
+   * list, a property, a style, a ref, spread props), as [hole, part]. Each part runs with the
+   * row's item and the hole's node, under the row's owner, when the row is created and again
+   * when it gets a new item.
+   */
+  readonly mounts?: readonly (readonly [number, (item: T, node: Node) => void])[];
+}
+
+/** A row of a `__forMount` list: a row, plus the owner of what its mounts created. */
+interface MountRow<T> extends Row<T> {
+  own: Owner;
 }
 
 /**
@@ -606,7 +629,7 @@ class ForList<T, K> {
   readonly list: List<T, Row<T>, K & (string | number)>;
   readonly parent: Element;
   /** Scratch values for every hole, reused for each row created or updated. */
-  private readonly v: unknown[];
+  protected readonly v: unknown[];
   /** Scratch for reactive values, and for an old item's values during an update. */
   private readonly dv: unknown[] = [];
   /** Number of reactive holes. */
@@ -650,7 +673,7 @@ class ForList<T, K> {
   }
 
   /** Build a row: compute its values, then clone the template with them baked in. */
-  private create(item: T): Row<T> {
+  protected create(item: T): Row<T> {
     const spec = this.spec,
       v = this.v;
     spec.fill(item, v);
@@ -701,7 +724,7 @@ class ForList<T, K> {
   }
 
   /** Give row `e` a new item of the same key: write the holes whose values changed. */
-  private update(e: Row<T>, item: T): void {
+  protected update(e: Row<T>, item: T): void {
     const spec = this.spec,
       old = e.item,
       v = this.v,
@@ -744,7 +767,7 @@ class ForList<T, K> {
    * Row e's node for one hole, looked up (that hole only) the first time. A
    * row that is never written is never walked from JavaScript.
    */
-  private node(e: Row<T>, hole: number): Node {
+  protected node(e: Row<T>, hole: number): Node {
     let nodes = e.nodes;
     if (nodes === null) nodes = e.nodes = [];
     let n = nodes[hole] as Node | undefined;
@@ -759,9 +782,21 @@ class ForList<T, K> {
   private readonly finders: ((root: Node, out: unknown[]) => void)[] = [];
 
   /** A row leaves the list: unsubscribe it, so it stops re-running. */
-  private dispose(e: Row<T>): void {
+  protected dispose(e: Row<T>): void {
     if (e.obs !== null) e.obs.drop();
   }
+
+  /**
+   * The list's owner is disposed (a slot replaced it, or `render`'s disposer ran): its rows
+   * leave, its listeners go, and its selectors forget it.
+   */
+  destroy(): void {
+    this.list.clear();
+    for (const [type, fn, capture] of this.listeners) this.parent.removeEventListener(type, fn, capture);
+    for (const sel of this.sels) sel.lists.splice(sel.lists.indexOf(this as ForList<unknown, unknown>), 1);
+  }
+  /** The delegated listeners, for `destroy`. */
+  private readonly listeners: [string, (ev: Event) => void, boolean][] = [];
 
   /** A selector this list's rows asked has moved from prev to next. */
   selectorChanged(sel: Selector<unknown>, prev: unknown, next: unknown): void {
@@ -811,7 +846,9 @@ class ForList<T, K> {
    */
   private listen(type: string, holes: number[], hs: ((item: T) => (e: Event) => void)[]): void {
     const parent = this.parent;
-    parent.addEventListener(type, (ev) => {
+    // An event that does not bubble still passes the parent on its way down: it is caught there.
+    const capture = NO_BUBBLE.has(type);
+    const fn = (ev: Event): void => {
       // Climb from the target to the parent's child, keeping the path:
       // path[0] is the innermost element.
       let node = ev.target as Node | null;
@@ -843,6 +880,68 @@ class ForList<T, K> {
           }
         }
       }
+    };
+    parent.addEventListener(type, fn, capture);
+    this.listeners.push([type, fn, capture]);
+  }
+}
+
+/** Events that do not bubble, which a list delegates in the capture phase. */
+const NO_BUBBLE = new Set([
+  "focus",
+  "blur",
+  "mouseenter",
+  "mouseleave",
+  "pointerenter",
+  "pointerleave",
+  "load",
+  "error",
+  "scroll",
+  "scrollend",
+  "toggle",
+  "invalid",
+  "play",
+  "pause",
+  "ended",
+  "volumechange",
+  "timeupdate",
+]);
+
+/**
+ * A `<For>` whose rows hold mounts (see `ForSpec.mounts`). Each row gets an owner; its mounts
+ * run under it at creation, again (after it is cleaned) when the row gets a new item, and it
+ * is cleaned when the row leaves. A subclass, so that lists of host-only rows run the plain
+ * create, update and dispose with no check for mounts.
+ */
+class MountList<T, K> extends ForList<T, K> {
+  constructor(parent: Element, anchor: Node | null, spec: ForSpec<T, K>) {
+    super(parent, anchor, spec);
+    // A mount's hole is never filled: null is what the prototype holds for an attribute hole,
+    // so the clone writes nothing there.
+    for (const [hole] of spec.mounts!) this.v[hole] = null;
+  }
+  protected override create(item: T): Row<T> {
+    const e = super.create(item) as MountRow<T>;
+    e.own = new Owner();
+    this.mount(e);
+    return e;
+  }
+  protected override update(e: Row<T>, item: T): void {
+    const fresh = e.item !== item;
+    super.update(e, item);
+    if (fresh) {
+      (e as MountRow<T>).own.clean();
+      this.mount(e as MountRow<T>);
+    }
+  }
+  protected override dispose(e: Row<T>): void {
+    super.dispose(e);
+    (e as MountRow<T>).own.clean();
+  }
+  private mount(e: MountRow<T>): void {
+    const ms = this.spec.mounts!;
+    within(e.own, () => {
+      for (let i = 0; i < ms.length; i++) ms[i]![1](e.item, this.node(e, ms[i]![0]));
     });
   }
 }
@@ -852,13 +951,23 @@ class ForList<T, K> {
 // #region What compiled code calls
 
 /** Internal: a template from markup strings and hole markers (@reactre/compiler). */
-export function __template(strings: readonly string[], holes: readonly number[]): Template {
-  return new Template(strings, holes);
+export function __template(strings: readonly string[], holes: readonly number[], svg?: boolean): Template {
+  return new Template(strings, holes, svg);
 }
 
 /** Internal: a `<For>` in `parent`, before `anchor` (null: the list is the parent's only content). */
 export function __for<T, K>(parent: Element, anchor: Node | null, spec: ForSpec<T, K>): void {
-  const l = new ForList<T, K>(parent, anchor, spec);
+  start(new ForList<T, K>(parent, anchor, spec), spec);
+}
+
+/** Internal: a `<For>` whose rows hold mounts (`spec.mounts`): see `__for`. */
+export function __forMount<T, K>(parent: Element, anchor: Node | null, spec: ForSpec<T, K>): void {
+  start(new MountList<T, K>(parent, anchor, spec), spec);
+}
+
+/** Render list `l` now and whenever `spec.each` changes; it is destroyed with the current owner. */
+function start<T, K>(l: ForList<T, K>, spec: ForSpec<T, K>): void {
+  if (owner !== null) onCleanup(() => l.destroy());
   // Rendering the rows reads the rows' items, not what the rows read: only
   // `each` is this effect's dependency.
   effect(() => {
@@ -880,7 +989,8 @@ export function __for<T, K>(parent: Element, anchor: Node | null, spec: ForSpec<
  */
 export function __insert(anchor: Node, value: unknown, prev: Node[] | null): Node[] | null {
   const parent = anchor.parentNode!;
-  if (prev !== null) for (const n of prev) parent.removeChild(n);
+  // A node may have left already: a slot inside a fragment removes its own content when disposed.
+  if (prev !== null) for (const n of prev) if (n.parentNode === parent) parent.removeChild(n);
   if (value == null || value === false || value === true) return null;
   const out: Node[] = [];
   const add = (x: unknown): void => {
@@ -913,10 +1023,134 @@ export function __bind(t: Template, hole: number, node: Node, value: () => unkno
 /** Internal: a slot whose content may change (a component's or a function's result). */
 export function __slot(anchor: Node, value: () => unknown): void {
   let prev: Node[] | null = null;
+  // Disposed with its owner, the slot takes its content out: the owner's own nodes may be
+  // removed by a snapshot taken before this content came (a fragment's, a row's mount).
+  if (owner !== null)
+    onCleanup(() => {
+      if (prev !== null) for (const n of prev) n.parentNode?.removeChild(n);
+      prev = null;
+    });
   effect(() => {
     // Only `value()` is this effect's dependency; inserting is untracked.
     const v = value();
     prev = untrack(() => __insert(anchor, v, prev));
+  });
+}
+
+/**
+ * Internal: a fragment's nodes, as an array, built in a document fragment. A child that is a
+ * function may change: it becomes a slot. Any other child is inserted once, as `__insert` would.
+ */
+export function __frag(kids: readonly unknown[]): Node[] {
+  const f = document.createDocumentFragment();
+  for (let i = 0; i < kids.length; i++) {
+    const k = kids[i];
+    const a = f.appendChild(document.createTextNode(""));
+    if (typeof k === "function") __slot(a, k as () => unknown);
+    else {
+      __insert(a, k, null);
+      f.removeChild(a);
+    }
+  }
+  return Array.from(f.childNodes);
+}
+
+/**
+ * Internal: apply `value()` to `node` with `set` (`__style`, `__spread`), now and whenever what
+ * it reads changes; `set` gets the last value too, to undo what the new one leaves out.
+ */
+export function __apply(node: Node, set: (node: Node, v: unknown, prev: unknown) => void, value: () => unknown): void {
+  let prev: unknown;
+  effect(() => {
+    const v = value();
+    set(node, v, prev);
+    prev = v;
+  });
+}
+
+/** A style object's property name in CSS: `fontSize` is `font-size`; a custom property is kept. */
+const cssName = (k: string): string => (k.startsWith("--") ? k : k.replace(/[A-Z]/g, (m) => "-" + m.toLowerCase()));
+
+/**
+ * Internal: an element's `style`: a string is its whole inline style; an object sets each
+ * property by name (camelCase or CSS, custom properties included). Values are written as given:
+ * a number gets no unit. null, undefined and false remove a property.
+ */
+export function __style(node: Node, v: unknown, prev: unknown): void {
+  const s = (node as HTMLElement).style;
+  if (v == null || typeof v !== "object") {
+    s.cssText = v == null ? "" : "" + (v as string);
+    return;
+  }
+  const next = v as Record<string, unknown>;
+  let last: Record<string, unknown>;
+  if (prev != null && typeof prev === "object") last = prev as Record<string, unknown>;
+  else {
+    // From a string (or nothing): start clean.
+    s.cssText = "";
+    last = {};
+  }
+  for (const k in last) if (!(k in next)) s.removeProperty(cssName(k));
+  for (const k in next) {
+    const x = next[k];
+    if (x === last[k]) continue;
+    if (x == null || x === false) s.removeProperty(cssName(k));
+    else s.setProperty(cssName(k), "" + (x as string));
+  }
+}
+
+/** Internal: give element `node` to a ref: a function is called with it, an object gets it as `current`. */
+export function __ref(node: Node, r: unknown): void {
+  if (typeof r === "function") (r as (n: Node) => void)(node);
+  else if (r != null) (r as { current: unknown }).current = node;
+}
+
+/**
+ * Internal: an element's spread props, applied as the compiler applies props: `on*` handlers as
+ * listeners, `class` and `className`, `style`, `ref`, `value`, `checked` and `selected` as
+ * properties, and anything else as an attribute (null, undefined and false remove it, true sets
+ * it empty). Props the last object had and this one lacks are undone.
+ */
+export function __spread(node: Node, v: unknown, prev: unknown): void {
+  const next = (v ?? {}) as Record<string, unknown>,
+    last = (prev ?? {}) as Record<string, unknown>;
+  for (const k in last) if (!(k in next)) prop(node as Element, k, undefined, last[k]);
+  for (const k in next) if (next[k] !== last[k]) prop(node as Element, k, next[k], last[k]);
+}
+
+/** One spread prop `k`: from `old` to `v`. */
+function prop(el: Element, k: string, v: unknown, old: unknown): void {
+  if (k === "children" || k === "key") return;
+  if (k === "ref") return __ref(el, v);
+  if (k === "style") return __style(el, v, old);
+  if (/^on[A-Z]/.test(k)) {
+    const type = k.slice(2).toLowerCase();
+    if (typeof old === "function") el.removeEventListener(type, old as EventListener);
+    if (typeof v === "function") el.addEventListener(type, v as EventListener);
+    return;
+  }
+  if (k === "value" || k === "checked" || k === "selected") {
+    (el as unknown as Record<string, unknown>)[k] = v;
+    return;
+  }
+  const name = k === "className" ? "class" : k === "htmlFor" ? "for" : k;
+  if (name === "class" && el.namespaceURI !== "http://www.w3.org/2000/svg")
+    el.className = v == null ? "" : "" + (v as string);
+  else if (v == null || v === false) el.removeAttribute(name);
+  else el.setAttribute(name, v === true ? "" : "" + (v as string));
+}
+
+/**
+ * Internal: a handler that may change (its expression reads a signal): one listener calls the
+ * handler `value()` gave last.
+ */
+export function __on(node: Node, type: string, value: () => unknown): void {
+  let h: unknown = null;
+  effect(() => {
+    h = value();
+  });
+  node.addEventListener(type, function (this: Node, e: Event) {
+    if (typeof h === "function") (h as (this: Node, e: Event) => void).call(this, e);
   });
 }
 

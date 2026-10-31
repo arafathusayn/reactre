@@ -7,19 +7,31 @@
 //   - A host element tree becomes a @reactre/dom template, hoisted to
 //     module scope, and an expression that clones it with the values of its
 //     holes. A hole whose expression calls a function is bound (an effect
-//     that rewrites it); an `on*` handler is added as a listener; a child
+//     that rewrites it); an `on*` handler is added as a listener (one that
+//     reads a signal and is not a function literal follows it); a child
 //     that is a component, a `<For>` or an expression holding JSX is a slot.
+//     `value`, `checked` and `selected` are set as properties, `style` takes
+//     an object or a string, `ref` gets the element, spread props are applied
+//     at runtime, and a template whose root is an SVG element is parsed as SVG.
 //   - `<For each={rows} key={(r) => r.id}>{(row) => <tr .../>}</For>` becomes
 //     a keyed list (`__for`) whose row template's holes are split by what
 //     they read: the row only (written at creation, compared on update), or
 //     a function call (re-run when what it read changes). Row handlers are
-//     delegated to the list's parent.
+//     delegated to the list's parent. A row that holds more than host
+//     elements and values (a component, a nested list, a JSX expression, a
+//     property, a style, a ref or a spread) becomes a `__forMount` list, whose
+//     rows own what those parts create; a row of host elements and values
+//     compiles as before.
 //   - A component element `<Button id="run" />` is the call `Button({ id: "run" })`,
 //     made once (components run once in reactre).
+//   - A fragment's children join the parent's template; a fragment that is
+//     not a child of an element is an array of nodes (`__frag`).
+//   - A key on an element outside a list rebuilds the element when the key
+//     changes (a slot that reads the key); a key that calls nothing is ignored.
 //
 // Nothing is left to a JSX runtime: a construct the compiler does not handle
-// (fragments, spread props, a keyed host element outside a list) is a
-// compile error, with its source.
+// (a `<For>` outside an element, a row that is not one element) is a compile
+// error, with its source.
 //
 // Design decisions:
 //   - The compiler reads Bun's output as text with the shared scanner (./scan.ts) instead of
@@ -90,6 +102,7 @@ export function compileSource(source: string, loader: "jsx" | "tsx" = "tsx"): st
 // Hole markers, as @reactre/dom's text(), cls(), attr() and slot() make them; 0 is untyped (an event).
 const M_TEXT = -1,
   M_CLASS = -2,
+  M_PROP = -3,
   M_ATTR = -4,
   M_SLOT = -5,
   M_EVENT = 0;
@@ -98,6 +111,22 @@ const M_TEXT = -1,
 const VOID = new Set("area base br col embed hr img input link meta source track wbr".split(" "));
 /** React prop names whose attribute has another name. */
 const ALIASES: Record<string, string> = { className: "class", htmlFor: "for" };
+/** Props set as properties, not attributes, when their value is not a literal: what the user changes. */
+const PROPERTIES = new Set(["value", "checked", "selected"]);
+/**
+ * Tags that exist only in SVG. A template whose root is one is parsed inside an `<svg>`, so it
+ * gets the SVG namespace (`a`, `title`, `style` and `script` are HTML ones too, so they are not here).
+ */
+const SVG_TAGS = new Set(
+  (
+    "svg g defs use symbol circle ellipse line path polygon polyline rect text tspan textPath " +
+    "linearGradient radialGradient stop clipPath mask pattern marker filter foreignObject image " +
+    "animate animateMotion animateTransform set desc metadata switch view feBlend feColorMatrix " +
+    "feComponentTransfer feComposite feConvolveMatrix feDiffuseLighting feDisplacementMap " +
+    "feDropShadow feFlood feGaussianBlur feImage feMerge feMergeNode feMorphology feOffset " +
+    "feSpecularLighting feTile feTurbulence"
+  ).split(" "),
+);
 
 /** One jsx call's arguments, as source text. */
 interface Call {
@@ -113,6 +142,10 @@ interface Call {
 type Hole =
   | { readonly kind: "value"; readonly marker: number; readonly expr: string }
   | { readonly kind: "event"; readonly type: string; readonly expr: string }
+  /** A property (`value`, `checked`, `selected`), which cloning does not copy: set after the clone. */
+  | { readonly kind: "prop"; readonly expr: string }
+  /** What a runtime helper applies to the element itself: a style, a ref or spread props. */
+  | { readonly kind: "el"; readonly fn: "style" | "ref" | "spread"; readonly expr: string }
   | {
       readonly kind: "slot";
       readonly slot: "for" | "comp" | "expr";
@@ -130,6 +163,8 @@ type Hole =
 interface Tree {
   readonly strings: string[];
   readonly holes: Hole[];
+  /** Whether the root is an SVG element, so the markup is parsed inside an `<svg>`. */
+  svg: boolean;
 }
 
 /** A compile error, pointing at the source it could not compile. */
@@ -153,15 +188,33 @@ export function compileJs(js: string): string {
   const helpers = new Set<string>();
   for (const m of js.matchAll(/\b(jsxs|jsx|jsxDEV)_[a-z0-9]{8}\b/g)) helpers.add(m[0]);
   if (helpers.size === 0) return js;
-  const c = new Compiler(helpers);
+  const fragments = new Set<string>();
+  for (const m of js.matchAll(/\bFragment_[a-z0-9]{8}\b/g)) fragments.add(m[0]);
+  const c = new Compiler(helpers, fragments);
   const body = c.rewrite(js);
   // Nothing may fall back to a JSX runtime, since reactre has none.
   for (const m of body.matchAll(/\b(jsxs|jsx|jsxDEV|Fragment)_[a-z0-9]{8}\b/g)) {
-    throw new ReactreCompileError(`reactre: ${m[1]} left uncompiled (fragments are not supported)`);
+    throw new ReactreCompileError(`reactre: ${m[1]} left uncompiled (in a place the compiler does not reach)`);
   }
-  const imports = `import { __template as __rrT, __for as __rrFor, __insert as __rrInsert, __bind as __rrBind, __slot as __rrSlot, untrack as __rrUntrack } from "@reactre/core";\n`;
-  return imports + c.templates.join("\n") + "\n" + body;
+  const code = c.templates.join("\n") + "\n" + body;
+  // The helpers every file has imported since the start, then those newer constructs use, only
+  // where used: a file without them compiles to the same code as before they existed.
+  let names = `__template as __rrT, __for as __rrFor, __insert as __rrInsert, __bind as __rrBind, __slot as __rrSlot, untrack as __rrUntrack`;
+  for (const [name, alias] of EXTRA_HELPERS)
+    if (new RegExp(`\\b${alias}\\b`).test(code)) names += `, ${name} as ${alias}`;
+  return `import { ${names} } from "@reactre/core";\n` + code;
 }
+
+/** @reactre/core's helpers for the newer constructs, with their local names. */
+const EXTRA_HELPERS: readonly (readonly [string, string])[] = [
+  ["__forMount", "__rrForM"],
+  ["__frag", "__rrFrag"],
+  ["__apply", "__rrApply"],
+  ["__spread", "__rrSpread"],
+  ["__style", "__rrStyle"],
+  ["__ref", "__rrRef"],
+  ["__on", "__rrOn"],
+];
 
 /**
  * Compiles the jsx calls of one file. It collects the hoisted template declarations in
@@ -170,10 +223,13 @@ export function compileJs(js: string): string {
 class Compiler {
   /** The file's local names of jsx, jsxs and jsxDEV. */
   readonly helpers: Set<string>;
+  /** The file's local names of Fragment. */
+  readonly fragments: Set<string>;
   /** Module-scope template declarations, in the order they were made. */
   readonly templates: string[] = [];
-  constructor(helpers: Set<string>) {
+  constructor(helpers: Set<string>, fragments: Set<string> = new Set()) {
     this.helpers = helpers;
+    this.fragments = fragments;
   }
 
   // #region Finding jsx calls
@@ -246,10 +302,59 @@ class Compiler {
   /** A jsx call that is not a child of a host element compiled with it. */
   call(c: Call): string {
     // Bun quotes a host element's tag name; a component's type is an expression.
-    if (c.type.startsWith('"')) return this.host(c);
+    if (c.type.startsWith('"')) {
+      // A keyed element stands alone in a one-slot fragment, which rebuilds it when the key changes.
+      const keyed = this.keyed(c);
+      return keyed === null ? this.host(c) : `__rrFrag([() => (${keyed})])`;
+    }
     // A list renders into a parent element, before an anchor in it, so it cannot stand alone.
     if (c.type === "For") throw new ReactreCompileError("reactre: <For> must be the child of an element");
+    if (this.fragments.has(c.type)) return this.fragment(c);
     return this.component(c);
+  }
+
+  /**
+   * For a host element whose key calls something: the slot expression that reads the key and
+   * builds the element, so the slot rebuilds it when the key changes. Null when there is no key
+   * or it calls nothing: such a key never changes, so it means nothing.
+   */
+  private keyed(c: Call): string | null {
+    if (c.key === undefined || !reactive(c.key)) return null;
+    return `(${this.rewrite(c.key)}), ${this.host({ type: c.type, props: c.props, key: undefined })}`;
+  }
+
+  /**
+   * A fragment that is not a child of an element: an array of its children's nodes, built in a
+   * document fragment (`__frag`). A child that may change is passed as a function, which `__frag`
+   * makes a slot.
+   */
+  private fragment(c: Call): string {
+    const kids: string[] = [];
+    for (const child of this.childrenOf(c.props)) {
+      const lit = literal(child);
+      if (lit === null || lit === undefined || typeof lit === "boolean") continue;
+      if (typeof lit === "string" || typeof lit === "number") {
+        kids.push(JSON.stringify("" + lit));
+        continue;
+      }
+      const inner = this.only(child);
+      if (inner !== null && inner.type === "For")
+        throw new ReactreCompileError("reactre: <For> must be the child of an element");
+      if (inner !== null) kids.push(this.call(inner));
+      else if (this.hasJsx(child) || reactive(child)) kids.push(`() => (${this.rewrite(child)})`);
+      else kids.push(`(${this.rewrite(child)})`);
+    }
+    return `__rrFrag([${kids.join(", ")}])`;
+  }
+
+  /** The children in a props object literal, one source each. */
+  private childrenOf(props: string): string[] {
+    for (const [name, value] of this.object(props, true)) {
+      // Several children come as one array literal (jsxs); split it into one child each.
+      if (name === "children")
+        return value.startsWith("[") && value.endsWith("]") ? split(value, 1, value.length - 1) : [value];
+    }
+    return [];
   }
 
   /**
@@ -264,15 +369,21 @@ class Compiler {
    * The entries of an object literal with plain keys, as [name, value source] pairs. A shorthand
    * entry (`{ a }`) is [a, a]; a quoted key is decoded.
    *
-   * @throws ReactreCompileError for spread props, which would hide what the template must hold.
+   * @param spreads Whether a spread entry (`...p`) is allowed: it comes out as ["...", source].
+   * @throws ReactreCompileError for spread props where they are not allowed (a `<For>`'s, which
+   *   would hide its each, key and row function).
    */
-  object(src: string): [string, string][] {
+  object(src: string, spreads = false): [string, string][] {
     const s = src.trim();
     if (!s.startsWith("{") || !s.endsWith("}"))
       throw new ReactreCompileError(`reactre: props must be an object literal: ${s}`);
     const out: [string, string][] = [];
     for (const part of split(s, 1, s.length - 1)) {
-      if (part.startsWith("...")) throw new ReactreCompileError(`reactre: spread props are not supported: ${part}`);
+      if (part.startsWith("...")) {
+        if (!spreads) throw new ReactreCompileError(`reactre: spread props are not supported here: ${part}`);
+        out.push(["...", part]);
+        continue;
+      }
       const colon = until(part, 0, ":");
       if (colon >= part.length) {
         out.push([part, part]);
@@ -296,8 +407,10 @@ class Compiler {
 
   /** The template of host element c and its holes. */
   tree(c: Call): Tree {
-    const t: Tree = { strings: [""], holes: [] };
-    this.element(c, t);
+    const tag = JSON.parse(c.type) as string;
+    // An `svg` root is parsed as SVG anyway; another SVG tag needs an `<svg>` around it.
+    const t: Tree = { strings: [""], holes: [], svg: tag !== "svg" && SVG_TAGS.has(tag) };
+    this.element(c, t, t.svg);
     return t;
   }
 
@@ -313,25 +426,44 @@ class Compiler {
 
   /**
    * Append host element c to template t: its attributes, then its children. A child host element
-   * joins the same template, so a whole tree is one clone.
+   * joins the same template, so a whole tree is one clone. A key is left to the caller: on a list's
+   * row it is the list's, and a child's is handled in `children`.
+   *
+   * @param svg Whether c is inside an SVG element (or is one), where `class` is an attribute.
    */
-  private element(c: Call, t: Tree): void {
+  private element(c: Call, t: Tree, svg: boolean): void {
     const tag = JSON.parse(c.type) as string;
-    // Only a list reorders its rows by key; anywhere else a key would be silently ignored.
-    if (c.key !== undefined) throw new ReactreCompileError(`reactre: a key on <${tag}> means nothing outside <For>`);
+    const inSvg = svg || tag === "svg";
     this.add(t, "<" + tag);
     let children: string[] = [];
-    for (const [rawName, value] of this.object(c.props)) {
+    const entries = this.object(c.props, true);
+    // With a spread, every prop but the children is applied at runtime, in source order, so
+    // later props override earlier ones as in React.
+    if (entries.some(([k]) => k === "...")) {
+      const rest = entries
+        .filter(([k]) => k !== "children")
+        .map(([k, v]) => (k === "..." ? v : `${JSON.stringify(k)}: ${v}`));
+      this.add(t, " rr-spread=");
+      this.hole(t, { kind: "el", fn: "spread", expr: `{ ${rest.join(", ")} }` });
+    }
+    const spread = entries.some(([k]) => k === "...");
+    for (const [rawName, value] of entries) {
       if (rawName === "children") {
         // Several children come as one array literal (jsxs); split it into one child each.
         children = value.startsWith("[") && value.endsWith("]") ? split(value, 1, value.length - 1) : [value];
         continue;
       }
+      if (spread) continue;
       const name = ALIASES[rawName] ?? rawName;
       if (/^on[A-Z]/.test(name)) {
         // The hole sits where the attribute's value would; the clone adds a listener there instead.
         this.add(t, ` on${name.slice(2).toLowerCase()}=`);
         this.hole(t, { kind: "event", type: name.slice(2).toLowerCase(), expr: value });
+        continue;
+      }
+      if (name === "ref") {
+        this.add(t, " ref=");
+        this.hole(t, { kind: "el", fn: "ref", expr: value });
         continue;
       }
       const lit = literal(value);
@@ -341,14 +473,31 @@ class Compiler {
         this.add(t, lit === true ? ` ${name}` : ` ${name}="${attrText("" + lit)}"`);
         continue;
       }
+      if (name === "style") {
+        this.add(t, " style=");
+        this.hole(t, { kind: "el", fn: "style", expr: value });
+        continue;
+      }
+      if (!inSvg && PROPERTIES.has(name)) {
+        // The property, not the attribute: after the user types or clicks, only it shows the state.
+        this.add(t, ` .${name}=`);
+        this.hole(t, { kind: "prop", expr: value });
+        continue;
+      }
       this.add(t, ` ${name}=`);
-      this.hole(t, { kind: "value", marker: name === "class" ? M_CLASS : M_ATTR, expr: value });
+      this.hole(t, { kind: "value", marker: name === "class" && !inSvg ? M_CLASS : M_ATTR, expr: value });
     }
     this.add(t, ">");
     if (VOID.has(tag)) {
       if (children.length) throw new ReactreCompileError(`reactre: <${tag}> takes no children`);
       return;
     }
+    this.children(children, t, inSvg && tag !== "foreignObject");
+    this.add(t, `</${tag}>`);
+  }
+
+  /** Append an element's children to template t; a fragment's children join it in place. */
+  private children(children: readonly string[], t: Tree, svg: boolean): void {
     // Literal null, undefined and booleans render nothing. They are dropped first, so a list
     // beside them still counts as its element's only child.
     const kept = children.filter((x) => {
@@ -362,11 +511,17 @@ class Compiler {
         continue;
       }
       const inner = this.only(child);
-      if (inner !== null && inner.type.startsWith('"')) {
-        this.element(inner, t);
+      const only = kept.length === 1;
+      if (inner !== null && this.fragments.has(inner.type)) {
+        this.children(this.childrenOf(inner.props), t, svg);
         continue;
       }
-      const only = kept.length === 1;
+      if (inner !== null && inner.type.startsWith('"')) {
+        const keyed = this.keyed(inner);
+        if (keyed === null) this.element(inner, t, svg);
+        else this.hole(t, { kind: "slot", slot: "expr", expr: keyed, only });
+        continue;
+      }
       if (inner !== null && inner.type === "For")
         this.hole(t, {
           kind: "slot",
@@ -380,7 +535,6 @@ class Compiler {
       else if (this.hasJsx(child)) this.hole(t, { kind: "slot", slot: "expr", expr: this.rewrite(child), only });
       else this.hole(t, { kind: "value", marker: M_TEXT, expr: child });
     }
-    this.add(t, `</${tag}>`);
   }
 
   /** Whether src holds a jsx call anywhere, so it must be a slot rather than a text hole. */
@@ -392,8 +546,20 @@ class Compiler {
   /** Hoist t to module scope, so it is built once, not on every render; returns its name. */
   private template(t: Tree): string {
     const id = `__rrT${this.templates.length}`;
-    const markers = t.holes.map((h) => (h.kind === "value" ? h.marker : h.kind === "event" ? M_EVENT : M_SLOT));
-    this.templates.push(`const ${id} = __rrT(${JSON.stringify(t.strings)}, ${JSON.stringify(markers)});`);
+    const markers = t.holes.map((h) =>
+      h.kind === "value"
+        ? h.marker
+        : h.kind === "event"
+          ? M_EVENT
+          : h.kind === "prop"
+            ? M_PROP
+            : h.kind === "el"
+              ? M_ATTR
+              : M_SLOT,
+    );
+    this.templates.push(
+      `const ${id} = __rrT(${JSON.stringify(t.strings)}, ${JSON.stringify(markers)}${t.svg ? ", true" : ""});`,
+    );
     return id;
   }
 
@@ -410,6 +576,8 @@ class Compiler {
     const id = this.template(t);
     const vals: string[] = [];
     const after: string[] = [];
+    // Properties and refs go last: a select's value needs its options, and a ref a whole element.
+    const late: string[] = [];
     t.holes.forEach((h, i) => {
       if (h.kind === "value") {
         if (reactive(h.expr)) {
@@ -418,15 +586,27 @@ class Compiler {
         } else vals.push(`(${this.rewrite(h.expr)})`);
         return;
       }
-      vals.push('""');
+      // An element hole is an attribute the clone must leave out: null is what the prototype holds.
+      vals.push(h.kind === "el" ? "null" : '""');
       if (h.kind === "event") {
-        after.push(`__n[${i}].addEventListener(${JSON.stringify(h.type)}, ${this.rewrite(h.expr)});`);
+        // A handler that reads a signal (and is not a function literal, which only reads when
+        // called) is followed: the listener calls its current value.
+        if (reactive(h.expr) && !isFunction(h.expr))
+          after.push(`__rrOn(__n[${i}], ${JSON.stringify(h.type)}, () => (${this.rewrite(h.expr)}));`);
+        else after.push(`__n[${i}].addEventListener(${JSON.stringify(h.type)}, ${this.rewrite(h.expr)});`);
+        return;
+      }
+      if (h.kind === "prop" || h.kind === "el") {
+        const stmt = this.part(id, i, h, `__n[${i}]`);
+        if (h.kind === "prop" || h.fn === "ref") late.push(stmt);
+        else after.push(stmt);
         return;
       }
       if (h.slot === "comp") after.push(`__rrInsert(__n[${i}], ${h.expr}, null);`);
       else if (h.slot === "expr") after.push(`__rrSlot(__n[${i}], () => (${h.expr}));`);
       else after.push(this.forList(h.expr, h.key, `__n[${i}]`, h.only));
     });
+    after.push(...late);
     const locate = after.length ? `const __n = []; ${id}.locate(__r, __n); ` : "";
     return `(() => { const __r = ${id}.clone([${vals.join(", ")}]); ${locate}${after.join(" ")} return __r; })()`;
   }
@@ -465,18 +645,29 @@ class Compiler {
     const id = this.template(t);
     // fill/holes: values that depend on the row only, written at creation. dyn/dynHoles: values
     // that call something, re-run when what they read changes. events: delegated to the parent.
+    // mounts: the parts that create something of their own (slots, properties, styles, refs,
+    // spreads), run under the row's owner when it is created and again for a new item.
     const fill: string[] = [],
       holes: number[] = [],
       dyn: string[] = [],
       dynHoles: number[] = [],
-      events: string[] = [];
+      events: string[] = [],
+      mounts: string[] = [];
     t.holes.forEach((h, i) => {
       if (h.kind === "event") {
         events.push(`[${JSON.stringify(h.type)}, ${i}, (${param}) => (${this.rewrite(h.expr)})]`);
         return;
       }
-      if (h.kind === "slot")
-        throw new ReactreCompileError("reactre: a <For> row cannot hold components, lists or JSX expressions yet");
+      if (h.kind === "slot") {
+        // A nested list never owns its parent here: a new item rebuilds it before the same anchor.
+        const stmt = h.slot === "for" ? this.forList(h.expr, h.key, "__m", false) : `__rrSlot(__m, () => (${h.expr}));`;
+        mounts.push(`[${i}, (${param}, __m) => { ${stmt} }]`);
+        return;
+      }
+      if (h.kind === "prop" || h.kind === "el") {
+        mounts.push(`[${i}, (${param}, __m) => { ${this.part(id, i, h, "__m")} }]`);
+        return;
+      }
       const e = this.rewrite(h.expr);
       if (reactive(h.expr)) {
         dyn.push(`__d[${dynHoles.length}] = (${e});`);
@@ -486,16 +677,34 @@ class Compiler {
         holes.push(i);
       }
     });
-    // dyn and events are left out when empty, so the runtime does no work for them per row.
+    // dyn, events and mounts are left out when empty, so the runtime does no work for them per row.
     const spec =
       `{ each: () => (${this.rewrite(each)}), key: ${this.rewrite(key)}, t: ${id}, ` +
       `fill: (${param}, __v) => { ${fill.join(" ")} }, holes: ${JSON.stringify(holes)}` +
       (dyn.length ? `, dyn: (${param}, __d) => { ${dyn.join(" ")} }, dynHoles: ${JSON.stringify(dynHoles)}` : "") +
       (events.length ? `, events: [${events.join(", ")}]` : "") +
+      (mounts.length ? `, mounts: [${mounts.join(", ")}]` : "") +
       " }";
+    // Only a row with mounts takes the list that runs them: a row of host elements and values
+    // costs what it always has.
+    const call = mounts.length ? "__rrForM" : "__rrFor";
     return only
-      ? `{ const __a = ${anchor}, __p = __a.parentNode; __p.removeChild(__a); __rrFor(__p, null, ${spec}); }`
-      : `__rrFor(${anchor}.parentNode, ${anchor}, ${spec});`;
+      ? `{ const __a = ${anchor}, __p = __a.parentNode; __p.removeChild(__a); ${call}(__p, null, ${spec}); }`
+      : `${call}(${anchor}.parentNode, ${anchor}, ${spec});`;
+  }
+
+  /**
+   * The statement that sets a property or element hole on its node: once, or in an effect when
+   * its expression calls something.
+   */
+  private part(id: string, i: number, h: Extract<Hole, { kind: "prop" | "el" }>, node: string): string {
+    const e = this.rewrite(h.expr);
+    if (h.kind === "prop")
+      return reactive(h.expr) ? `__rrBind(${id}, ${i}, ${node}, () => (${e}));` : `${id}.write(${i}, ${node}, (${e}));`;
+    // A ref is called once, with the element; a function literal passed as one reads nothing.
+    if (h.fn === "ref") return `__rrRef(${node}, ${e});`;
+    const fn = h.fn === "style" ? "__rrStyle" : "__rrSpread";
+    return reactive(h.expr) ? `__rrApply(${node}, ${fn}, () => (${e}));` : `${fn}(${node}, (${e}), undefined);`;
   }
 
   // #endregion
@@ -536,6 +745,22 @@ function reactive(expr: string): boolean {
     i++;
   }
   return false;
+}
+
+/**
+ * Whether an expression is a function literal (an arrow or a function expression), whose calls
+ * happen only when it is called: as a handler it is bound once, whatever it reads.
+ */
+function isFunction(expr: string): boolean {
+  const s = expr.trim();
+  if (/^(async\s+)?function\b/.test(s) || /^(async\s+)?[A-Za-z_$][\w$]*\s*=>/.test(s)) return true;
+  const open = /^(async\s*)?\(/.exec(s);
+  if (open === null) return false;
+  const close = until(s, open[0].length, "");
+  return s
+    .slice(close + 1)
+    .trimStart()
+    .startsWith("=>");
 }
 
 /** Text escaped for markup between tags. */

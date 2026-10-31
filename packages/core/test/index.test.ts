@@ -5,10 +5,10 @@
 // row subscriptions; selectors read outside lists, __insert's flattening and an
 // uncompiled <For>. Compile errors are checked last.
 
-import { beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 
 import { compileSource, ReactreCompileError } from "@reactre/compiler";
-import { FakeElement, FakeEvent, FakeText, installFakeDocument } from "@reactre/testdom";
+import { FakeElement, FakeEvent, FakeText, installFakeDocument, withStyles } from "@reactre/testdom";
 
 import * as runtime from "../src/index.ts";
 
@@ -353,6 +353,329 @@ describe("reactre: selectors", () => {
   });
 });
 
+describe("reactre: rows with slots", () => {
+  test("a component in a row renders with the row, follows a new item and is disposed with the row", () => {
+    const root = box();
+    const api = run<{
+      setRows: (r: { id: number; n: number }[]) => void;
+      setTick: (n: number) => void;
+      runs: () => number;
+      cleaned: () => number;
+    }>(
+      `
+      import { effect, For, onCleanup, render, signal } from "@reactre/core";
+      const [rows, setRows] = signal([]);
+      const [tick, setTick] = signal(0);
+      let runs = 0, cleaned = 0;
+      function Badge({ n }) {
+        effect(() => void (tick(), runs++));
+        onCleanup(() => cleaned++);
+        return <b>{n}</b>;
+      }
+      function App() {
+        return (
+          <ul>
+            <For each={rows()} key={(r) => r.id}>
+              {(r) => <li class="row"><Badge n={r.n} />{r.id}</li>}
+            </For>
+          </ul>
+        );
+      }
+      render(App, root);
+      return { setRows, setTick, runs: () => runs, cleaned: () => cleaned };
+    `,
+      root,
+    );
+    const two = { id: 2, n: 20 };
+    api.setRows([{ id: 1, n: 10 }, two]);
+    expect(html(root)).toBe('<ul><li class="row"><b>10</b>1</li><li class="row"><b>20</b>2</li></ul>');
+    const first = (root.firstChild as FakeElement).firstChild;
+    api.setRows([{ id: 1, n: 11 }, two]);
+    expect(html(root)).toBe('<ul><li class="row"><b>11</b>1</li><li class="row"><b>20</b>2</li></ul>');
+    // The row element is kept; only its slot was rebuilt.
+    expect((root.firstChild as FakeElement).firstChild).toBe(first);
+    expect(api.cleaned()).toBe(1);
+    api.setRows([]);
+    expect(api.cleaned()).toBe(3);
+    const before = api.runs();
+    api.setTick(1);
+    expect(api.runs()).toBe(before);
+  });
+
+  test("a row can hold a nested <For> and a JSX expression that follows a signal", () => {
+    const root = box();
+    const api = run<{ setRows: (r: unknown[]) => void; setOpen: (b: boolean) => void; runs: () => number }>(
+      `
+      import { For, render, signal } from "@reactre/core";
+      const [rows, setRows] = signal([]);
+      const [open, setOpen] = signal(false);
+      let runs = 0;
+      const isOpen = () => (runs++, open());
+      function App() {
+        return (
+          <div>
+            <For each={rows()} key={(r) => r.id}>
+              {(r) => (
+                <section>
+                  <h2>{r.id}</h2>
+                  <ul><For each={r.kids} key={(k) => k}>{(k) => <li onClick={() => r.picked.push(k)}>{r.id}.{k}</li>}</For></ul>
+                  {isOpen() ? <p>open {r.id}</p> : null}
+                </section>
+              )}
+            </For>
+          </div>
+        );
+      }
+      render(App, root);
+      return { setRows, setOpen, runs: () => runs };
+    `,
+      root,
+    );
+    const picked: number[] = [];
+    api.setRows([
+      { id: 1, kids: [1, 2], picked },
+      { id: 2, kids: [3], picked },
+    ]);
+    expect(html(root)).toBe(
+      "<div><section><h2>1</h2><ul><li>1.1</li><li>1.2</li></ul></section><section><h2>2</h2><ul><li>2.3</li></ul></section></div>",
+    );
+    api.setOpen(true);
+    expect(html(root)).toBe(
+      "<div><section><h2>1</h2><ul><li>1.1</li><li>1.2</li></ul><p>open 1</p></section><section><h2>2</h2><ul><li>2.3</li></ul><p>open 2</p></section></div>",
+    );
+    // The nested list's handlers are delegated to its own parent.
+    const section = (root.firstChild as FakeElement).firstChild as FakeElement;
+    click((section.childNodes[1] as FakeElement).childNodes[1]);
+    expect(picked).toEqual([2]);
+    // A new item for row 1: its nested list follows the new kids.
+    api.setRows([
+      { id: 1, kids: [2, 5], picked },
+      { id: 2, kids: [3], picked },
+    ]);
+    expect(html(root)).toBe(
+      "<div><section><h2>1</h2><ul><li>1.2</li><li>1.5</li></ul><p>open 1</p></section><section><h2>2</h2><ul><li>2.3</li></ul><p>open 2</p></section></div>",
+    );
+    api.setRows([]);
+    const before = api.runs();
+    api.setOpen(false);
+    expect(api.runs()).toBe(before);
+  });
+
+  test("a host-only row compiles to the plain list, with no slot machinery", () => {
+    const out = compileSource(
+      `export const x = (rows) => <ul><For each={rows} key={(r) => r}>{(r) => <li>{r}</li>}</For></ul>;`,
+    );
+    expect(out).toContain("__rrFor(");
+    expect(out).not.toContain("mounts");
+  });
+});
+
+describe("reactre: compiler coverage", () => {
+  let unstyle: () => void;
+  beforeAll(() => (unstyle = withStyles()));
+  afterAll(() => unstyle());
+
+  test("fragments render their children, follow signals and leave together", () => {
+    const root = box();
+    const api = run<{ setN: (n: number) => void; setShow: (b: boolean) => void; setInner: (b: boolean) => void }>(
+      `
+      import { render, signal } from "@reactre/core";
+      const [n, setN] = signal(0);
+      const [show, setShow] = signal(true);
+      const [inner, setInner] = signal(false);
+      const Pair = () => <>a<b>{n()}</b>{inner() ? <i>in</i> : null}</>;
+      function App() {
+        return <div><>x<hr /></>{show() ? <Pair /> : <s>gone</s>}</div>;
+      }
+      render(App, root);
+      return { setN, setShow, setInner };
+    `,
+      root,
+    );
+    expect(html(root)).toBe("<div>x<hr></hr>a<b>0</b></div>");
+    api.setN(1);
+    api.setInner(true);
+    expect(html(root)).toBe("<div>x<hr></hr>a<b>1</b><i>in</i></div>");
+    api.setShow(false);
+    expect(html(root)).toBe("<div>x<hr></hr><s>gone</s></div>");
+  });
+
+  test("spread props set attributes, classes and handlers, and follow a reactive object", () => {
+    const root = box();
+    const api = run<{ setP: (p: Record<string, unknown>) => void; clicks: () => number }>(
+      `
+      import { render, signal } from "@reactre/core";
+      let clicks = 0;
+      const base = { id: "a", title: "t", onClick: () => clicks++ };
+      const [p, setP] = signal({ "data-x": "1" });
+      function App() {
+        return <div><span {...base} class="s" /><em {...p()} /></div>;
+      }
+      render(App, root);
+      return { setP, clicks: () => clicks };
+    `,
+      root,
+    );
+    const [span, em] = (root.firstChild as FakeElement).childNodes as FakeElement[];
+    expect(span!.getAttribute("id")).toBe("a");
+    expect(span!.getAttribute("title")).toBe("t");
+    expect(span!.getAttribute("class")).toBe("s");
+    click(span);
+    expect(api.clicks()).toBe(1);
+    expect(em!.getAttribute("data-x")).toBe("1");
+    api.setP({ "data-y": "2" });
+    expect(em!.getAttribute("data-x")).toBeNull();
+    expect(em!.getAttribute("data-y")).toBe("2");
+  });
+
+  test("style objects, refs, and checked and value as properties", () => {
+    const root = box();
+    const api = run<{
+      setColor: (c: string) => void;
+      setV: (v: string) => void;
+      refs: unknown[];
+      obj: { current: unknown };
+    }>(
+      `
+      import { render, signal } from "@reactre/core";
+      const [color, setColor] = signal("red");
+      const [v, setV] = signal("a");
+      const refs = [];
+      const obj = { current: null };
+      function App() {
+        return (
+          <form>
+            <p style={{ color: color(), "--gap": "2px" }} ref={(el) => refs.push(el)}>x</p>
+            <p style="margin: 0" ref={obj}>y</p>
+            <input value={v()} checked={v() === "b"} />
+          </form>
+        );
+      }
+      render(App, root);
+      return { setColor, setV, refs, obj };
+    `,
+      root,
+    );
+    const [p1, p2, input] = (root.firstChild as FakeElement).childNodes as FakeElement[];
+    const style = (el: FakeElement) => el.style as { getPropertyValue(k: string): string; cssText: string };
+    expect(style(p1!).getPropertyValue("color")).toBe("red");
+    expect(style(p1!).getPropertyValue("--gap")).toBe("2px");
+    api.setColor("blue");
+    expect(style(p1!).getPropertyValue("color")).toBe("blue");
+    expect(p2!.getAttribute("style")).toBe("margin: 0");
+    expect(api.refs).toEqual([p1]);
+    expect(api.obj.current).toBe(p2);
+    expect(input!.value).toBe("a");
+    expect(input!.checked).toBe(false);
+    expect(input!.getAttribute("value")).toBeNull();
+    api.setV("b");
+    expect(input!.value).toBe("b");
+    expect(input!.checked).toBe(true);
+  });
+
+  test("SVG elements get the SVG namespace, whatever the template's root", () => {
+    const root = box();
+    const api = run<{ setC: (c: string) => void }>(
+      `
+      import { render, signal } from "@reactre/core";
+      const [c, setC] = signal("a");
+      const Dot = () => <g><circle class={c()} r={2} /></g>;
+      function App() {
+        return <svg viewBox="0 0 4 4"><Dot /></svg>;
+      }
+      render(App, root);
+      return { setC };
+    `,
+      root,
+    );
+    const svg = root.firstChild as FakeElement;
+    const g = svg.firstChild as FakeElement;
+    const circle = g.firstChild as FakeElement;
+    for (const el of [svg, g, circle]) expect(el.namespaceURI).toBe("http://www.w3.org/2000/svg");
+    expect(circle.getAttribute("class")).toBe("a");
+    api.setC("b");
+    expect(circle.getAttribute("class")).toBe("b");
+  });
+
+  test("focus and blur, which do not bubble, reach row handlers", () => {
+    const root = box();
+    const api = run<{ seen: string[] }>(
+      `
+      import { For, render } from "@reactre/core";
+      const seen = [];
+      function App() {
+        return (
+          <ul>
+            <For each={[1, 2]} key={(r) => r}>
+              {(r) => <li><input onFocus={() => seen.push("focus " + r)} onBlur={() => seen.push("blur " + r)} /></li>}
+            </For>
+          </ul>
+        );
+      }
+      render(App, root);
+      return { seen };
+    `,
+      root,
+    );
+    const inputs = ((root.firstChild as FakeElement).childNodes as FakeElement[]).map(
+      (li) => li.firstChild as FakeElement,
+    );
+    inputs[1]!.dispatchEvent(new FakeEvent("focus", { bubbles: false }));
+    inputs[1]!.dispatchEvent(new FakeEvent("blur", { bubbles: false }));
+    expect(api.seen).toEqual(["focus 2", "blur 2"]);
+  });
+
+  test("a key on an element outside <For> rebuilds it when the key changes", () => {
+    const root = box();
+    const api = run<{ setK: (k: number) => void; setN: (n: number) => void }>(
+      `
+      import { render, signal } from "@reactre/core";
+      const [k, setK] = signal(1);
+      const [n, setN] = signal(0);
+      function App() {
+        return <div><p key={k()}>{n()}</p><i key="fixed">i</i></div>;
+      }
+      render(App, root);
+      return { setK, setN };
+    `,
+      root,
+    );
+    const div = root.firstChild as FakeElement;
+    const p = div.firstChild;
+    api.setN(1);
+    expect(div.firstChild).toBe(p);
+    api.setK(2);
+    expect(div.firstChild).not.toBe(p);
+    expect(html(root)).toBe("<div><p>1</p><i>i</i></div>");
+  });
+});
+
+describe("reactre: handlers outside lists", () => {
+  test("a handler expression that reads a signal follows it", () => {
+    const root = box();
+    const api = run<{ setUp: (b: boolean) => void; count: () => number }>(
+      `
+      import { render, signal } from "@reactre/core";
+      const [up, setUp] = signal(true);
+      const [count, setCount] = signal(0);
+      const inc = () => setCount((c) => c + 1);
+      const dec = () => setCount((c) => c - 1);
+      function App() {
+        return <button onClick={up() ? inc : dec}>{count()}</button>;
+      }
+      render(App, root);
+      return { setUp, count };
+    `,
+      root,
+    );
+    click(root.firstChild);
+    api.setUp(false);
+    click(root.firstChild);
+    click(root.firstChild);
+    expect(api.count()).toBe(-1);
+  });
+});
+
 describe("reactre: batching", () => {
   test("a long batch queues each effect once and stays linear", () => {
     const n = 100000;
@@ -487,8 +810,12 @@ describe("reactre: ownership", () => {
 
 describe("@reactre/compiler: errors", () => {
   test("constructs it does not compile are errors, not a runtime fallback", () => {
-    expect(() => compileSource(`const x = <><b /></>;`)).toThrow(ReactreCompileError);
-    expect(() => compileSource(`const p = {}; const x = <b {...p} />;`)).toThrow(ReactreCompileError);
+    expect(() => compileSource(`const x = <For each={[]} key={(r) => r}>{(r) => <b />}</For>;`)).toThrow(
+      ReactreCompileError,
+    );
+    expect(() => compileSource(`const x = <ul><For each={[]} key={(r) => r}>{(r) => <><b /></>}</For></ul>;`)).toThrow(
+      ReactreCompileError,
+    );
     expect(() => compileSource(`const x = <For each={[]} key={(r) => r}>{(r) => <b />}</For>;`)).toThrow(
       ReactreCompileError,
     );

@@ -61,9 +61,9 @@ function transform(options: ReactreOptions) {
 describe("transform", () => {
   test("core mode names the file in a compile error", () => {
     const t = transform({})!;
-    expect(() => t.handler(`export const A = () => <><b /></>;`, "/app/a.tsx?v=1")).toThrow(
-      /^\/app\/a\.tsx: reactre: /,
-    );
+    expect(() =>
+      t.handler(`export const A = () => <For each={[]} key={(r) => r}>{(r) => <b />}</For>;`, "/app/a.tsx?v=1"),
+    ).toThrow(/^\/app\/a\.tsx: reactre: /);
   });
 
   test("core mode refuses a key after spread props, which needs React's classic runtime", () => {
