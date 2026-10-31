@@ -47,13 +47,28 @@
 //     (@reactre/compiler/scan), not parsed: the jsx calls are all there is to find.
 //   - Every name the output adds starts with `__hr`, so it cannot collide with the app's names,
 //     and the free-name analysis below can tell the compiler's names from the app's.
+//   - For a source map (`compileJsWithMap`), the output marks each token it copies with its place
+//     in the input (@reactre/compiler/map). The free-name analysis reads compiled code with the
+//     marks taken out, so the code is the same with a map as without.
 //
 //   Bun.build({ plugins: [reactreCompatCompiler()], ... })
 //
 // The output imports `react` and `react/jsx-runtime`, which the app aliases
 // to @reactre/compat; with React itself the compiled code would not run.
 
-import { CLOSE, isIdent, literal, NOT_LITERAL, OPEN, skipToken, split, until } from "@reactre/compiler/scan";
+import { hasMarks, mark, plain, type SourceMapV3, unmark } from "@reactre/compiler/map";
+import {
+  CLOSE,
+  isIdent,
+  literal,
+  NOT_LITERAL,
+  OPEN,
+  skipToken,
+  split,
+  splitAt,
+  trimAt,
+  until,
+} from "@reactre/compiler/scan";
 import type { BunPlugin } from "bun";
 
 // #region Plugin
@@ -176,7 +191,18 @@ interface Call {
   multi: boolean; // jsxs: children is a static array
   /** The arguments, as source: type, props, then the key when there is one. */
   args: string[];
+  /** Where each argument starts in the input, for a source map; -1 when not known. */
+  at: number[];
 }
+
+/** Parts of `src[start, end)` as `splitAt` finds them, with the places of `src` starting at `base` (-1: not known). */
+function argsAt(src: string, start: number, end: number, base: number): { args: string[]; at: number[] } {
+  const parts = splitAt(src, start, end);
+  return { args: parts.map((p) => p[0]), at: parts.map((p) => (base < 0 ? -1 : base + p[1])) };
+}
+
+/** `at` moved by `d`, unless it is not known (-1). */
+const off = (at: number, d: number): number => (at < 0 ? -1 : at + d);
 
 /**
  * Compiles the jsx calls of one file. It collects what goes to module scope (templates and list
@@ -192,10 +218,18 @@ class Compiler {
   /** How many component elements were built inline. */
   inlined = 0;
   readonly inlineElements: boolean;
-  constructor(src: string, helpers: Map<string, boolean>, inlineElements: boolean) {
+  /** Whether the output carries marks for a source map (@reactre/compiler/map). */
+  readonly map: boolean;
+  constructor(src: string, helpers: Map<string, boolean>, inlineElements: boolean, map = false) {
     this.inlineElements = inlineElements;
     this.src = src;
     this.helpers = helpers;
+    this.map = map;
+  }
+
+  /** The mark for input offset `at`, when the output carries marks and `at` is known; else "". */
+  m(at: number | undefined): string {
+    return this.map && at !== undefined && at >= 0 ? mark(at) : "";
   }
 
   // #region Finding jsx calls
@@ -203,16 +237,20 @@ class Compiler {
   /**
    * Rewrite src: every jsx call in it, compiled where it qualifies. The walk is `until`'s, copying
    * as it goes, so the code around the calls comes out unchanged.
+   *
+   * @param at Where src starts in the input, for the marks; -1 when not known (no marks).
    */
-  rewrite(src: string): string {
+  rewrite(src: string, at: number): string {
     let out = "",
       i = 0,
       prev = "",
       word = "";
+    const marks = this.map && at >= 0;
     while (i < src.length) {
       const c = src[i]!;
       const j = skipToken(src, i, prev, word);
       if (j !== i) {
+        if (marks) out += mark(at + i);
         out += src.slice(i, j);
         prev = "a";
         word = "";
@@ -223,10 +261,11 @@ class Compiler {
         let e = i;
         while (isIdent(src[e])) e++;
         const name = src.slice(i, e);
+        if (marks) out += mark(at + i);
         // A helper's name as a property (`x.jsx_...(`) is some other function.
         if (this.helpers.has(name) && src[e] === "(" && src[i - 1] !== ".") {
           const close = until(src, e + 1, "");
-          const call: Call = { helper: name, multi: this.helpers.get(name)!, args: split(src, e + 1, close) };
+          const call: Call = { helper: name, multi: this.helpers.get(name)!, ...argsAt(src, e + 1, close, at) };
           out += this.call(call);
           i = close + 1;
           prev = "a";
@@ -242,6 +281,7 @@ class Compiler {
       if (!/\s/.test(c)) {
         prev = c;
         word = "";
+        if (marks) out += mark(at + i);
       }
       out += c;
       i++;
@@ -258,11 +298,12 @@ class Compiler {
     const desc = this.element(c, true, values);
     if (desc === null)
       return (
-        (this.inlineElements ? this.inline(c) : null) ?? `${c.helper}(${c.args.map((a) => this.rewrite(a)).join(", ")})`
+        (this.inlineElements ? this.inline(c) : null) ??
+        `${c.helper}(${c.args.map((a, k) => this.rewrite(a, c.at[k]!)).join(", ")})`
       );
     const id = `__hrT${this.templates.length}`;
     this.templates.push(`const ${id} = __hrTemplate(${JSON.stringify(desc)});`);
-    const key = c.args[2] !== undefined && c.args[2] !== "undefined" ? c.args[2] : "null";
+    const key = c.args[2] !== undefined && c.args[2] !== "undefined" ? this.m(c.at[2]) + c.args[2] : "null";
     return `__hrBlock(${id}, ${key}, [${values.join(", ")}])`;
   }
 
@@ -284,44 +325,46 @@ class Compiler {
     // A dash marks a custom element, whose props may be properties rather than attributes.
     if (tag.includes("-") || BAIL_TAGS.has(tag)) return null;
     if (!root && key !== undefined && key !== "undefined") return null;
-    const entries = this.object(props ?? "{}");
+    const entries = this.object(props ?? "{}", props === undefined ? -1 : c.at[1]!);
     if (entries === null) return null;
     const ps: Record<string, unknown> = {};
-    let children: string[] = [];
-    const mark = values.length;
-    for (const [name, value] of entries) {
+    let children: [string, number][] = [];
+    const start = values.length;
+    for (const [name, value, at] of entries) {
       if (name === "children") {
         // Only jsxs passes a static array of children. Under jsx an array literal is one child
         // whose value is an array, which React renders as a list.
         children =
-          c.multi && value.startsWith("[") && value.endsWith("]") ? split(value, 1, value.length - 1) : [value];
+          c.multi && value.startsWith("[") && value.endsWith("]")
+            ? splitAt(value, 1, value.length - 1).map(([s, i]) => [s, off(at, i)])
+            : [[value, at]];
         continue;
       }
-      if (BAIL_PROPS.has(name) || name === "key") return this.undo(values, mark);
+      if (BAIL_PROPS.has(name) || name === "key") return this.undo(values, start);
       if (/^on[A-Z]/.test(name) && BAIL_EVENTS.has(name.endsWith("Capture") ? name.slice(0, -7) : name))
-        return this.undo(values, mark);
+        return this.undo(values, start);
       const lit = literal(value);
       if (lit !== NOT_LITERAL) {
         // A prop set to undefined is the same as no prop.
         if (lit !== undefined) ps[name] = lit;
       } else {
         ps[name] = { h: values.length };
-        values.push(this.rewrite(value));
+        values.push(this.rewrite(value, at));
       }
     }
     // A void element given children stays a jsx call, for the runtime to throw React's error.
-    if (children.length && VOID.has(tag)) return this.undo(values, mark);
+    if (children.length && VOID.has(tag)) return this.undo(values, start);
     // A spread child ({...xs}) is any number of children, which a template's holes cannot count.
-    if (children.some((item) => item.startsWith("..."))) return this.undo(values, mark);
+    if (children.some(([item]) => item.startsWith("..."))) return this.undo(values, start);
     const desc: Desc = [tag, Object.keys(ps).length ? ps : 0];
-    for (const item of children) {
+    for (const [item, at] of children) {
       const lit = literal(item);
       if (typeof lit === "string" || typeof lit === "number") {
         desc.push("" + lit);
         continue;
       }
       if (lit === null || typeof lit === "boolean" || (lit === undefined && item === "undefined")) continue;
-      const inner = this.parseCall(item);
+      const inner = this.parseCall(item, at);
       if (inner !== null) {
         const m = values.length;
         const d = this.element(inner, false, values);
@@ -333,7 +376,7 @@ class Compiler {
         values.length = m;
       }
       desc.push(values.length);
-      values.push(this.loop(item) ?? this.rewrite(item));
+      values.push(this.loop(item, at) ?? this.rewrite(item, at));
     }
     return desc;
   }
@@ -355,7 +398,7 @@ class Compiler {
     // Extra arguments are not the automatic runtime's call shape: leave the call to the runtime.
     if (type === undefined || props === undefined || rest.length) return null;
     if (!PATH.test(type) || type === "undefined" || type === "null") return null;
-    const entries = this.object(props);
+    const entries = this.object(props, c.at[1]!);
     // jsx() treats these apart from props: `ref` is mirrored on the element, and the classic JSX
     // transform's debug props __self and __source are dropped.
     if (entries === null || entries.some(([k]) => k === "key" || k === "ref" || k === "__self" || k === "__source"))
@@ -364,17 +407,19 @@ class Compiler {
     if (key === undefined || key === "undefined") k = "null";
     else {
       const lit = literal(key);
+      const km = this.m(c.at[2]);
       // A name is read twice; any other expression goes through __hrKey once.
       k =
         typeof lit === "string" || typeof lit === "number"
-          ? JSON.stringify("" + lit)
+          ? km + JSON.stringify("" + lit)
           : PATH.test(key)
-            ? `${key} === undefined ? null : "" + ${key}`
-            : `__hrKey(${this.rewrite(key)})`;
+            ? `${km}${key} === undefined ? null : "" + ${km}${key}`
+            : `__hrKey(${this.rewrite(key, c.at[2]!)})`;
     }
     this.inlined++;
+    const t = this.m(c.at[0]) + type;
     // The fields in jsx()'s order, so inline and runtime elements share one shape in the engine.
-    return `(__hrP = ${this.rewrite(props)}, { $$typeof: __hrE, type: ${type}, key: ${k}, ref: null, props: ${type}?.defaultProps == null ? __hrP : __hrDefaults(${type}, __hrP) })`;
+    return `(__hrP = ${this.rewrite(props, c.at[1]!)}, { $$typeof: __hrE, type: ${t}, key: ${k}, ref: null, props: ${t}?.defaultProps == null ? __hrP : __hrDefaults(${t}, __hrP) })`;
   }
 
   // #endregion
@@ -391,7 +436,7 @@ class Compiler {
    * The call keeps map's meaning: a non-array receiver gets its own map called, and holes in the
    * array stay holes in the result.
    */
-  loop(src: string): string | null {
+  loop(src: string, pos: number): string | null {
     // The last `.map(` whose call closes at the very end of src, with no top-level comma or
     // semicolon before it: src is then exactly `receiver.map(...)`.
     const m = /\.map\(/g;
@@ -401,21 +446,22 @@ class Compiler {
       if (close === src.length - 1 && until(src.slice(0, x.index), 0, ",;") === x.index) at = x.index;
     }
     if (at <= 0) return null;
-    const recv = src.slice(0, at).trim();
-    const arrow = src.slice(at + 5, -1).trim();
+    const [recv, recvAt] = trimAt(src.slice(0, at), pos);
+    const [arrow, arrowAt] = trimAt(src.slice(at + 5, -1), off(pos, at + 5));
     const am = /^(?:\(([^()]*)\)|([A-Za-z_$][\w$]*))\s*=>\s*/.exec(arrow);
     if (am === null) return null;
-    const body = arrow.slice(am[0].length).trim();
+    const [body, bodyAt] = trimAt(arrow.slice(am[0].length), off(arrowAt, am[0].length));
     // A block body would need its returns rewritten; a comma after the arrow is map's thisArg.
     if (body.startsWith("{") || until(arrow, am[0].length, ",") !== arrow.length) return null;
     // At most map's three parameters (value, index, array), each a plain name (no destructuring
     // or defaults).
     const params = am[1] !== undefined ? split(am[1], 0, am[1].length) : [am[2]!];
     if (params.length > 3 || params.some((q) => !/^[A-Za-z_$][\w$]*$/.test(q))) return null;
-    const b = this.rewrite(body);
-    const free = freeNames(b);
+    const b = this.rewrite(body, bodyAt);
+    const free = freeNames(plain(b));
     // Compiled once: left as a map, with the body already compiled.
-    if (free === null) return `${this.rewrite(recv)}.map(${arrow.slice(0, am[0].length)}${b})`;
+    if (free === null)
+      return `${this.rewrite(recv, recvAt)}.map(${this.m(arrowAt)}${arrow.slice(0, am[0].length)}${b})`;
     const args = [...free].filter((x) => !params.includes(x));
     const [p0, p1, p2] = params;
     const decl =
@@ -423,11 +469,11 @@ class Compiler {
       (p1 !== undefined ? `const ${p1} = __hrI; ` : "") +
       (p2 !== undefined ? `const ${p2} = __hrXs; ` : "");
     const id = `__hrL${this.loops.length}`;
-    const memo = this.rowMemo(body, params, id);
+    const memo = this.rowMemo(body, bodyAt, params, id);
     if (memo !== null) {
       const margs = memo.args;
       return (
-        `(Array.isArray(__hrM = ${this.rewrite(recv)}) ? ${id}(__hrM${margs.map((x) => ", " + x).join("")}) : ` +
+        `(Array.isArray(__hrM = ${this.rewrite(recv, recvAt)}) ? ${id}(__hrM${margs.map((x) => ", " + x).join("")}) : ` +
         `__hrM.map((${params.join(", ")}) => ${b}))`
       );
     }
@@ -440,7 +486,7 @@ class Compiler {
         `return __hrOut; }`,
     );
     return (
-      `(Array.isArray(__hrM = ${this.rewrite(recv)}) ? ${id}(__hrM${args.map((x) => ", " + x).join("")}) : ` +
+      `(Array.isArray(__hrM = ${this.rewrite(recv, recvAt)}) ? ${id}(__hrM${args.map((x) => ", " + x).join("")}) : ` +
       `__hrM.map((${params.join(", ")}) => ${b}))`
     );
   }
@@ -455,12 +501,14 @@ class Compiler {
    * element is reused only when it equals what would be built, and the runtime ignores a report
    * (__hrDelta) for a list its slot did not render last.
    */
-  rowMemo(body: string, params: string[], id: string): { args: string[] } | null {
-    let src = body.trim();
-    while (src.startsWith("(") && until(src, 1, "") === src.length - 1) src = src.slice(1, -1).trim();
-    const c = this.parseCall(src);
+  rowMemo(body: string, bodyAt: number, params: string[], id: string): { args: string[] } | null {
+    let [src, at] = trimAt(body, bodyAt);
+    while (src.startsWith("(") && until(src, 1, "") === src.length - 1)
+      [src, at] = trimAt(src.slice(1, -1), off(at, 1));
+    const c = this.parseCall(src, at);
     if (c === null) return null;
     const [type, props, key, ...rest] = c.args;
+    const [typeAt, propsAt, keyAt] = c.at;
     if (
       type === undefined ||
       props === undefined ||
@@ -470,13 +518,15 @@ class Compiler {
       type === "null"
     )
       return null;
-    const entries = this.object(props);
+    const entries = this.object(props, propsAt!);
     // With no props there is nothing to compare, so no cache is worth keeping.
     if (entries === null || entries.length === 0) return null;
     if (entries.some(([k]) => k === "key" || k === "ref" || k === "__self" || k === "__source")) return null;
-    const values = entries.map(([, v]) => this.rewrite(v));
-    const k = key === undefined || key === "undefined" ? "undefined" : this.rewrite(key);
-    const free = freeNames([type, k, ...values].join(", "));
+    const values = entries.map(([, v, vAt]) => this.rewrite(v, vAt));
+    const k = key === undefined || key === "undefined" ? "undefined" : this.rewrite(key, keyAt!);
+    const free = freeNames(plain([type, k, ...values].join(", ")));
+    // The type, with its mark: the output reads it in several places.
+    const t = this.m(typeAt) + type;
     if (free === null) return null;
     const args = [...free].filter((x) => !params.includes(x));
     const [p0, p1, p2] = params;
@@ -492,8 +542,8 @@ class Compiler {
     const same = entries.map(([name], i) => ` && Object.is(__hrc.props${prop(name)}, __hra${i})`).join("");
     const fresh =
       `(__hrP = { ${entries.map(([name], i) => `${lit(name)}: __hra${i}`).join(", ")} }, ` +
-      `{ $$typeof: __hrE, type: ${type}, key: __hrk === undefined ? null : "" + __hrk, ref: null, ` +
-      `props: ${type}?.defaultProps == null ? __hrP : __hrDefaults(${type}, __hrP) })`;
+      `{ $$typeof: __hrE, type: ${t}, key: __hrk === undefined ? null : "" + __hrk, ref: null, ` +
+      `props: ${t}?.defaultProps == null ? __hrP : __hrDefaults(${t}, __hrP) })`;
     // Last render's elements (__hrC<n>) and keys (__hrK<n>), one pair per call site.
     const cache = id.replace("__hrL", "__hrC"),
       keys = id.replace("__hrL", "__hrK");
@@ -513,7 +563,7 @@ class Compiler {
         // removed or added before it), by key.
         `const __hrc = __hrPk[__hrI] === __hrk ? __hrPv[__hrI] : __hrPk[__hrI + 1] === __hrk ? __hrPv[__hrI + 1] : ` +
         `__hrI > 0 && __hrPk[__hrI - 1] === __hrk ? __hrPv[__hrI - 1] : undefined; ` +
-        `const __hre = __hrOut[__hrI] = __hrc !== undefined && __hrc.type === ${type}${same} ? __hrc : ${fresh}; ` +
+        `const __hre = __hrOut[__hrI] = __hrc !== undefined && __hrc.type === ${t}${same} ? __hrc : ${fresh}; ` +
         `if (__hrD !== null && __hre !== __hrPv[__hrI] && __hrD.push(__hrI) > __hrN >> 1) __hrD = null; } ` +
         `if (__hrD !== null) __hrDelta(__hrOut, __hrPv, __hrD); ` +
         `${cache} = __hrOut; ${keys} = __hrKs; return __hrOut; }`,
@@ -532,35 +582,35 @@ class Compiler {
   }
 
   /** `helper(args)` as a whole expression, or null. */
-  parseCall(src: string): Call | null {
+  parseCall(src: string, at: number): Call | null {
     const m = /^([\w$]+)\(/.exec(src);
     if (m === null || !this.helpers.has(m[1]!)) return null;
     const close = until(src, m[0].length, "");
     if (close !== src.length - 1) return null;
-    return { helper: m[1]!, multi: this.helpers.get(m[1]!)!, args: split(src, m[0].length, close) };
+    return { helper: m[1]!, multi: this.helpers.get(m[1]!)!, ...argsAt(src, m[0].length, close, at) };
   }
 
   /**
-   * The entries of an object literal with plain keys, as [name, value source] pairs, or null
-   * (spreads, computed keys, methods). A quoted key is decoded.
+   * The entries of an object literal with plain keys, as [name, value source, where the value
+   * starts] triples, or null (spreads, computed keys, methods). A quoted key is decoded.
    */
-  object(src: string): [string, string][] | null {
-    const s = src.trim();
+  object(src: string, at: number): [string, string, number][] | null {
+    const [s, sAt] = trimAt(src, at);
     if (!s.startsWith("{") || !s.endsWith("}")) return null;
-    const out: [string, string][] = [];
-    for (const part of split(s, 1, s.length - 1)) {
+    const out: [string, string, number][] = [];
+    for (const [part, i] of splitAt(s, 1, s.length - 1)) {
       if (part.startsWith("...")) return null;
       const colon = until(part, 0, ":");
       if (colon >= part.length) {
         // No colon: a shorthand, or a method, which fails the name test.
         if (!/^[\w$]+$/.test(part)) return null;
-        out.push([part, part]); // shorthand
+        out.push([part, part, off(sAt, i)]); // shorthand
         continue;
       }
       let k = part.slice(0, colon).trim();
       if (k.startsWith('"')) k = JSON.parse(k) as string;
       else if (!/^[\w$]+$/.test(k)) return null;
-      out.push([k, part.slice(colon + 1).trim()]);
+      out.push([k, ...trimAt(part.slice(colon + 1), off(sAt, i + colon + 1))]);
     }
     return out;
   }
@@ -680,6 +730,24 @@ const PATH = /^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*$/;
  *   imports it needs and the hoisted templates, loops and temporaries.
  */
 export function compileJs(js: string, options: CompilerOptions = {}): string {
+  return compile(js, options, false);
+}
+
+/**
+ * `compileJs`, with a source map from the code back to `js`.
+ *
+ * @returns The code `compileJs` returns, and its map: null when `js` uses no JSX helpers (the
+ *   code is `js`) or holds the characters the map's marks use (see @reactre/compiler/map).
+ */
+export function compileJsWithMap(js: string, options: CompilerOptions = {}): { code: string; map: SourceMapV3 | null } {
+  if (hasMarks(js)) return { code: compileJs(js, options), map: null };
+  const marked = compile(js, options, true);
+  if (marked === js) return { code: js, map: null };
+  return unmark(marked, js);
+}
+
+/** `compileJs`, with marks for a source map in the code when `map` is set. */
+function compile(js: string, options: CompilerOptions, map: boolean): string {
   // Bun's transpiler leaves the runtime's helpers as unbound names with a
   // hash suffix (jsx_w77yafs4, jsxs_..., Fragment_...), bound only when it
   // bundles JSX itself. This output is plain JavaScript, so import them.
@@ -690,8 +758,8 @@ export function compileJs(js: string, options: CompilerOptions = {}): string {
     if (m[1] === "jsx" || m[1] === "jsxs") helpers.set(m[0], m[1] === "jsxs");
   }
   if (imports.size === 0) return js;
-  const c = new Compiler(js, helpers, options.inlineElements ?? true);
-  const body = c.rewrite(js);
+  const c = new Compiler(js, helpers, options.inlineElements ?? true, map);
+  const body = c.rewrite(js, 0);
   // The runtime import stays even when every call compiled: an uncompiled call or a Fragment may
   // still use it.
   const runtime = `import { ${[...imports].map(([local, name]) => `${name} as ${local}`).join(", ")} } from "react/jsx-runtime";\n`;
