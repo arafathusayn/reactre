@@ -12,8 +12,10 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { FakeElement, installFakeDocument } from "@reactre/testdom";
+
 import { compileSource, reactreCompatCompiler } from "../src/compiler.ts";
-import { __block, __defaults, __key, __template, Fragment, jsx, jsxs } from "../src/core.ts";
+import { __block, __defaults, __key, __template, createRoot, flushSync, Fragment, jsx, jsxs } from "../src/core.ts";
 
 // The descriptions of the templates hoisted in compiled output, parsed back from their JSON.
 const templates = (out: string): unknown[] =>
@@ -218,6 +220,62 @@ describe("@reactre/compat/compiler", () => {
       // The body was compiled once.
       expect(out.match(/__hrTemplate\(\["li"/g)?.length).toBe(1);
     }
+  });
+
+  test("a list loop takes the names its body spreads, and renders what React renders", () => {
+    // Each body spreads a local name: as props, into an object literal, an array, call arguments
+    // and JSX children. A spread name is a variable read, not a property access.
+    const bodies = [
+      `<li {...extra}>{r}</li>`,
+      `<T {...extra} row={r} />`,
+      `<li title={f({ ...extra, r })}>{r}</li>`,
+      `<li>{[...xs, r].join()}</li>`,
+      `<li>{f(...xs, r)}</li>`,
+      `<li>{...xs}{r}</li>`,
+      `<li>{... xs}</li>`,
+    ];
+    const module = (body: string) =>
+      `function T({ row, title }) { return <b title={title}>{row}</b>; }
+      export const make = (rows, extra, xs, f) => <ul>{rows.map((r) => ${body})}</ul>;`;
+    const run = (code: string) =>
+      new Function(
+        "scope",
+        `${code
+          .replace(/^import \{([^}]*)\} from "([^"]*)";$/gm, (_, names: string) =>
+            names
+              .split(",")
+              .map((n) => {
+                const [a, b] = n.trim().split(" as ");
+                return `const ${b ?? a} = scope.${a};`;
+              })
+              .join("\n"),
+          )
+          .replace(/^export /gm, "")}\nreturn make;`,
+      )({ jsx, jsxs, Fragment, __defaults, __key, __block, __template }) as (...args: unknown[]) => unknown;
+    const transpiler = new Bun.Transpiler({
+      loader: "jsx",
+      tsconfig: { compilerOptions: { jsx: "react-jsx", jsxImportSource: "react" } },
+    } as ConstructorParameters<typeof Bun.Transpiler>[0]);
+    const rendered = (make: (...args: unknown[]) => unknown) => {
+      const el = new FakeElement("DIV");
+      const root = createRoot(el as unknown as Element);
+      const f = (o: unknown, ...rest: unknown[]) => JSON.stringify([o, ...rest]);
+      flushSync(() => root.render(make(["a", "b"], { title: "t" }, ["x", "y"], f) as never));
+      return el;
+    };
+    installFakeDocument();
+    for (const body of bodies) {
+      const src = module(body);
+      const out = compileSource(src, "jsx");
+      expect(out).toContain("function __hrL0(");
+      const plain = transpiler.transformSync(src).replace(/\b(jsxs|jsx|Fragment)_[a-z0-9]{8}\b/g, "$1");
+      const reference = rendered(run(`import { jsx, jsxs, Fragment } from "react/jsx-runtime";\n${plain}`));
+      const compiled = rendered(run(out));
+      expect(reference.textContent).not.toBe("");
+      expect([body, compiled.isEqualNode(reference as never)]).toEqual([body, true]);
+    }
+    // A spread child stays a jsx call outside a list too: a template counts its children.
+    expect(templates(compileSource(`export const A = ({ xs }) => <p>{...xs}</p>;`))).toEqual([]);
   });
 
   test("a list of component rows reuses last render's element for an unchanged row", () => {

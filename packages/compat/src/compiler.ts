@@ -311,6 +311,8 @@ class Compiler {
     }
     // A void element given children stays a jsx call, for the runtime to throw React's error.
     if (children.length && VOID.has(tag)) return this.undo(values, mark);
+    // A spread child ({...xs}) is any number of children, which a template's holes cannot count.
+    if (children.some((item) => item.startsWith("..."))) return this.undo(values, mark);
     const desc: Desc = [tag, Object.keys(ps).length ? ps : 0];
     for (const item of children) {
       const lit = literal(item);
@@ -645,6 +647,14 @@ function freeNames(src: string): Set<string> | null {
     }
     // ++ and -- assign too.
     if ((c === "+" || c === "-") && src[i + 1] === c) return null;
+    // A spread (in props, an object, an array or call arguments) reads the name after it: its
+    // last dot does not make that name a property.
+    if (c === "." && src[i + 1] === "." && src[i + 2] === ".") {
+      prev = "...";
+      word = "";
+      i += 3;
+      continue;
+    }
     if (OPEN.includes(c)) stack.push(c);
     else if (CLOSE.includes(c)) stack.pop();
     if (!/\s/.test(c)) {
