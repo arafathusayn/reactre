@@ -8,14 +8,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### @reactre/full-compat
 
-- Added: a new package, @reactre/compat with React's time slicing. A transition's render yields to the page every 5 ms: events, timers and paints run between slices, an urgent update made meanwhile commits first and the transition renders again from the start, and one that has waited 5 seconds renders the rest at once, as React's concurrent render does. Between slices the render is undone, so the page shows the last commit. The check before each component costs on every render, so only this package's builds compile it in. About 1 KB gzipped more than @reactre/compat.
+- Added: a new package, @reactre/compat with React's time slicing. A transition's render yields to the page every 5 ms: events, timers and paints run between slices, an urgent update made meanwhile commits first and the transition renders again from the start, and one that has waited 5 seconds renders the rest at once, as React's concurrent render does. Between slices the render is undone, so the page shows the last commit. The check before each component costs on every render, so only this package's builds compile it in. About 1 KB gzipped more than @reactre/compat. Its development build (`dist/dev`, the `development` export condition) has Fast Refresh, as @reactre/compat's does.
 
 ### @reactre/compat
 
+- Added: Fast Refresh, in a development build of the client and server entries (`dist/dev`) that the `development` export condition resolves, as Vite's dev server does. Its first root registers the renderer with react-refresh through `__REACT_DEVTOOLS_GLOBAL_HOOK__`, as `react-dom`'s development build does, so @vitejs/plugin-react's Fast Refresh works: an edited component renders again in place with its new code, keeping its state, and its effects and memos run again; a component whose hooks changed, and a class component, mount anew; a root an error emptied renders again once an edit fixes it. A compiled template keeps its DOM over an edit that leaves its markup as it was. The production builds strip the Fast Refresh code from core.ts as they strip time slicing, so their dist, sizes and speed are as before, byte for byte.
 - Added: `@reactre/compat/features/timeSlicing`, which turns time slicing on where the build compiles it in (@reactre/full-compat's). @reactre/compat's own builds strip the slicing code from core.ts before they compile it, so its dist, sizes and speed are as before, byte for byte.
 
 ### @reactre/plugin
 
+- Added: compat mode works with @vitejs/plugin-react's Fast Refresh (`plugins: [reactre({ compat: true }), react()]`): in `vite dev`, `react` resolves to compat's development build, which registers with React Refresh. The docs now set the plugin up with it.
 - Added: `compat.package`, `"@reactre/compat"` (the default) or `"@reactre/full-compat"`: the package `react`, `react-dom` and their server entries resolve to, and the module written for the options builds on.
 
 ## [0.0.2] - 2026-10-30

@@ -104,14 +104,15 @@ Then let the plugin point `react` and `react-dom` at it when you build. With Vit
 ```ts
 // vite.config.ts
 import reactre from "@reactre/plugin/vite";
+import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
-export default defineConfig({ plugins: [reactre({ compat: true })] });
+export default defineConfig({ plugins: [reactre({ compat: true }), react()] });
 ```
 
 Your imports from `react` and `react-dom` stay as they are, in your code and in your dependencies. The plugin also compiles your JSX's HTML element trees into templates, for extra speed. Class components work by default; if nothing in your app uses them, `compat: { classes: false }` leaves their support out. If long transitions must not block input, use [`@reactre/full-compat`](packages/full-compat) instead, with `compat: { package: "@reactre/full-compat" }`: it slices a transition's render every 5 ms, as React does, at about 1 KB gzipped more.
 
-Leave `@vitejs/plugin-react` out: its Fast Refresh works through React's renderer, and with compat an edited component would stay as it was on screen. Without it, Vite reloads the page when you save. Rollup, Rolldown, esbuild, webpack, Rspack and Bun have their own entries: see [the plugin's docs](packages/plugin).
+`@vitejs/plugin-react` gives you Fast Refresh, as with React: a saved component renders again in place and keeps its state. It is optional; without it, Vite reloads the page when you save. Rollup, Rolldown, esbuild, webpack, Rspack and Bun have their own entries: see [the plugin's docs](packages/plugin).
 
 **[Read the compat docs →](packages/compat)**
 

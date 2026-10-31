@@ -13,18 +13,19 @@ Alias `react`, `react-dom` and their subpaths to it at build time. [`@reactre/pl
 ## Vite
 
 ```sh
-bun add -d @reactre/plugin
+bun add -d @reactre/plugin @vitejs/plugin-react
 ```
 
 ```ts
 // vite.config.ts
 import reactre from "@reactre/plugin/vite";
+import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
-export default defineConfig({ plugins: [reactre({ compat: true })] });
+export default defineConfig({ plugins: [reactre({ compat: true }), react()] });
 ```
 
-Leave `@vitejs/plugin-react` out: its Fast Refresh works through React's renderer, and with compat an edited component would stay as it was on screen. Without it, Vite reloads the page when you save.
+`@vitejs/plugin-react` brings Fast Refresh: save a component and it renders again in place, keeping its state, as with React. An edit that changes a component's hooks mounts it anew, and so does any edit to a class component, as React does. Fast Refresh is in compat's development build alone (`dist/dev`), which the `development` export condition resolves, as Vite's dev server does; the production build has none of its code, so its size and speed are as they were. `@vitejs/plugin-react` is optional: without it, Vite reloads the page when you save.
 
 Without the plugin, an alias is enough. Vite then compiles JSX for React's automatic runtime on its own:
 

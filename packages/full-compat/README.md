@@ -17,7 +17,7 @@ import { defineConfig } from "vite";
 export default defineConfig({ plugins: [reactre({ compat: { package: "@reactre/full-compat" } })] });
 ```
 
-Every other option works as with `@reactre/compat`: see [the plugin's docs](https://www.npmjs.com/package/@reactre/plugin).
+Every other option works as with `@reactre/compat`, and so does Fast Refresh with `@vitejs/plugin-react` added after the plugin: see [the plugin's docs](https://www.npmjs.com/package/@reactre/plugin).
 
 ## Why a separate package
 
