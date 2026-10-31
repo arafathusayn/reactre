@@ -30,6 +30,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Fixed: `value`, `checked` and `selected` that are not literals are set as properties, so they show the state after the user has typed or clicked.
 - Fixed: a handler outside a list whose expression reads a signal (`onClick={editing() ? save : edit}`) follows it. Before, it was bound once. A function literal is still bound once.
 - Changed: a file that uses none of these compiles to the same code as before.
+- Added: `compileJsWithMap`, `compileJs` with a version 3 source map back to its input, and `@reactre/compiler/map`, which @reactre/compat/compiler shares. The code is `compileJs`'s, byte for byte.
 
 ### @reactre/full-compat
 
@@ -37,6 +38,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### @reactre/compat
 
+- Added: `compileJsWithMap` in @reactre/compat/compiler, `compileJs` with a version 3 source map back to its input. The code is `compileJs`'s, byte for byte.
 - Added: Fast Refresh, in a development build of the client and server entries (`dist/dev`) that the `development` export condition resolves, as Vite's dev server does. Its first root registers the renderer with react-refresh through `__REACT_DEVTOOLS_GLOBAL_HOOK__`, as `react-dom`'s development build does, so @vitejs/plugin-react's Fast Refresh works: an edited component renders again in place with its new code, keeping its state, and its effects and memos run again; a component whose hooks changed, and a class component, mount anew; a root an error emptied renders again once an edit fixes it. A compiled template keeps its DOM over an edit that leaves its markup as it was. The production builds strip the Fast Refresh code from core.ts as they strip time slicing, so their dist, sizes and speed are as before, byte for byte.
 - Added: `@reactre/compat/features/timeSlicing`, which turns time slicing on where the build compiles it in (@reactre/full-compat's). @reactre/compat's own builds strip the slicing code from core.ts before they compile it, so its dist, sizes and speed are as before, byte for byte.
 - Fixed: @reactre/compat/compiler passes a list row's loop the names its body spreads. Its free-name scan took a name after `...` for a property, so `rows.map((r) => <li {...extra}>{r}</li>)` threw a ReferenceError for `extra`, or read a module-level `extra` instead; the same held for spreads into objects, arrays and call arguments. An element with a spread child (`<li>{...xs}</li>`) now stays a jsx call: its template had one hole for any number of children and rendered only the first.
@@ -44,6 +46,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### @reactre/plugin
 
+- Added: source maps. A compiled file's map leads back to the `.tsx` or `.jsx` you wrote, through oxc's map, the rename of oxc's helpers and the compiler's own, so a runtime error's stack maps to its line and column. Vite, Rollup, Rolldown, esbuild, webpack and Rspack take it when their own source map option is on, and `vite dev` serves it inline; the plugin builds none when the bundler asks for none. Bun's plugins cannot return a map, so `Bun.build` maps a bundle to the compiled code. The compiled code is the same as before, byte for byte. Before, a compiled file had no map.
 - Added: compat mode works with @vitejs/plugin-react's Fast Refresh (`plugins: [reactre({ compat: true }), react()]`): in `vite dev`, `react` resolves to compat's development build, which registers with React Refresh. The docs now set the plugin up with it.
 - Added: `compat.package`, `"@reactre/compat"` (the default) or `"@reactre/full-compat"`: the package `react`, `react-dom` and their server entries resolve to, and the module written for the options builds on.
 

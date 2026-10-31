@@ -113,9 +113,15 @@ With an API other than class support off, the plugin also reads every module it 
 
 Leaving out what a small app does not use saves about a sixth of compat's bundle today. For example, a counter that imports `React` and calls `useState` goes from 28.4 KB gzipped to 23.9 KB with every other API off. The savings grow as more of compat moves into modules of its own.
 
+## Source maps
+
+A compiled file comes with a source map back to your `.tsx` or `.jsx`, so a stack trace, a breakpoint or an error report points at the line and column you wrote. Turn maps on as your bundler does: `build.sourcemap` in Vite (`vite dev` always serves them, inline), `output.sourcemap` in Rollup and Rolldown, `sourcemap` in esbuild, `devtool` in webpack and Rspack. Where the bundler asks for no map, the plugin builds none. The compiled code is the same with a map or without.
+
+Bun is the exception: its plugins return code without a map, so `Bun.build` with `sourcemap` maps a bundle to the compiled code of each file, not to what you wrote, and the plugin builds no map for it.
+
 ## Limits
 
-- No source maps yet: compiled files map to nothing.
+- In Bun, source maps lead to the compiled code, not your source (see above).
 - Fast Refresh is checked with Vite and `@vitejs/plugin-react` (see above). Other bundlers' React Refresh integrations speak the same protocol to the renderer, but are not tested.
 - In reactre mode, a key after spread props is a compile error: Bun gives that JSX to React's classic runtime.
 
