@@ -86,16 +86,16 @@ Already measured and rejected: building component elements through `jsx()`, a fr
 
 ## 3. reactre's correctness gaps
 
-These don't affect the benchmark app, but would affect a real app.
+These don't affect the benchmark app, but would affect a real app. Each one is fixed and has a test in `packages/core/test`; what is left is the A/B.
 
-- **Ownership and disposal.** An effect created in a component or in a slot's content is never disposed. When a slot replaces its content (`{cond() ? <A /> : <B />}`), the old content's effects stay subscribed and write to detached nodes. Needed: an owner tree, where each effect or slot run owns the effects created in it and disposes them before it re-runs, plus `onCleanup`.
-- **Rows can hold only host elements.** A component, a nested `<For>` or a JSX expression in a row is a compile error today. A row-level slot needs the ownership above.
-- **Selector.** It records one key per row, so a row that reads two selectors, or one selector with two keys, keeps only the last. An observer outside a row is removed only when its key changes, so one that stops reading a key re-runs once more than needed.
-- **Batching.** Collecting pending effects is quadratic in a long batch, and nothing guards against an effect that writes what it reads.
-- **Compiler coverage.** Not handled yet: fragments and spread props (compile errors today), `style` objects, `ref`, SVG (templates are parsed as HTML), `checked` and `value` as properties, events that don't bubble (`focus`, `blur`) inside rows, and `key` on a host element outside `<For>`. A hole that reads a plain mutable variable is written once, by design; document it.
-- **Handlers outside lists** are bound once. A handler expression that reads a signal doesn't update.
+- **Ownership and disposal.** Done. Each effect run owns the effects and cleanups it makes and disposes them before it re-runs, so a slot that replaces its content (`{cond() ? <A /> : <B />}`) stops the old content's effects. `onCleanup` registers a cleanup on the current owner (outside one it does nothing); `render` returns a disposer. A disposed slot removes its content, and a `<For>` clears its rows and listeners when its owner goes.
+- **Rows can hold more than host elements.** Done. A component, a nested `<For>`, a JSX expression, a property, a `style`, a `ref` or spread props in a row compiles to `__forMount`, a list whose rows own what those parts create. A new item for the row cleans its owner and runs them again, so a nested list is rebuilt then, not reconciled; a row that leaves disposes them. A row of host elements and values still compiles to `__for`, as before.
+- **Selector.** Done. A row that asks a second (selector, key) pair keeps them all, and from then on its list scans with a slower loop; a row's pairs are recorded afresh on each run. A reader outside a row subscribes to a per-key source, so it stops following a key it no longer asks about.
+- **Batching.** Done. The queue flags queued observers instead of searching itself, and a flush no longer shifts it, so a batch is linear. An effect notified while it runs (it wrote what it read) runs again after its run, and throws after 100 re-runs in a row. Not guarded: a `<For>` row's reactive hole that writes what it reads.
+- **Compiler coverage.** Done: fragments (inlined into the parent's template, or `__frag` outside an element), spread props (`__spread`), `style` objects and strings (`__style`), `ref` (a function or an object with `current`), SVG (a template whose root is an SVG element is parsed inside `<svg>`, and `class` is an attribute there), `value`, `checked` and `selected` as properties, events that don't bubble delegated in the capture phase, and `key` outside `<For>` (a key that calls something rebuilds the element when it changes; a constant key is ignored). The core README says a hole that reads a plain variable is written once.
+- **Handlers outside lists.** Done. A handler expression that calls something and is not a function literal is followed (`__on`).
 
-**Done when** each has a test, and `ab.ts` shows the benchmark numbers unchanged.
+**Done when** `ab.ts` shows the benchmark numbers unchanged. The jfb app compiles to the same code as before, byte for byte. The runtime functions it runs that changed: `notify`, `batch` (and the new `flush`), `Effect.run` and `Effect.stale`, `effect`, `Selector.watch` and `Selector.changed`, `ForList.refresh` and `ForList.selectorChanged`, `__for`, and `ForList.listen`'s setup.
 
 ## 4. reactre-compat's known bugs
 

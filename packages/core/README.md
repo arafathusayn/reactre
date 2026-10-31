@@ -2,7 +2,7 @@
 
 A tiny, fast UI library for the web. You write components in TSX over signals.
 
-- **Small.** About 6 KB minified and gzipped, with no third-party dependencies.
+- **Small.** About 7.5 KB minified and gzipped, with no third-party dependencies.
 - **Fine-grained.** No virtual DOM and no tree diffing: components run once, and a signal's readers update.
 - **Fast lists.** A keyed list reuses rows and makes the fewest DOM moves. Selecting one row out of thousands touches two.
 - **Typed.** Template holes carry their value types, and the types cost nothing at runtime.
@@ -26,7 +26,7 @@ const Counter = () => <button onClick={() => setCount((n) => n + 1)}>Clicked {co
 render(Counter, document.getElementById("app")!);
 ```
 
-`Counter` runs once. `{count()}` reads a signal, so that one text node updates when `count` changes. A hole that calls a function updates when what it read changes; any other hole is written once.
+`Counter` runs once. `{count()}` reads a signal, so that one text node updates when `count` changes. A hole that calls a function updates when what it read changes; any other hole is written once. So a hole that reads a plain variable (`let n = 0; ... <b>{n}</b>`) shows the value it had when the element was created, and changing the variable later changes nothing on the page: keep a value that changes in a signal.
 
 ## A list
 
@@ -58,6 +58,10 @@ render(App, document.getElementById("app")!);
 ```
 
 `<For>` reuses rows by key and moves the fewest nodes. `selector` makes a change of selection re-run only the two rows whose key it was or is, and row clicks go to one delegated listener.
+
+A row can also hold components, nested `<For>` lists and JSX expressions. They belong to the row: a new item for the row's key builds them again, and they are disposed when the row leaves. A row of plain elements does none of this work.
+
+Elements take what React's do: fragments, spread props, `style` as an object or a string, `ref` (a function or an object with `current`), SVG, `value`, `checked` and `selected` as properties, and `key`, which outside `<For>` rebuilds the element when it changes. A handler expression that reads a signal (`onClick={editing() ? save : edit}`) follows it.
 
 TSX is compiled at build time by [`@reactre/plugin`](https://www.npmjs.com/package/@reactre/plugin), for Vite, Rollup, Rolldown, esbuild, webpack, Rspack and Bun:
 
@@ -106,8 +110,9 @@ The template is parsed once. `mount` clones it with values for its holes, in ord
 | `batch(fn)`          | Runs `fn` and applies its writes together, so effects run once.                                 |
 | `untrack(fn)`        | Reads signals without subscribing to them.                                                      |
 | `selector(source)`   | `isSelected(key)`, where a change of selection re-runs only the readers of the old and new key. |
+| `onCleanup(fn)`      | Runs `fn` when the effect, component or row it was called in re-runs or goes away.              |
 | `<For each key>`     | A keyed list in TSX.                                                                            |
-| `render(view, root)` | Mounts a TSX view into an element.                                                              |
+| `render(view, root)` | Mounts a TSX view into an element. Returns a function that removes it and stops its effects.    |
 
 ## Browsers and bundlers
 

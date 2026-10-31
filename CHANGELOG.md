@@ -6,6 +6,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### @reactre/core
+
+- Added: `onCleanup(fn)`. Each effect run owns the effects and cleanups it makes, and disposes them before it runs again. A slot that replaces its content (`{cond() ? <A /> : <B />}`) now stops the old content's effects; before, they stayed subscribed and wrote to detached nodes.
+- Added: `render` returns a function that removes the view and stops its effects.
+- Added: a `<For>` row can hold components, nested `<For>` lists and JSX expressions. They belong to the row: a new item for the row's key builds them again, and they are disposed when the row leaves. Before, these were compile errors.
+- Fixed: a `<For>` row that reads two selectors, or one selector with two keys, follows all of them. Before, it followed only the last one it read.
+- Fixed: an effect outside a list that stops asking a selector about a key no longer re-runs when that key gains or loses the selection.
+- Fixed: a batch that queues many effects takes time linear in their number; before, queueing searched the queue each time.
+- Changed: an effect that writes a signal it reads runs again after its run ends instead of inside it, and throws after 100 runs in a row. Before, it recursed until the stack overflowed.
+- Fixed: a `<For>` row's `onFocus`, `onBlur` and other handlers for events that do not bubble are called. The list's listener for them now listens in the capture phase.
+
+### @reactre/compiler
+
+- Added: fragments, spread props, `style` as an object or a string, `ref` (a function, or an object given the element as `current`), and `key` on an element outside `<For>`, which rebuilds the element when a key that calls something changes. Fragments and spread props were compile errors before, and so was such a key.
+- Fixed: an SVG element at the root of a template (a component that returns `<g>` or `<circle>`) gets the SVG namespace, and `class` inside SVG is set as an attribute.
+- Fixed: `value`, `checked` and `selected` that are not literals are set as properties, so they show the state after the user has typed or clicked.
+- Fixed: a handler outside a list whose expression reads a signal (`onClick={editing() ? save : edit}`) follows it. Before, it was bound once. A function literal is still bound once.
+- Changed: a file that uses none of these compiles to the same code as before.
+
 ### @reactre/full-compat
 
 - Added: a new package, @reactre/compat with React's time slicing. A transition's render yields to the page every 5 ms: events, timers and paints run between slices, an urgent update made meanwhile commits first and the transition renders again from the start, and one that has waited 5 seconds renders the rest at once, as React's concurrent render does. Between slices the render is undone, so the page shows the last commit. The check before each component costs on every render, so only this package's builds compile it in. About 1 KB gzipped more than @reactre/compat.
