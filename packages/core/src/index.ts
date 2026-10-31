@@ -323,35 +323,44 @@ class Effect extends Owner implements Observer {
   }
   /** Run `fn` as the current observer and owner, after dropping the sources and owned effects of the last run. */
   run(): void {
-    let reruns = 0;
-    for (;;) {
-      // What the last run made and read is gone: this run collects its own.
-      if (this.owned !== null || this.cleanups !== null) this.clean();
-      this.drop();
-      this.state = RUNNING;
-      const o = current,
-        ow = owner;
-      current = this;
-      owner = this;
-      try {
-        this.fn();
-      } catch (err) {
-        if (this.state !== DISPOSED) this.state = IDLE;
-        throw err;
-      } finally {
-        current = o;
-        owner = ow;
-      }
-      if (this.state !== DIRTY) break;
-      if (++reruns === MAX_RERUNS) {
-        this.state = IDLE;
-        throw new Error(
-          `reactre: an effect re-ran ${MAX_RERUNS} times in a row: it writes a signal it reads (directly or through other effects), so it never settles`,
-        );
-      }
+    // What the last run made and read is gone: this run collects its own.
+    if (this.owned !== null || this.cleanups !== null) this.clean();
+    this.drop();
+    this.state = RUNNING;
+    const o = current,
+      ow = owner;
+    current = this;
+    owner = this;
+    try {
+      this.fn();
+    } catch (err) {
+      if (this.state !== DISPOSED) this.state = IDLE;
+      throw err;
+    } finally {
+      current = o;
+      owner = ow;
     }
-    if (this.state === RUNNING) this.state = IDLE;
+    // Notified while running (it wrote what it read): run again, out of this path.
+    if (this.state === DIRTY) this.again();
+    else if (this.state === RUNNING) this.state = IDLE;
   }
+  /** The run ended with the effect notified again: run it again, up to MAX_RERUNS in a row. */
+  private again(): void {
+    this.state = IDLE;
+    if (++this.reruns === MAX_RERUNS) {
+      this.reruns = 0;
+      throw new Error(
+        `reactre: an effect re-ran ${MAX_RERUNS} times in a row: it writes a signal it reads (directly or through other effects), so it never settles`,
+      );
+    }
+    try {
+      this.run();
+    } finally {
+      this.reruns = 0;
+    }
+  }
+  /** Re-runs in a row so far, while `again` recurses. */
+  private reruns = 0;
   /** Unsubscribe from every source of the last run. */
   drop(): void {
     const ss = this.sources;
@@ -484,6 +493,8 @@ class Selector<K> {
   changed(prev: K, next: K): void {
     if (prev === next) return;
     for (let i = 0; i < this.lists.length; i++) this.lists[i]!.selectorChanged(this as Selector<unknown>, prev, next);
+    // Only rows asked (the benchmark's case): no per-key lookups.
+    if (this.byKey.size === 0) return;
     this.wake(prev);
     this.wake(next);
   }
