@@ -4,6 +4,9 @@
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "moduleResolution": "bundler",
+    // The packages' exports name their sources under this condition, ahead of "types" (their
+    // built declarations), so the repository type-checks the sources without a build.
+    "customConditions": ["reactre-source"],
     "jsx": "react-jsx",
     "strict": true,
     "noUncheckedIndexedAccess": true,
@@ -19,5 +22,5 @@
     "skipLibCheck": true,
     "types": ["bun-types"]
   },
-  "include": ["packages/*/src", "packages/*/test", "apps/*/*.ts"]
+  "include": ["packages/*/src", "packages/*/test", "apps/*/*.ts", "scripts/*.ts"]
 }

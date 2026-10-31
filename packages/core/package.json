@@ -26,9 +26,22 @@
   "sideEffects": false,
   "exports": {
     ".": {
-      "types": "./src/index.ts",
+      "reactre-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
       "bun": "./src/index.ts",
       "default": "./dist/index.js"
+    },
+    "./jsx-runtime": {
+      "reactre-source": "./src/jsx-runtime.ts",
+      "types": "./dist/jsx-runtime.d.ts",
+      "bun": "./src/jsx-runtime.ts",
+      "default": "./dist/jsx-runtime.js"
+    },
+    "./jsx-dev-runtime": {
+      "reactre-source": "./src/jsx-dev-runtime.ts",
+      "types": "./dist/jsx-dev-runtime.d.ts",
+      "bun": "./src/jsx-dev-runtime.ts",
+      "default": "./dist/jsx-dev-runtime.js"
     }
   },
   "files": [
@@ -36,7 +49,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/index.ts --outdir dist --target browser --format esm --packages external"
+    "build": "rm -rf dist && bun build src/index.ts src/jsx-runtime.ts src/jsx-dev-runtime.ts --outdir dist --target browser --format esm --packages external && bun ../../scripts/declarations.ts"
   },
   "dependencies": {
     "@reactre/dom": "workspace:*"

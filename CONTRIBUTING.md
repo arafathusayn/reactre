@@ -20,6 +20,7 @@ packages/testdom        @reactre/testdom: the fake DOM the tests run on (private
 apps/jfb                the js-framework-benchmark replica
 apps/profiling          CPU profiles, trace windows and A/B proofs
 apps/react-compat       scenarios run against React 19 and @reactre/compat
+scripts/declarations.ts writes a package's .d.ts files into its dist/, after its build
 docs/roadmap.md         what is left to do
 ```
 

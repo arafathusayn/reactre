@@ -29,27 +29,32 @@
   ],
   "exports": {
     ".": {
-      "types": "./src/index.ts",
+      "reactre-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
       "bun": "./src/index.ts",
       "default": "./dist/index.js"
     },
     "./core": {
-      "types": "./src/core.ts",
+      "reactre-source": "./src/core.ts",
+      "types": "./dist/core.d.ts",
       "bun": "./src/core.ts",
       "default": "./dist/core.js"
     },
     "./classes": {
-      "types": "./src/index.ts",
+      "reactre-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
       "bun": "./src/index.ts",
       "default": "./dist/index.js"
     },
     "./features/*": {
-      "types": "./src/features/*.ts",
+      "reactre-source": "./src/features/*.ts",
+      "types": "./dist/features/*.d.ts",
       "bun": "./src/features/*.ts",
       "default": "./dist/features/*.js"
     },
     "./server": {
-      "types": "./src/server.ts",
+      "reactre-source": "./src/server.ts",
+      "types": "./dist/server.d.ts",
       "workerd": "./dist/server.edge.js",
       "edge-light": "./dist/server.edge.js",
       "worker": "./dist/server.browser.js",
@@ -58,7 +63,8 @@
       "default": "./dist/server.js"
     },
     "./static": {
-      "types": "./src/server.ts",
+      "reactre-source": "./src/server.ts",
+      "types": "./dist/server.d.ts",
       "workerd": "./dist/server.edge.js",
       "edge-light": "./dist/server.edge.js",
       "deno": "./dist/server.browser.js",
@@ -68,27 +74,32 @@
       "default": "./dist/server.js"
     },
     "./server.node": {
-      "types": "./src/server.ts",
+      "reactre-source": "./src/server.ts",
+      "types": "./dist/server.d.ts",
       "bun": "./src/server.ts",
       "default": "./dist/server.js"
     },
     "./server.browser": {
-      "types": "./src/server.browser.ts",
+      "reactre-source": "./src/server.browser.ts",
+      "types": "./dist/server.browser.d.ts",
       "bun": "./src/server.browser.ts",
       "default": "./dist/server.browser.js"
     },
     "./server.edge": {
-      "types": "./src/server.edge.ts",
+      "reactre-source": "./src/server.edge.ts",
+      "types": "./dist/server.edge.d.ts",
       "bun": "./src/server.edge.ts",
       "default": "./dist/server.edge.js"
     },
     "./api": {
-      "types": "./src/api.ts",
+      "reactre-source": "./src/api.ts",
+      "types": "./dist/api.d.ts",
       "bun": "./src/api.ts",
       "default": "./dist/api.js"
     },
     "./compiler": {
-      "types": "./src/compiler.ts",
+      "reactre-source": "./src/compiler.ts",
+      "types": "./dist/compiler.d.ts",
       "bun": "./src/compiler.ts",
       "default": "./dist/compiler.js"
     }
@@ -98,7 +109,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "bun build.ts"
+    "build": "bun build.ts && bun ../../scripts/declarations.ts"
   },
   "dependencies": {
     "@reactre/compiler": "workspace:*",

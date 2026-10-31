@@ -8,6 +8,7 @@
         "@reactre/compiler": "workspace:*",
         "@reactre/testdom": "workspace:*",
         "bun-types": "catalog:",
+        "oxc-transform": "catalog:",
       },
     },
     "apps/jfb": {

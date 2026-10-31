@@ -158,6 +158,7 @@
   "devDependencies": {
     "@reactre/compiler": "workspace:*",
     "@reactre/testdom": "workspace:*",
-    "bun-types": "catalog:"
+    "bun-types": "catalog:",
+    "oxc-transform": "catalog:"
   }
 }

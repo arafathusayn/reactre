@@ -29,42 +29,50 @@
   "sideEffects": false,
   "exports": {
     ".": {
-      "types": "./src/index.ts",
+      "reactre-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
       "bun": "./src/index.ts",
       "default": "./dist/index.js"
     },
     "./vite": {
-      "types": "./src/vite.ts",
+      "reactre-source": "./src/vite.ts",
+      "types": "./dist/vite.d.ts",
       "bun": "./src/vite.ts",
       "default": "./dist/vite.js"
     },
     "./rollup": {
-      "types": "./src/rollup.ts",
+      "reactre-source": "./src/rollup.ts",
+      "types": "./dist/rollup.d.ts",
       "bun": "./src/rollup.ts",
       "default": "./dist/rollup.js"
     },
     "./rolldown": {
-      "types": "./src/rolldown.ts",
+      "reactre-source": "./src/rolldown.ts",
+      "types": "./dist/rolldown.d.ts",
       "bun": "./src/rolldown.ts",
       "default": "./dist/rolldown.js"
     },
     "./esbuild": {
-      "types": "./src/esbuild.ts",
+      "reactre-source": "./src/esbuild.ts",
+      "types": "./dist/esbuild.d.ts",
       "bun": "./src/esbuild.ts",
       "default": "./dist/esbuild.js"
     },
     "./webpack": {
-      "types": "./src/webpack.ts",
+      "reactre-source": "./src/webpack.ts",
+      "types": "./dist/webpack.d.ts",
       "bun": "./src/webpack.ts",
       "default": "./dist/webpack.js"
     },
     "./rspack": {
-      "types": "./src/rspack.ts",
+      "reactre-source": "./src/rspack.ts",
+      "types": "./dist/rspack.d.ts",
       "bun": "./src/rspack.ts",
       "default": "./dist/rspack.js"
     },
     "./bun": {
-      "types": "./src/bun.ts",
+      "reactre-source": "./src/bun.ts",
+      "types": "./dist/bun.d.ts",
       "bun": "./src/bun.ts",
       "default": "./dist/bun.js"
     }
@@ -74,7 +82,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/index.ts src/vite.ts src/rollup.ts src/rolldown.ts src/esbuild.ts src/webpack.ts src/rspack.ts src/bun.ts --outdir dist --target node --format esm --splitting --packages external"
+    "build": "rm -rf dist && bun build src/index.ts src/vite.ts src/rollup.ts src/rolldown.ts src/esbuild.ts src/webpack.ts src/rspack.ts src/bun.ts --outdir dist --target node --format esm --splitting --packages external && bun ../../scripts/declarations.ts"
   },
   "dependencies": {
     "@reactre/compat": "workspace:*",

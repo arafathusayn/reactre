@@ -53,7 +53,8 @@ describe("API manifest", () => {
     };
     expect(Object.keys(MODULES).sort()).toEqual(["Component", ...BEHAVIOURS].sort());
     expect(pkg.exports["./features/*"]).toEqual({
-      types: "./src/features/*.ts",
+      "reactre-source": "./src/features/*.ts",
+      types: "./dist/features/*.d.ts",
       bun: "./src/features/*.ts",
       default: "./dist/features/*.js",
     });

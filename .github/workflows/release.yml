@@ -58,8 +58,9 @@ jobs:
       - run: bun run check:strict
       - run: bun test
 
-      # The ES modules in dist/ are what browsers, bundlers and other runtimes load. bun pm pack
-      # resolves workspace versions in each manifest.
+      # The ES modules in dist/ are what browsers, bundlers and other runtimes load, and the .d.ts
+      # files beside them what TypeScript reads: each package's build writes both
+      # (scripts/declarations.ts). bun pm pack resolves workspace versions in each manifest.
       - name: Build and pack
         run: |
           for dir in $PACKAGES; do
