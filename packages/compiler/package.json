@@ -24,12 +24,14 @@
   "sideEffects": false,
   "exports": {
     ".": {
-      "types": "./src/index.ts",
+      "reactre-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
       "bun": "./src/index.ts",
       "default": "./dist/index.js"
     },
     "./scan": {
-      "types": "./src/scan.ts",
+      "reactre-source": "./src/scan.ts",
+      "types": "./dist/scan.d.ts",
       "bun": "./src/scan.ts",
       "default": "./dist/scan.js"
     }
@@ -39,7 +41,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/index.ts src/scan.ts --outdir dist --target node --format esm --splitting --packages external"
+    "build": "rm -rf dist && bun build src/index.ts src/scan.ts --outdir dist --target node --format esm --splitting --packages external && bun ../../scripts/declarations.ts"
   },
   "engines": {
     "bun": ">=1.4.4"

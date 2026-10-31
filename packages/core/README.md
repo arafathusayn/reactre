@@ -113,7 +113,7 @@ The template is parsed once. `mount` clones it with values for its holes, in ord
 
 reactre runs in every modern browser. Where the browser has `moveBefore`, moved rows keep focus, selection and running animations.
 
-The package ships ES modules in `dist/` for browsers, bundlers and other runtimes, and its TypeScript sources, which Bun uses directly and which give editors full types.
+The package ships ES modules in `dist/` for browsers, bundlers and other runtimes, with their type declarations, and its TypeScript sources, which Bun runs directly. Editors and `tsc` read the declarations, so your compiler settings never type-check reactre's sources.
 
 ## License
 
