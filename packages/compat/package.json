@@ -25,62 +25,111 @@
     "./src/features/*.ts",
     "./dist/index.js",
     "./dist/features/*.js",
-    "./dist/chunk-*.js"
+    "./dist/chunk-*.js",
+    "./dist/dev/index.js",
+    "./dist/dev/features/*.js",
+    "./dist/dev/chunk-*.js"
   ],
   "exports": {
     ".": {
       "types": "./src/index.ts",
       "bun": "./src/index.ts",
+      "development": "./dist/dev/index.js",
       "default": "./dist/index.js"
     },
     "./core": {
       "types": "./src/core.ts",
       "bun": "./src/core.ts",
+      "development": "./dist/dev/core.js",
       "default": "./dist/core.js"
     },
     "./classes": {
       "types": "./src/index.ts",
       "bun": "./src/index.ts",
+      "development": "./dist/dev/index.js",
       "default": "./dist/index.js"
     },
     "./features/*": {
       "types": "./src/features/*.ts",
       "bun": "./src/features/*.ts",
+      "development": "./dist/dev/features/*.js",
       "default": "./dist/features/*.js"
     },
     "./server": {
       "types": "./src/server.ts",
-      "workerd": "./dist/server.edge.js",
-      "edge-light": "./dist/server.edge.js",
-      "worker": "./dist/server.browser.js",
-      "browser": "./dist/server.browser.js",
+      "workerd": {
+        "development": "./dist/dev/server.edge.js",
+        "default": "./dist/server.edge.js"
+      },
+      "edge-light": {
+        "development": "./dist/dev/server.edge.js",
+        "default": "./dist/server.edge.js"
+      },
+      "worker": {
+        "development": "./dist/dev/server.browser.js",
+        "default": "./dist/server.browser.js"
+      },
+      "browser": {
+        "development": "./dist/dev/server.browser.js",
+        "default": "./dist/server.browser.js"
+      },
       "bun": "./src/server.edge.ts",
-      "default": "./dist/server.js"
+      "default": {
+        "development": "./dist/dev/server.js",
+        "default": "./dist/server.js"
+      }
     },
     "./static": {
       "types": "./src/server.ts",
-      "workerd": "./dist/server.edge.js",
-      "edge-light": "./dist/server.edge.js",
-      "deno": "./dist/server.browser.js",
-      "worker": "./dist/server.browser.js",
-      "browser": "./dist/server.browser.js",
+      "workerd": {
+        "development": "./dist/dev/server.edge.js",
+        "default": "./dist/server.edge.js"
+      },
+      "edge-light": {
+        "development": "./dist/dev/server.edge.js",
+        "default": "./dist/server.edge.js"
+      },
+      "deno": {
+        "development": "./dist/dev/server.browser.js",
+        "default": "./dist/server.browser.js"
+      },
+      "worker": {
+        "development": "./dist/dev/server.browser.js",
+        "default": "./dist/server.browser.js"
+      },
+      "browser": {
+        "development": "./dist/dev/server.browser.js",
+        "default": "./dist/server.browser.js"
+      },
       "bun": "./src/server.ts",
-      "default": "./dist/server.js"
+      "default": {
+        "development": "./dist/dev/server.js",
+        "default": "./dist/server.js"
+      }
     },
     "./server.node": {
       "types": "./src/server.ts",
       "bun": "./src/server.ts",
-      "default": "./dist/server.js"
+      "default": {
+        "development": "./dist/dev/server.js",
+        "default": "./dist/server.js"
+      }
     },
     "./server.browser": {
       "types": "./src/server.browser.ts",
       "bun": "./src/server.browser.ts",
-      "default": "./dist/server.browser.js"
+      "default": {
+        "development": "./dist/dev/server.browser.js",
+        "default": "./dist/server.browser.js"
+      }
     },
     "./server.edge": {
       "types": "./src/server.edge.ts",
       "bun": "./src/server.edge.ts",
-      "default": "./dist/server.edge.js"
+      "default": {
+        "development": "./dist/dev/server.edge.js",
+        "default": "./dist/server.edge.js"
+      }
     },
     "./api": {
       "types": "./src/api.ts",
@@ -105,6 +154,7 @@
     "@reactre/dom": "workspace:*"
   },
   "devDependencies": {
+    "@vitejs/plugin-react": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:"
   }
