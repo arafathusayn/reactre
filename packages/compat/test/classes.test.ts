@@ -473,6 +473,10 @@ describe("packaging", () => {
       "./dist/features/*.js",
       // The chunks the feature modules share with the main entry, which hold the installs.
       "./dist/chunk-*.js",
+      // The same in the development build.
+      "./dist/dev/index.js",
+      "./dist/dev/features/*.js",
+      "./dist/dev/chunk-*.js",
     ]);
   });
 

@@ -13,12 +13,14 @@
 //         stacks, React's handling of repeated keys and its render retry (apps/jfb/prepare.ts
 //         resolves the same)
 //   full-compat  @reactre/full-compat's entry: full with time slicing compiled in and on
+//
+// Fast Refresh is in none of them: only the development builds (dist/dev) compile it in.
 
 import { expect, test } from "bun:test";
 import { gzipSync } from "node:zlib";
 
 import { reactreCompatCompiler } from "../src/compiler.ts";
-import { withoutSlicing } from "../src/withoutSlicing.ts";
+import { without, withoutSlicing } from "../src/withoutSlicing.ts";
 
 const src = (f: string): string => Bun.fileURLToPath(new URL(`../src/${f}`, import.meta.url));
 const budgets = Bun.fileURLToPath(new URL("../sizes.json", import.meta.url));
@@ -42,7 +44,8 @@ const toSources: Bun.BunPlugin = {
 };
 
 const profiles: Record<string, () => Promise<Bun.BuildOutput>> = {
-  // As @reactre/compat's builds compile its sources: core.ts without time slicing (src/withoutSlicing.ts).
+  // As @reactre/compat's builds compile its sources: core.ts without time slicing and without Fast
+  // Refresh (src/withoutSlicing.ts).
   full: () =>
     Bun.build({
       entrypoints: [src("index.ts")],
@@ -74,7 +77,7 @@ const profiles: Record<string, () => Promise<Bun.BuildOutput>> = {
       minify: true,
       target: "browser",
       format: "esm",
-      plugins: [toSources],
+      plugins: [toSources, without("REFRESH")],
       define: { "globalThis.__REACTRE_SLICING__": "true" },
     }),
 };

@@ -25,13 +25,15 @@ export default defineConfig({
 });
 ```
 
-For a React app, install `@reactre/compat` and pass `compat`:
+For a React app, install `@reactre/compat` and pass `compat`. Add [`@vitejs/plugin-react`](https://www.npmjs.com/package/@vitejs/plugin-react) after it for Fast Refresh:
 
 ```ts
-plugins: [reactre({ compat: true })],
+import react from "@vitejs/plugin-react";
+
+plugins: [reactre({ compat: true }), react()],
 ```
 
-Leave `@vitejs/plugin-react` out: its Fast Refresh works through React's renderer, so with compat an edited component would stay as it was on screen. Without it, Vite reloads the page when you save.
+With it, a saved component renders again in place, keeping its state; an edit that changes its hooks, or one to a class component, mounts it anew, as with React. `react` resolves to compat's development build in `vite dev` (the `development` export condition), which registers with React Refresh as `react-dom` does, and to its production build in `vite build`, which leaves Fast Refresh out. `@vitejs/plugin-react`'s JSX transform does not run on the files this plugin compiles: it sees them already compiled. Without `@vitejs/plugin-react`, Vite reloads the page when you save.
 
 ## Other bundlers
 
@@ -114,7 +116,7 @@ Leaving out what a small app does not use saves about a sixth of compat's bundle
 ## Limits
 
 - No source maps yet: compiled files map to nothing.
-- Fast Refresh is not supported yet; Vite reloads the page on save.
+- Fast Refresh is checked with Vite and `@vitejs/plugin-react` (see above). Other bundlers' React Refresh integrations speak the same protocol to the renderer, but are not tested.
 - In reactre mode, a key after spread props is a compile error: Bun gives that JSX to React's classic runtime.
 
 ## License

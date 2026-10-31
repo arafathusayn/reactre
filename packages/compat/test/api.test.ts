@@ -56,9 +56,12 @@ describe("API manifest", () => {
       "reactre-source": "./src/features/*.ts",
       types: "./dist/features/*.d.ts",
       bun: "./src/features/*.ts",
+      development: "./dist/dev/features/*.js",
       default: "./dist/features/*.js",
     });
-    expect(pkg.sideEffects).toEqual(expect.arrayContaining(["./src/features/*.ts", "./dist/features/*.js"]));
+    expect(pkg.sideEffects).toEqual(
+      expect.arrayContaining(["./src/features/*.ts", "./dist/features/*.js", "./dist/dev/features/*.js"]),
+    );
     for (const m of Object.values(MODULES)) {
       expect(m).toStartWith("@reactre/compat/features/");
       expect(await Bun.file(new URL(`../src/features/${m.slice(25)}.ts`, import.meta.url)).exists()).toBe(true);

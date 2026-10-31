@@ -837,6 +837,10 @@ function sameType(o: Fiber, it: Any): boolean {
   // Elements first: a list re-render checks every row.
   if (it.$$typeof === ELEMENT) {
     if (o.t === it.type) return o.n !== TEXT;
+    // #if REFRESH
+    // A component whose module ran again (Fast Refresh): the same component, in new code.
+    if (refreshFamily !== null && sameFamily(o, it.type)) return true;
+    // #endif
     // A block element's fiber is typed by its template, not by its tag.
     const tpl = it[TPL];
     return tpl !== undefined && o.t === tpl;
@@ -1592,6 +1596,10 @@ function run(f: Fiber, old: Props | null, mount: boolean): void {
       return runFunc(f, mount);
     case CLASS:
       if (classes === null) throw noClasses(f.t);
+      // #if REFRESH
+      // Fast Refresh mounts an edited class anew, as React does.
+      if (remounts.delete(f)) return remountClass(f);
+      // #endif
       return classes.run(f, old, mount);
     case FRAG: {
       if (f.t === ARRAY) return reconcile(f, f.p);
@@ -2700,6 +2708,9 @@ class Template {
 
 /** Internal: a template from the compiler's description; the compiler hoists one per JSX tree. */
 export function __template(desc: TemplateNode): object {
+  // #if REFRESH
+  if (refreshTemplates !== null || (globalThis as Any).__REACT_DEVTOOLS_GLOBAL_HOOK__ != null) return devTemplate(desc);
+  // #endif
   return new Template(desc);
 }
 
@@ -4010,6 +4021,9 @@ class RootImpl implements Root {
     if (lanes !== null && lanes.root(this, children)) return;
     this.f.p = children;
     this.tr = transition !== null;
+    // #if REFRESH
+    if (devHook !== null) refreshScheduled(this, children);
+    // #endif
     schedule(this.f);
   }
   /** Remove what the root rendered and its listeners. A second call does nothing. */
@@ -4031,6 +4045,9 @@ class RootImpl implements Root {
     for (const l of this.listeners.values()) l.remove();
     this.listeners.clear();
     roots.delete(this);
+    // #if REFRESH
+    if (devHook !== null) refreshCommitted(this, null, false);
+    // #endif
   }
 }
 
@@ -4043,6 +4060,9 @@ const roots = new Set<RootImpl>();
  */
 export function createRoot(container: Element | DocumentFragment, options: RootOptions = {}): Root {
   checkContainer(container);
+  // #if REFRESH
+  refreshInject();
+  // #endif
   const r = new RootImpl(container, options);
   roots.add(r);
   return r;
@@ -4057,6 +4077,9 @@ export function createRoot(container: Element | DocumentFragment, options: RootO
  */
 export function hydrateRoot(container: Element | Document, children: Any, options: RootOptions = {}): Root {
   checkContainer(container);
+  // #if REFRESH
+  refreshInject();
+  // #endif
   const r = new RootImpl(container, options);
   roots.add(r);
   r.hydrate = HYDRATION;
@@ -4122,6 +4145,9 @@ function runRoot(f: Fiber): void {
         }
       } else {
         removeAll(f);
+        // #if REFRESH
+        rootFailed = true;
+        // #endif
         const report = r.opts.onUncaughtError,
           info = { componentStack: stackOf(thrown, f) };
         const tell = (): void => (report ? callReport(report, thrown, info) : reportUncaught(thrown));
@@ -4137,6 +4163,10 @@ function runRoot(f: Fiber): void {
     hydrating = ph2;
   }
   if (f.f & STRUCT) place(f);
+  // #if REFRESH
+  if (devHook !== null) refreshCommitted(r, rootFailed ? null : f.p, rootFailed);
+  rootFailed = false;
+  // #endif
 }
 
 /**
@@ -4220,6 +4250,10 @@ function runPortal(f: Fiber, mount: boolean): void {
  * reconcile what it returned, or render the block it returns directly when it hosts one.
  */
 function runFunc(f: Fiber, mount = false): void {
+  // #if REFRESH
+  // With Fast Refresh, the latest code of the component's family (see refreshed).
+  if (refreshFamily !== null) refreshed(f);
+  // #endif
   const fn = f.s,
     props = f.p,
     prevCur = cur,
@@ -6590,6 +6624,10 @@ function notState(f: Fiber): void {
  * of another length compare on their common part, as React's areHookInputsEqual does.
  */
 function depsChanged(a: Any, b: Any): boolean {
+  // #if REFRESH
+  // A component whose code Fast Refresh just changed runs its effects and memos again, as React's.
+  if (depsIgnored !== null && depsIgnored === cur) return true;
+  // #endif
   if (a === NO_DEPS || b == null || a == null) return true;
   for (let i = 0; i < a.length && i < b.length; i++) if (!Object.is(a[i], b[i])) return true;
   return false;
@@ -10034,6 +10072,227 @@ function insertStylesheet(d: Any, el: Any, prec: string): void {
 
 // #endregion
 
+// #if REFRESH
+// #region Fast Refresh (development builds)
+
+// React's Fast Refresh, as react-reconciler's ReactFiberHotReloading gives it to react-refresh
+// (@vitejs/plugin-react's runtime, and any other that speaks its protocol). The first createRoot
+// or hydrateRoot injects this renderer into __REACT_DEVTOOLS_GLOBAL_HOOK__, which react-refresh
+// patches; then each root render, and each root's unmount, reports a commit, so react-refresh
+// knows the roots that are mounted. After an edit it hands over the families of the components
+// whose code changed (setRefreshHandler, then scheduleRefresh): a function component of an updated
+// family renders again with its family's latest code, keeping its state; one of a stale family
+// (its hooks changed) and a class component mount anew. A root that failed renders again
+// (scheduleRoot).
+//
+// Design decisions:
+//   - Development builds only. Every line Fast Refresh adds sits between "#if REFRESH" markers,
+//     which the production builds strip (./withoutSlicing.ts), so they stay byte for byte as they
+//     were; the development builds (dist/dev, the `development` export condition, which Vite's dev
+//     server and webpack's development mode resolve) keep them.
+//   - A fiber keeps the type it was made with; its render resolves the family's latest function,
+//     and reconcile takes an element of the same family as its own type (sameFamily), as React's
+//     resolveFunctionForHotReloading and isCompatibleFamilyForHotReloading do.
+//   - A remount is done in place: the fiber runs its hooks' cleanups and unmounts its children,
+//     then renders as a mount, so its parent, which may be a block's slot, is not rendered again.
+//   - While a refresh hook is present, the same template description gives the same template
+//     (devTemplate), so a module that runs again keeps its blocks' DOM, and their components'
+//     state, unless the edit changed the markup.
+
+/** A react-refresh family: the latest of the component's versions. */
+interface Family {
+  current: Any;
+}
+
+/** react-refresh's resolveFamily, once it set it; null until then. */
+let refreshFamily: ((type: Any) => Family | undefined) | null = null;
+/** Fibers to mount anew when they render next: their family is stale, or they are classes. */
+const remounts = new Set<Fiber>();
+/** The function component rendering with new code: its hooks' deps count as changed. */
+let depsIgnored: Fiber | null = null;
+/** The DevTools hook this renderer is injected into, and the id it was given. */
+let devHook: Any = null,
+  rendererId = 0;
+/** What react-refresh reads of each root: its element now and at the commit before. */
+const facades = new WeakMap<RootImpl, Any>();
+/** Whether the root render running now threw to the root, which then unmounted everything. */
+let rootFailed = false;
+/** Templates by description while a refresh hook is present (see devTemplate). */
+let refreshTemplates: Map<string, Template> | null = null;
+
+/** The family of `type`, if react-refresh registered it. */
+function family(type: Any): Family | undefined {
+  return type == null || refreshFamily === null ? undefined : refreshFamily(type);
+}
+
+/** Inject this renderer into the DevTools hook, once, if a hook (react-refresh's) is there. */
+function refreshInject(): void {
+  const hook = (globalThis as Any).__REACT_DEVTOOLS_GLOBAL_HOOK__;
+  if (devHook !== null || hook == null || typeof hook.inject !== "function" || hook.isDisabled) return;
+  // Without currentDispatcherRef, the DevTools backend leaves the renderer alone: only
+  // react-refresh, which looks for scheduleRefresh and setRefreshHandler, uses it.
+  rendererId = hook.inject({
+    bundleType: 1,
+    version,
+    rendererPackageName: "react-dom",
+    setRefreshHandler(handler: ((type: Any) => Family | undefined) | null): void {
+      refreshFamily = handler;
+    },
+    scheduleRefresh,
+    scheduleRoot(root: Any, element: Any): void {
+      if (!(root.r.f.f & DEAD)) flushSync(() => root.r.render(element));
+    },
+  });
+  devHook = hook;
+}
+
+/** Root `r`'s facade, the "fiber root" react-refresh keys its maps on. */
+function facadeOf(r: RootImpl): Any {
+  let x = facades.get(r);
+  if (x === undefined) {
+    x = { r, current: { memoizedState: { element: null }, alternate: { memoizedState: { element: null } } } };
+    facades.set(r, x);
+  }
+  return x;
+}
+
+/** root.render(children): react-refresh keeps the element, to render again a root that fails. */
+function refreshScheduled(r: RootImpl, children: Any): void {
+  if (typeof devHook.onScheduleFiberRoot === "function") devHook.onScheduleFiberRoot(rendererId, facadeOf(r), children);
+}
+
+/** A root committed `element` (null once it unmounted, or failed: `failed`). */
+function refreshCommitted(r: RootImpl, element: Any, failed: boolean): void {
+  if (typeof devHook.onCommitFiberRoot !== "function") return;
+  const x = facadeOf(r),
+    c = x.current;
+  c.alternate.memoizedState.element = c.memoizedState.element;
+  c.memoizedState.element = element;
+  devHook.onCommitFiberRoot(rendererId, x, undefined, failed);
+}
+
+/**
+ * React's scheduleRefresh: render again every function component of an updated family, and mount
+ * anew every component of a stale family and every class of an edited one, all at once.
+ */
+function scheduleRefresh(root: Any, update: { updatedFamilies: Set<Family>; staleFamilies: Set<Family> }): void {
+  const r: RootImpl = root.r;
+  if (refreshFamily === null || r.f.f & DEAD) return;
+  flushSync(() => markRefresh(r.f, update.updatedFamilies, update.staleFamilies));
+  // Any left were unmounted before they rendered.
+  remounts.clear();
+}
+
+/** Schedule what an edit reaches in f's subtree (React's scheduleFibersWithFamiliesRecursively). */
+function markRefresh(f: Fiber, updated: Set<Family>, stale: Set<Family>): void {
+  if (f.f & DEAD) return;
+  let rerun = false,
+    anew = false;
+  if (f.n === FUNC || f.n === CLASS) {
+    // A function's own render (inside memo or forwardRef) and its element type are both families.
+    for (const fam of f.n === FUNC ? [family(f.s), family(f.t)] : [family(f.t)]) {
+      if (fam === undefined) continue;
+      if (stale.has(fam) || (f.n === CLASS && updated.has(fam))) anew = true;
+      else if (updated.has(fam)) rerun = true;
+    }
+  }
+  if (anew) {
+    // Its whole subtree mounts anew with it.
+    remounts.add(f);
+    schedule(f);
+    return;
+  }
+  if (rerun) schedule(f);
+  // Its children: a boundary's hidden content too, which stays among them.
+  for (let ix = 0, xs = f.c; ix < xs.length; ix++) markRefresh(xs[ix]!, updated, stale);
+}
+
+/**
+ * Before function component `f` renders: its render function becomes its family's latest. A fiber
+ * due a remount first loses its hooks and children; one whose code changed renders with its deps
+ * ignored.
+ */
+function refreshed(f: Fiber): void {
+  if (remounts.delete(f)) {
+    if (f.h !== null)
+      for (let ix = 0, xs = f.h; ix < xs.length; ix++) {
+        const h = xs[ix]!;
+        if (h.x === undefined) continue;
+        // As unmount runs them: layout and insertion cleanups now, passive ones with the flush.
+        if (h.k !== PASSIVE) safely(f, h.x);
+        else passiveUnmountQ.push(f, h.x);
+        h.x = undefined;
+      }
+    if (f.f & BOX) unfuse(f);
+    else if (f.c.length) removeAll(f);
+    f.h = null;
+    f.x = null;
+    f.f &= ~(HOOKS | PASS | FIRST);
+  }
+  // Resolved from its element type, as React resolves fiber.type: the function inside a memo or
+  // forwardRef may be registered only as part of it.
+  const fn = f.s,
+    fam = family(f.t) ?? family(fn);
+  let next = fam === undefined ? fn : fam.current;
+  // A family whose latest version wraps the function.
+  if (next != null && next.$$typeof === MEMO_TYPE) next = next.type;
+  if (next != null && next.$$typeof === FORWARD_TYPE) next = next.render;
+  if (typeof next !== "function") next = fn;
+  depsIgnored = next !== fn ? f : null;
+  f.s = next;
+}
+
+/** Mount class fiber `f` anew with its family's latest class (React remounts an edited class). */
+function remountClass(f: Fiber): void {
+  if (f.p.ref != null) safely(f, () => detachRef(f, f.p.ref));
+  // Now, not with the commit: the instance it reads is about to be replaced.
+  try {
+    classes!.unmount(f);
+  } catch (e) {
+    throwTo(f, e);
+  }
+  if (f.c.length) removeAll(f);
+  const fam = family(f.t);
+  if (fam !== undefined && typeof fam.current === "function") f.t = fam.current;
+  f.s = null;
+  f.q = null;
+  f.x = null;
+  f.f &= ~FORCE;
+  classes!.run(f, null, true);
+}
+
+/**
+ * Whether old fiber `o` can take an element of `type`, another version of its component (React's
+ * isCompatibleFamilyForHotReloading). It then takes the type, so it renders as one of it.
+ */
+function sameFamily(o: Fiber, type: Any): boolean {
+  if (o.n !== FUNC && o.n !== CLASS) return false;
+  const fam = family(o.t);
+  if (fam === undefined || fam !== family(type) || kindOf(type) !== o.n) return false;
+  if (o.n === FUNC) {
+    // create()'s cache, set for this type, gives its compare and forwardRef flag. Its render
+    // function is left for refreshed() to resolve, which then sees that it changed.
+    setupFunc(type);
+    lastType = type;
+    lastKind = FUNC;
+    o.q = lastQ;
+    o.f = lastForward ? o.f | FORWARD : o.f & ~FORWARD;
+  }
+  o.t = type;
+  return true;
+}
+
+/** __template while a refresh hook is present: the same description gives the same template. */
+function devTemplate(desc: TemplateNode): Template {
+  const key = JSON.stringify(desc);
+  let t = (refreshTemplates ??= new Map()).get(key);
+  if (t === undefined) refreshTemplates.set(key, (t = new Template(desc)));
+  return t;
+}
+
+// #endregion
+
+// #endif
 // #region Default export
 
 // The default export serves `import React from "react"` and `import ReactDOM from "react-dom"`:
