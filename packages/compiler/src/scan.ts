@@ -166,15 +166,29 @@ export function until(src: string, i: number, stops: string): number {
  * split.
  */
 export function split(src: string, start: number, end: number): string[] {
-  const out: string[] = [];
+  return splitAt(src, start, end).map((p) => p[0]);
+}
+
+/** `split`'s parts, each with the index in `src` where it starts (past the whitespace trimmed). */
+export function splitAt(src: string, start: number, end: number): [string, number][] {
+  const out: [string, number][] = [];
   let i = start;
   while (i < end) {
     const j = Math.min(until(src, i, ","), end);
-    const part = src.slice(i, j).trim();
-    if (part) out.push(part);
+    const [part, at] = trimAt(src.slice(i, j), i);
+    if (part) out.push([part, at]);
     i = j + 1;
   }
   return out;
+}
+
+/**
+ * `s` trimmed, with `at`, the index where `s` starts, moved past the whitespace taken off its
+ * start. A negative `at` (a place not known) stays as it is.
+ */
+export function trimAt(s: string, at: number): [string, number] {
+  const t = s.trimStart();
+  return [t.trimEnd(), at < 0 ? at : at + s.length - t.length];
 }
 
 // #endregion

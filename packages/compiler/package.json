@@ -29,6 +29,12 @@
       "bun": "./src/index.ts",
       "default": "./dist/index.js"
     },
+    "./map": {
+      "reactre-source": "./src/map.ts",
+      "types": "./dist/map.d.ts",
+      "bun": "./src/map.ts",
+      "default": "./dist/map.js"
+    },
     "./scan": {
       "reactre-source": "./src/scan.ts",
       "types": "./dist/scan.d.ts",
@@ -41,7 +47,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/index.ts src/scan.ts --outdir dist --target node --format esm --splitting --packages external && bun ../../scripts/declarations.ts"
+    "build": "rm -rf dist && bun build src/index.ts src/map.ts src/scan.ts --outdir dist --target node --format esm --splitting --packages external && bun ../../scripts/declarations.ts"
   },
   "engines": {
     "bun": ">=1.4.4"
