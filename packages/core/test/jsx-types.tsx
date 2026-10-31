@@ -89,21 +89,41 @@ const node: Node = <span />;
 
 // #region What must not type-check
 
+const accepted = (): Node[] => {
+  const input: { current: HTMLInputElement | null } = { current: null };
+  return [
+    <div style={{ color: "red", "--gap": "4px", "margin-top": 0, opacity: 0.5, display: false }} />,
+    <div style="color: red" />,
+    <div ref={(el: Element) => el} />,
+    <input ref={input} />,
+    <circle ref={(el: SVGCircleElement) => el.r} />,
+    <li key={1} />,
+    <>
+      <p />
+    </>,
+  ];
+};
+void accepted;
+
 const errors = (): Node[] => [
+  // @ts-expect-error a style property that does not exist
+  <div style={{ colour: "red" }} />,
+  // @ts-expect-error a style value is a string or a number
+  <div style={{ color: {} }} />,
+  // @ts-expect-error a ref gets the element's own type
+  <div ref={(el: HTMLInputElement) => el} />,
+  // @ts-expect-error a key is a value, not a function
+  <li key={() => 1} />,
   // @ts-expect-error an element that does not exist
   <notatag />,
   // @ts-expect-error an attribute that does not exist
   <div hreff="/" />,
-  // @ts-expect-error a style object: the compiler writes style as a string
-  <div style={{ color: "red" }} />,
   // @ts-expect-error class takes a string, not a class map
   <div class={{ active: true }} />,
   // @ts-expect-error a signal's getter, not its value: it would be written once, as text
   <p title={count} />,
   // @ts-expect-error a child function would be written as text
   <p>{() => count()}</p>,
-  // @ts-expect-error ref is not compiled yet
-  <div ref={(el: Element) => el} />,
   // @ts-expect-error a handler's event is the event's type: a click is a MouseEvent
   <button onClick={(e: KeyboardEvent) => e.key} />,
   // @ts-expect-error a handler takes its event, not a value
@@ -122,8 +142,6 @@ const errors = (): Node[] => [
   <Button id={1} onClick={() => {}} />,
   // @ts-expect-error a component's required props are required
   <Label />,
-  // @ts-expect-error a key outside <For> is a compile error
-  <li key={1} />,
   // @ts-expect-error an SVG attribute on an HTML element
   <div viewBox="0 0 1 1" />,
   // @ts-expect-error an SVG shape's geometry, not HTML's

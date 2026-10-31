@@ -12,8 +12,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### @reactre/core
 
-- Added: JSX types for reactre's TSX. With `"jsxImportSource": "@reactre/core"`, TypeScript checks every HTML and SVG element's attributes, `on*` handlers by their event's type, children, and `<For>`'s rows by the type of `each`. What the compiler cannot compile is a type error: a style object, `ref`, a function as an attribute or a child, a capture handler, a `key` outside `<For>`, children of a void element.
+- Added: JSX types for reactre's TSX. With `"jsxImportSource": "@reactre/core"`, TypeScript checks every HTML and SVG element's attributes, `on*` handlers by their event's type, children, and `<For>`'s rows by the type of `each`. `style` takes a string or an object of CSS properties, and `ref` a function or an object typed by the element. What the compiler cannot compile is a type error: a function as an attribute or a child, a capture handler, children of a void element.
 - Added: `@reactre/core/jsx-runtime` and `@reactre/core/jsx-dev-runtime`, where TypeScript finds those types. Their `jsx` functions throw, naming the compiler: compiled TSX never calls them.
+- Added: `onCleanup(fn)`. Each effect run owns the effects and cleanups it makes, and disposes them before it runs again. A slot that replaces its content (`{cond() ? <A /> : <B />}`) now stops the old content's effects; before, they stayed subscribed and wrote to detached nodes.
+- Added: `render` returns a function that removes the view and stops its effects.
+- Added: a `<For>` row can hold components, nested `<For>` lists and JSX expressions. They belong to the row: a new item for the row's key builds them again, and they are disposed when the row leaves. Before, these were compile errors.
+- Fixed: a `<For>` row that reads two selectors, or one selector with two keys, follows all of them. Before, it followed only the last one it read.
+- Fixed: an effect outside a list that stops asking a selector about a key no longer re-runs when that key gains or loses the selection.
+- Fixed: a batch that queues many effects takes time linear in their number; before, queueing searched the queue each time.
+- Changed: an effect that writes a signal it reads runs again after its run ends instead of inside it, and throws after 100 runs in a row. Before, it recursed until the stack overflowed.
+- Fixed: a `<For>` row's `onFocus`, `onBlur` and other handlers for events that do not bubble are called. The list's listener for them now listens in the capture phase.
+
+### @reactre/compiler
+
+- Added: fragments, spread props, `style` as an object or a string, `ref` (a function, or an object given the element as `current`), and `key` on an element outside `<For>`, which rebuilds the element when a key that calls something changes. Fragments and spread props were compile errors before, and so was such a key.
+- Fixed: an SVG element at the root of a template (a component that returns `<g>` or `<circle>`) gets the SVG namespace, and `class` inside SVG is set as an attribute.
+- Fixed: `value`, `checked` and `selected` that are not literals are set as properties, so they show the state after the user has typed or clicked.
+- Fixed: a handler outside a list whose expression reads a signal (`onClick={editing() ? save : edit}`) follows it. Before, it was bound once. A function literal is still bound once.
+- Changed: a file that uses none of these compiles to the same code as before.
 
 ### @reactre/full-compat
 

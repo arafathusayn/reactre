@@ -1,6 +1,6 @@
 # reactre
 
-A tiny, fast UI library for the web. You write components in TSX over signals. No virtual DOM, no dependencies, about 6 KB gzipped.
+A tiny, fast UI library for the web. You write components in TSX over signals. No virtual DOM, no dependencies, about 7.5 KB gzipped.
 
 ```sh
 bun add @reactre/core
@@ -144,7 +144,7 @@ The speed of hand-written vanilla JavaScript, with the comfort of components.
 - **No virtual DOM.** A change goes straight to the one node that shows it.
 - **No re-renders.** Components run once. No dependency arrays, no memoizing, nothing to tune.
 - **Lists that barely move.** Thousands of rows created, reordered, updated or cleared in the fewest possible steps.
-- **Featherweight.** About 6 KB gzipped, with zero dependencies.
+- **Featherweight.** About 7.5 KB gzipped, with zero dependencies.
 
 reactre goes head to head with the fastest entries of [js-framework-benchmark](https://github.com/krausest/js-framework-benchmark).
 

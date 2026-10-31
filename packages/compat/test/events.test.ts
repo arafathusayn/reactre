@@ -79,7 +79,7 @@ function userSets(el: FakeNode, key: "value" | "checked", v: string | boolean): 
 
 /** A native event with what the event system reads: bubbles, preventDefault and relatedTarget. */
 class Ev extends FakeEvent {
-  readonly bubbles: boolean;
+  override readonly bubbles: boolean;
   readonly cancelable: boolean;
   defaultPrevented = false;
   override relatedTarget: FakeNode | null;

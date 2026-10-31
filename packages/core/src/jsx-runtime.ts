@@ -15,13 +15,14 @@
 //     attribute empty, false leaves it out) or nothing. A function is not a value: a hole that
 //     calls one (`{count()}`) updates, and a function itself (`{count}`) would be written once,
 //     as text, so it is a type error.
-//   - `class` (or `className`) takes a string; `style` takes a string of CSS, not an object.
+//   - `class` (or `className`) takes a string; `style` takes a string of CSS, or an object of
+//     properties (camelCase or CSS names, custom properties too). A number gets no unit.
 //   - `on` + the event's name (`onClick`, `onKeyDown`, `onPointerMove`) takes a handler for that
 //     event. The compiler lowercases the name, so the handler of `onDblClick` gets "dblclick".
 //     Inside a `<For>` row the handler is delegated to the list's parent, so neither `this` nor
 //     `currentTarget` is the element: the handler's only argument is the event.
-//   - `ref` is not compiled yet (the compiler would write the function as an attribute): it is
-//     typed `never`, so an editor flags it.
+//   - `ref` takes a function, called with the element, or an object whose `current` gets it.
+//   - `key` on an element outside `<For>` rebuilds the element when its value changes.
 //   - A child is a node (an element, `<For>`, a component's result), text, a number, nothing, or
 //     an array of those. Void elements (`<input>`, `<img>`, ...) take no children.
 //   - SVG elements have their own attributes and events. A tag both HTML and SVG name (`a`,
@@ -37,6 +38,23 @@ type Bool = boolean | null | undefined;
 
 /** `class`'s value: the element's class list as one string. */
 type ClassValue = string | null | undefined;
+
+/** A style property's value. Written as given: a number gets no unit; null, undefined and false remove it. */
+type StyleValue = string | number | false | null | undefined;
+
+/** A style object's properties: CSSStyleDeclaration's camelCase names, CSS names, custom properties. */
+type StyleObject = {
+  [K in keyof CSSStyleDeclaration as CSSStyleDeclaration[K] extends string ? K : never]?: StyleValue;
+} & { [css: `${string}-${string}`]: StyleValue };
+
+/** An element's `style`. */
+type Style = string | StyleObject | null | undefined;
+
+/** A host element's `key` outside `<For>`: the element is rebuilt when it changes. */
+type Key = string | number | bigint | null | undefined;
+
+/** An element's `ref`: a function called with it, or an object given it as `current`. */
+export type Ref<E> = ((element: E) => void) | { current: E | null } | null | undefined;
 
 /** A child of a host element: a node, text, nothing, or an array of children. */
 export type Child = Node | string | number | bigint | boolean | null | undefined | readonly Child[];
@@ -139,8 +157,6 @@ export type EventHandlers<M> = {
 export interface HTMLAttributes extends EventHandlers<HTMLElementEventMap> {
   /** The element's content: nodes, text, nothing, or arrays of them. */
   children?: Child;
-  /** Not compiled yet: the compiler would write the function as an attribute. */
-  ref?: never;
   [data: `data-${string}`]: Attr;
   [aria: `aria-${string}`]: Attr;
   accesskey?: Attr;
@@ -173,8 +189,8 @@ export interface HTMLAttributes extends EventHandlers<HTMLElementEventMap> {
   role?: Attr;
   slot?: Attr;
   spellcheck?: Attr;
-  /** Inline CSS, as one string: `style="color: red"`. */
-  style?: string | null | undefined;
+  /** Inline CSS: a string (`style="color: red"`) or an object (`style={{ color: "red" }}`). */
+  style?: Style;
   tabindex?: Attr;
   title?: Attr;
   translate?: Attr;
@@ -415,7 +431,12 @@ interface HTMLElementAttributes {
 
 /** Every HTML element, by tag: its own attributes, or the global ones. */
 type HTMLElements = {
-  [K in keyof HTMLElementTagNameMap]: K extends keyof HTMLElementAttributes ? HTMLElementAttributes[K] : HTMLAttributes;
+  [K in keyof HTMLElementTagNameMap]: (K extends keyof HTMLElementAttributes
+    ? HTMLElementAttributes[K]
+    : HTMLAttributes) & {
+    ref?: Ref<HTMLElementTagNameMap[K]>;
+    key?: Key;
+  };
 };
 
 // #endregion
@@ -426,16 +447,14 @@ type HTMLElements = {
 export interface SVGAttributes extends EventHandlers<SVGElementEventMap> {
   /** The element's content: nodes, text, nothing, or arrays of them. */
   children?: Child;
-  /** Not compiled yet: the compiler would write the function as an attribute. */
-  ref?: never;
   [data: `data-${string}`]: Attr;
   [aria: `aria-${string}`]: Attr;
   /** The element's classes, as one string. */
   class?: ClassValue;
   /** `class`, by React's name. */
   className?: ClassValue;
-  /** Inline CSS, as one string. */
-  style?: string | null | undefined;
+  /** Inline CSS: a string or an object. */
+  style?: Style;
   id?: Attr;
   lang?: Attr;
   role?: Attr;
@@ -564,7 +583,10 @@ export interface SVGAttributes extends EventHandlers<SVGElementEventMap> {
 
 /** Every SVG element whose tag HTML has no element of: `svg`, `path`, `circle`, ... */
 type SVGElements = {
-  [K in Exclude<keyof SVGElementTagNameMap, keyof HTMLElementTagNameMap>]: SVGAttributes;
+  [K in Exclude<keyof SVGElementTagNameMap, keyof HTMLElementTagNameMap>]: SVGAttributes & {
+    ref?: Ref<SVGElementTagNameMap[K]>;
+    key?: Key;
+  };
 };
 
 // #endregion
@@ -584,7 +606,7 @@ export declare namespace JSX {
   interface ElementChildrenAttribute {
     children: {};
   }
-  /** The attributes every element takes besides its own: none (`key` belongs to `<For>`). */
+  /** The attributes every element takes besides its own: none (a host element's `key` is in its own). */
   interface IntrinsicAttributes {}
   /** The host elements and their attributes. */
   interface IntrinsicElements extends IntrinsicElementMap {}

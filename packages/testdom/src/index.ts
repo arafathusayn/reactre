@@ -283,7 +283,55 @@ export const HTML_NS = "http://www.w3.org/1999/xhtml";
 /** The SVG namespace. */
 export const SVG_NS = "http://www.w3.org/2000/svg";
 
-/** A bubbling event for `FakeElement.dispatchEvent`. */
+/**
+ * An element's inline style: properties by their CSS names (custom ones included), and
+ * `cssText`, which writes and reads them as `name: value; ...`. FakeElement has none of its own
+ * (test files give theirs the style their library reads); `withStyles` installs this one.
+ */
+export class FakeStyle {
+  private readonly props = new Map<string, string>();
+  setProperty(name: string, value: string | null): void {
+    if (value === null || value === "") this.props.delete(name);
+    else this.props.set(name, value);
+  }
+  removeProperty(name: string): string {
+    const v = this.props.get(name) ?? "";
+    this.props.delete(name);
+    return v;
+  }
+  getPropertyValue(name: string): string {
+    return this.props.get(name) ?? "";
+  }
+  get cssText(): string {
+    return [...this.props].map(([k, v]) => `${k}: ${v};`).join(" ");
+  }
+  set cssText(v: string) {
+    this.props.clear();
+    for (const decl of v.split(";")) {
+      const colon = decl.indexOf(":");
+      if (colon > 0) this.props.set(decl.slice(0, colon).trim(), decl.slice(colon + 1).trim());
+    }
+  }
+}
+
+/**
+ * Give every FakeElement a FakeStyle as `style`, made on first read. Returns the function that
+ * takes it away again, for an afterAll: other test files define their own.
+ */
+export function withStyles(): () => void {
+  const css = new WeakMap<object, FakeStyle>();
+  Object.defineProperty(FakeElement.prototype, "style", {
+    configurable: true,
+    get(this: object): FakeStyle {
+      let s = css.get(this);
+      if (s === undefined) css.set(this, (s = new FakeStyle()));
+      return s;
+    },
+  });
+  return () => void delete (FakeElement.prototype as { style?: unknown }).style;
+}
+
+/** An event for `FakeElement.dispatchEvent`; it bubbles unless its init says otherwise. */
 export class FakeEvent {
   readonly type: string;
   target: FakeNode | null = null;
@@ -296,9 +344,12 @@ export class FakeEvent {
   /** A pointer event's pointer, and a mouse event's other element: what an init can give. */
   pointerId?: number;
   relatedTarget?: FakeNode | null;
+  /** False for an event that does not bubble (focus, blur): it reaches ancestors in the capture phase only. */
+  readonly bubbles: boolean;
   /** As the DOM's: `init` gives the members an event of its kind takes (a dispatched event will do). */
-  constructor(type: string, init?: { pointerId?: number; relatedTarget?: FakeNode | null }) {
+  constructor(type: string, init?: { pointerId?: number; relatedTarget?: FakeNode | null; bubbles?: boolean }) {
     this.type = type;
+    this.bubbles = init?.bubbles ?? true;
     if (init?.pointerId !== undefined) this.pointerId = init.pointerId;
     if (init?.relatedTarget !== undefined) this.relatedTarget = init.relatedTarget;
   }
@@ -421,10 +472,10 @@ export class FakeElement extends FakeNode {
       );
   }
   /**
-   * Dispatches a bubbling event from this element, in the DOM's phases: the capture listeners of
+   * Dispatches an event from this element, in the DOM's phases: the capture listeners of
    * each element from the top down to this one's parent, then this element's own (capture ones
-   * first), then the bubble listeners and `on<type>` property of each element from this one's
-   * parent up. Each runs with the element as `this` and as `currentTarget`, until one stops
+   * first), then, when it bubbles, the bubble listeners and `on<type>` property of each element
+   * from this one's parent up. Each runs with the element as `this` and as `currentTarget`, until one stops
    * propagation. An element runs the listeners it has when the event reaches it in that phase.
    */
   dispatchEvent(e: FakeEvent): boolean {
@@ -445,7 +496,8 @@ export class FakeElement extends FakeNode {
       if (i === 0) {
         e.eventPhase = 2;
         run(n, true);
-      } else e.eventPhase = 3;
+      } else if (!e.bubbles) break;
+      else e.eventPhase = 3;
       run(n, false);
       const p = (n as unknown as Record<string, unknown>)["on" + e.type];
       if (typeof p === "function" && !e.stoppedNow) (p as (this: FakeNode, e: FakeEvent) => void).call(n, e);
@@ -627,9 +679,12 @@ export const decode = (s: string): string =>
             : (NAMED[name!] ?? all),
       );
 
+/** HTML elements with no end tag and no content. */
+const VOID_TAGS = new Set("area base br col embed hr img input link meta source track wbr".split(" "));
+
 /**
  * Parse `src` into `root`'s children. End tags close the innermost open
- * element whatever their name; void elements must be written self-closing.
+ * element whatever their name; a void element holds nothing, with or without its slash.
  * Resets `ops` at the end: parsing a template is not the work under test.
  */
 function parse(src: string, root: FakeElement): void {
@@ -637,14 +692,17 @@ function parse(src: string, root: FakeElement): void {
   for (const m of src.matchAll(TOKEN)) {
     const top = stack[stack.length - 1]!;
     if (m[1] !== undefined) top.appendChild(new FakeComment(m[1]));
-    else if (m[2]) stack.pop();
-    else if (m[3]) {
+    // An end tag of a void element closes nothing, as in the HTML parser.
+    else if (m[2]) {
+      if (top.namespaceURI === SVG_NS || !VOID_TAGS.has(m[2].toLowerCase())) stack.pop();
+    } else if (m[3]) {
       // As the HTML parser does: an svg element and its content are SVG, with case-kept tag names.
       const svg = top.namespaceURI === SVG_NS || m[3].toLowerCase() === "svg";
       const el = svg ? new FakeElement(m[3], SVG_NS) : new FakeElement(m[3].toUpperCase());
       for (const a of (m[4] ?? "").matchAll(ATTR)) el.setAttribute(a[1]!, decode(a[2] ?? a[3] ?? a[4] ?? ""));
       top.appendChild(el);
-      if (!m[5]) stack.push(el);
+      // A void element (written `<hr>`, as a template's markup has it) holds nothing.
+      if (!m[5] && (svg || !VOID_TAGS.has(m[3].toLowerCase()))) stack.push(el);
     } else if (m[6]) top.appendChild(new FakeText(decode(m[6])));
   }
   resetOps();
@@ -663,6 +721,7 @@ export function installFakeDocument(): void {
   g.document = {
     createElement: (tag: string) => new FakeElement(tag.toUpperCase()),
     createTextNode: (data: string) => new FakeText(data),
+    createDocumentFragment: () => new FakeFragment(),
   };
   g.Node = FakeNode;
   g.MutationObserver = FakeMutationObserver;

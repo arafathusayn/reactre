@@ -18,7 +18,7 @@ await Bun.build({
 });
 ```
 
-A construct the compiler does not handle yet, such as a fragment or spread props, is a compile error that points at its source, never a silent fallback.
+A construct the compiler does not handle, such as a `<For>` outside an element or a row that is not one element, is a compile error that points at its source, never a silent fallback.
 
 For Vite, Rollup, Rolldown, esbuild, webpack or Rspack, use [`@reactre/plugin`](https://www.npmjs.com/package/@reactre/plugin), which runs this compiler under Node as well as Bun.
 

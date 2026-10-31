@@ -115,7 +115,7 @@ Leaving out what a small app does not use saves about a sixth of compat's bundle
 
 - No source maps yet: compiled files map to nothing.
 - Fast Refresh is not supported yet; Vite reloads the page on save.
-- In reactre mode, fragments and spread props are compile errors, as in `@reactre/compiler`.
+- In reactre mode, a key after spread props is a compile error: Bun gives that JSX to React's classic runtime.
 
 ## License
 
