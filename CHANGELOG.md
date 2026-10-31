@@ -13,6 +13,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### @reactre/compat
 
 - Added: `@reactre/compat/features/timeSlicing`, which turns time slicing on where the build compiles it in (@reactre/full-compat's). @reactre/compat's own builds strip the slicing code from core.ts before they compile it, so its dist, sizes and speed are as before, byte for byte.
+- Fixed: @reactre/compat/compiler passes a list row's loop the names its body spreads. Its free-name scan took a name after `...` for a property, so `rows.map((r) => <li {...extra}>{r}</li>)` threw a ReferenceError for `extra`, or read a module-level `extra` instead; the same held for spreads into objects, arrays and call arguments. An element with a spread child (`<li>{...xs}</li>`) now stays a jsx call: its template had one hole for any number of children and rendered only the first.
+- Fixed: a class's legacy will-method and its `UNSAFE_` twin both run, the plain one first, as React calls them (`componentWillMount`, `componentWillReceiveProps` and `componentWillUpdate`). Before, the `UNSAFE_` one ran alone.
 
 ### @reactre/plugin
 

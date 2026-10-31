@@ -99,10 +99,10 @@ These don't affect the benchmark app, but would affect a real app.
 
 ## 4. reactre-compat's known bugs
 
-- **Spread props in a compiled list row.** @reactre/compat/compiler's free-name scan treats a name after `...` as a property access, so `rows.map((r) => <li {...extra}>{r}</li>)` hoists a loop that is never passed `extra`. It throws a ReferenceError, or reads the wrong binding.
-- **`componentWillMount` next to `getSnapshotBeforeUpdate`.** On mount, the class runtime checks the class's static `getSnapshotBeforeUpdate` instead of the instance's method, so a class that defines it still gets `componentWillMount`, which React skips.
+- **Spread props in a compiled list row: done.** @reactre/compat/compiler's free-name scan treated a name after `...` as a property access, so `rows.map((r) => <li {...extra}>{r}</li>)` hoisted a loop that was never passed `extra`. It threw a ReferenceError, or read the wrong binding. The scan now reads a spread's name as a variable, in props, objects, arrays and call arguments, and an element with a spread child (`{...xs}`) stays a jsx call, since a template cannot count its children.
+- **`componentWillMount` next to `getSnapshotBeforeUpdate`: done.** On mount, the class runtime checked the class's static `getSnapshotBeforeUpdate` instead of the instance's method, so a class that defined it still got `componentWillMount`, which React skips. Fixed in `bab4928`; a will-method and its `UNSAFE_` twin now both run, the plain one first, as React calls them.
 
-**Done when** each has a failing test first, then a fix, with the compatibility check still at 36 of 36 with classes.
+**Done when** each has a failing test first, then a fix, with the compatibility check still at 36 of 36 with classes. Both pass the unit tests and the browser scenarios "list rows that spread props and children" and "class legacy lifecycles", with every scenario matching React.
 
 ## 5. reactre's remaining speed
 
