@@ -294,6 +294,138 @@ describe("reactre: runtime helpers", () => {
   });
 });
 
+describe("reactre: batching", () => {
+  test("a long batch queues each effect once and stays linear", () => {
+    const n = 100000;
+    const sigs = Array.from({ length: n }, () => runtime.signal(0));
+    let runs = 0;
+    for (const [read] of sigs) runtime.effect(() => void (read(), runs++));
+    runs = 0;
+    const t0 = performance.now();
+    runtime.batch(() => {
+      for (const [, write] of sigs) write(1);
+      // Written twice: still one run each.
+      for (const [, write] of sigs) write(2);
+    });
+    // Quadratic queueing takes seconds here; linear takes milliseconds.
+    expect(performance.now() - t0).toBeLessThan(400);
+    expect(runs).toBe(n);
+  });
+
+  test("an effect that writes what it reads settles, or throws when it never does", () => {
+    const [a, setA] = runtime.signal(0);
+    let runs = 0;
+    runtime.effect(() => {
+      runs++;
+      if (a() < 5) setA(a() + 1);
+    });
+    expect(a()).toBe(5);
+    expect(runs).toBe(6);
+    const [b, setB] = runtime.signal(0);
+    expect(() => runtime.effect(() => setB(b() + 1))).toThrow(/writes a signal it reads/);
+    // Two effects that write each other's source are a cycle too.
+    const [c, setC] = runtime.signal(0);
+    const [d, setD] = runtime.signal(0);
+    runtime.effect(() => setD(c() + 1));
+    expect(() => runtime.effect(() => setC(d() + 1))).toThrow(/writes a signal it reads/);
+  });
+
+  test("an effect that throws during a flush leaves the rest queued for the next one", () => {
+    const [a, setA] = runtime.signal(0);
+    const seen: number[] = [];
+    runtime.effect(() => {
+      if (a() === 1) throw new Error("boom");
+    });
+    runtime.effect(() => void seen.push(a()));
+    expect(() => runtime.batch(() => setA(1))).toThrow("boom");
+    runtime.batch(() => {});
+    expect(seen).toEqual([0, 1]);
+  });
+});
+
+describe("reactre: ownership", () => {
+  test("an effect disposes the effects it created, and runs its cleanups, before it re-runs", () => {
+    const [a, setA] = runtime.signal(0);
+    const [b, setB] = runtime.signal(0);
+    let inner = 0,
+      cleaned = 0;
+    runtime.effect(() => {
+      a();
+      runtime.effect(() => void (b(), inner++));
+      runtime.onCleanup(() => cleaned++);
+    });
+    setA(1);
+    setA(2);
+    expect(cleaned).toBe(2);
+    inner = 0;
+    setB(1);
+    // Only the inner effect of the last run is still subscribed.
+    expect(inner).toBe(1);
+  });
+
+  test("a slot that replaces its content disposes the old content's effects", () => {
+    const root = box();
+    const api = run<{
+      setShow: (b: boolean) => void;
+      setN: (n: number) => void;
+      runs: () => number;
+      cleaned: () => number;
+    }>(
+      `
+      import { effect, onCleanup, render, signal } from "@reactre/core";
+      const [show, setShow] = signal(true);
+      const [n, setN] = signal(0);
+      let runs = 0, cleaned = 0;
+      function A() {
+        effect(() => void (n(), runs++));
+        onCleanup(() => cleaned++);
+        return <b>{n()}</b>;
+      }
+      function App() {
+        return <div>{show() ? <A /> : <i>no</i>}</div>;
+      }
+      render(App, root);
+      return { setShow, setN, runs: () => runs, cleaned: () => cleaned };
+    `,
+      root,
+    );
+    api.setN(1);
+    expect(html(root)).toBe("<div><b>1</b></div>");
+    const before = api.runs();
+    api.setShow(false);
+    expect(api.cleaned()).toBe(1);
+    api.setN(2);
+    expect(api.runs()).toBe(before);
+    expect(html(root)).toBe("<div><i>no</i></div>");
+    api.setShow(true);
+    expect(html(root)).toBe("<div><b>2</b></div>");
+  });
+
+  test("render returns a function that disposes the view; onCleanup outside any owner is ignored", () => {
+    const root = box();
+    const api = run<{ setN: (n: number) => void; dispose: () => void; runs: () => number }>(
+      `
+      import { effect, onCleanup, render, signal } from "@reactre/core";
+      const [n, setN] = signal(0);
+      let runs = 0;
+      onCleanup(() => { throw new Error("never"); });
+      function App() {
+        effect(() => void (n(), runs++));
+        return <p>{n()}</p>;
+      }
+      const dispose = render(App, root);
+      return { setN, dispose, runs: () => runs };
+    `,
+      root,
+    );
+    api.setN(1);
+    expect(api.runs()).toBe(2);
+    api.dispose();
+    api.setN(2);
+    expect(api.runs()).toBe(2);
+  });
+});
+
 describe("@reactre/compiler: errors", () => {
   test("constructs it does not compile are errors, not a runtime fallback", () => {
     expect(() => compileSource(`const x = <><b /></>;`)).toThrow(ReactreCompileError);
