@@ -229,6 +229,59 @@ export const cases: Record<string, Case> = {
     }
   },
 
+  // List rows that spread a local name: as props, into an object, an array, call arguments and
+  // children. Compiled, each row's loop must still read that name.
+  async "list rows that spread props and children"(t) {
+    let set!: (n: number) => void;
+    const join = (...xs: unknown[]) => xs.join("-");
+    function Cell({ v, title }: { v: string; title?: string }) {
+      return <b title={title}>{v}</b>;
+    }
+    function App() {
+      const [n, setN] = useState(1);
+      set = setN;
+      const extra = { title: "t" + n, className: "c" + n };
+      const xs = ["x" + n, "y"];
+      const rows = ["a", "b"];
+      return (
+        <div>
+          <ul>
+            {rows.map((r) => (
+              <li {...extra}>{r}</li>
+            ))}
+          </ul>
+          <p>
+            {rows.map((r) => (
+              <Cell {...extra} v={r} />
+            ))}
+          </p>
+          <ol>
+            {rows.map((r) => (
+              <li title={JSON.stringify({ ...extra, r })}>{[...xs, r].join()}</li>
+            ))}
+          </ol>
+          <ol>
+            {rows.map((r) => (
+              <li>{join(...xs, r)}</li>
+            ))}
+          </ol>
+          <ol>
+            {rows.map((r) => (
+              <li>
+                {...xs}
+                {r}
+              </li>
+            ))}
+          </ol>
+        </div>
+      );
+    }
+    mount(t, <App />);
+    await t.step("mount");
+    set(2);
+    await t.step("update");
+  },
+
   // A child's state survives siblings coming and going around it; empty values render nothing.
   async "fragments, arrays and conditionals keep sibling state"(t) {
     let toggle!: () => void;
@@ -538,7 +591,8 @@ export const cases: Record<string, Case> = {
   // #region Classes and error boundaries
 
   // Legacy lifecycles: setState in componentWillMount, componentWillReceiveProps only for new
-  // props, componentWillUpdate, and componentWillMount left out next to getSnapshotBeforeUpdate.
+  // props, componentWillUpdate, componentWillMount left out next to getSnapshotBeforeUpdate (the
+  // instance's, not a static one), and each will-method called along with its UNSAFE_ twin.
   async "class legacy lifecycles"(t) {
     class Legacy extends Component<{ n: number }, { m: number }> {
       override state = { m: 0 };
@@ -569,11 +623,38 @@ export const cases: Record<string, Case> = {
         return <i>{this.props.n}</i>;
       }
     }
+    class Twins extends Component<{ n: number }> {
+      static getSnapshotBeforeUpdate() {
+        return null;
+      }
+      componentWillMount() {
+        t.log("twins will mount");
+      }
+      UNSAFE_componentWillMount() {
+        t.log("twins UNSAFE will mount");
+      }
+      componentWillReceiveProps(next: { n: number }) {
+        t.log("twins will receive", next.n);
+      }
+      UNSAFE_componentWillReceiveProps(next: { n: number }) {
+        t.log("twins UNSAFE will receive", next.n);
+      }
+      componentWillUpdate(next: { n: number }) {
+        t.log("twins will update", next.n);
+      }
+      UNSAFE_componentWillUpdate(next: { n: number }) {
+        t.log("twins UNSAFE will update", next.n);
+      }
+      override render() {
+        return <b>{this.props.n}</b>;
+      }
+    }
     const r = mount(
       t,
       <>
         <Legacy n={1} />
         <Snap n={1} />
+        <Twins n={1} />
       </>,
     );
     await t.step("mounted");
@@ -582,6 +663,7 @@ export const cases: Record<string, Case> = {
         <>
           <Legacy n={2} />
           <Snap n={2} />
+          <Twins n={2} />
         </>,
       ),
     );
