@@ -41,7 +41,10 @@
 //     that path (`__forMount`); host-only rows cost what they always have.
 //   - Every effect run owns the effects and cleanups (`onCleanup`) it makes,
 //     and disposes them before it re-runs: a slot that replaces its content
-//     stops the old content's effects. `render` returns the root's disposer.
+//     stops the old content's effects. `attach` returns the root's disposer.
+//   - An app ships only what it uses. Ownership comes with what owns (see
+//     "Ownership"); rows with several selector keys come with
+//     @reactre/core/features/selectors. The benchmark app ships neither.
 //
 // The list is @reactre/dom's keyed List (reuse, minimal moves, swaps and
 // removals in place). Nothing here depends on React.
@@ -61,7 +64,7 @@
 //   - Everything named with a leading `__` is the compiler's target, not a
 //     public API. Its shape follows what the compiler emits.
 
-import { List, Template } from "@reactre/dom";
+import { List, Prototype } from "@reactre/dom";
 
 // #region Reactivity core
 
@@ -87,12 +90,12 @@ interface Observer extends Reader {
 
 /** The reader whose reads are being recorded; null outside any observer and inside `untrack`. */
 let current: Reader | null = null;
-/** The owner that effects and cleanups made now belong to; null outside any (nothing disposes them). */
-let owner: Owner | null = null;
 /** Depth of nested `batch` calls; observers are deferred while it is above 0. */
 let batching = 0;
 /** Observers notified during a batch, in first-notified order, each once (its `q` flag says so). */
-let pending: Observer[] = [];
+const pending: Observer[] = [];
+/** The next of `pending` to run: the ones before it have run (or are running). */
+let head = 0;
 
 /** Tell the observers of `s` that it changed: now, or at the end of the current batch. */
 function notify(s: Source): void {
@@ -114,26 +117,6 @@ function notify(s: Source): void {
   for (let i = 0; i < run.length; i++) run[i]!.stale();
 }
 
-/** Run the observers a batch queued, and any that those runs queue in batches of their own. */
-function flush(): void {
-  while (pending.length) {
-    // A run may open a batch of its own and queue more: those go to a fresh queue.
-    const q = pending;
-    pending = [];
-    let i = 0;
-    try {
-      for (; i < q.length; i++) {
-        q[i]!.q = false;
-        q[i]!.stale();
-      }
-    } catch (err) {
-      // The ones not run yet stay queued (still flagged) for the next flush.
-      pending = q.slice(i + 1).concat(pending);
-      throw err;
-    }
-  }
-}
-
 /**
  * Run `fn` with every effect it causes deferred to its end, each run once.
  * Batches nest: effects run when the outermost one returns (or throws).
@@ -153,8 +136,19 @@ export function batch<T>(fn: () => T): T {
     return fn();
   } finally {
     // Flushing happens with batching back at 0, so a write made by a flushed
-    // effect notifies its observers at once instead of queueing behind it.
-    if (--batching === 0 && pending.length) flush();
+    // effect notifies its observers at once instead of queueing behind it. A
+    // run that opens a batch of its own queues behind the rest, and its batch's
+    // end drains the one queue, in order. Each observer leaves the queue (`head`
+    // passes it) before it runs: one that throws leaves the rest queued, still
+    // flagged, for the next flush.
+    if (--batching === 0) {
+      while (head < pending.length) {
+        const o = pending[head++]!;
+        o.q = false;
+        o.stale();
+      }
+      pending.length = head = 0;
+    }
   }
 }
 
@@ -174,73 +168,6 @@ export function untrack<T>(fn: () => T): T {
     return fn();
   } finally {
     current = o;
-  }
-}
-
-// #endregion
-
-// #region Ownership
-
-/**
- * What effects and cleanups belong to: an effect's run, a `<For>` row with
- * slots, or a `render`. Disposing an owner disposes what it owns, deepest
- * first, and runs its cleanups. An effect cleans itself before each re-run,
- * so what one run made is gone before the next makes its own.
- *
- * Both lists stay null until something is owned: an effect that creates no
- * effect and registers no cleanup (every hole's) pays one check per run.
- */
-class Owner {
-  owned: Owner[] | null = null;
-  cleanups: (() => void)[] | null = null;
-  /** Dispose what it owns and run its cleanups, then forget both. */
-  clean(): void {
-    const o = this.owned,
-      c = this.cleanups;
-    this.owned = null;
-    this.cleanups = null;
-    if (o !== null) for (let i = 0; i < o.length; i++) o[i]!.dispose();
-    if (c !== null) for (let i = 0; i < c.length; i++) c[i]!();
-  }
-  dispose(): void {
-    this.clean();
-  }
-}
-
-/** Make `o` belong to the current owner, if there is one. */
-function adopt(o: Owner): void {
-  if (owner !== null) (owner.owned ??= []).push(o);
-}
-
-/**
- * Run `fn` when the current owner is disposed or re-runs: in an effect,
- * before its next run; in a component, when the slot or row holding it
- * replaces it, or when `render`'s disposer is called. Outside any owner (at
- * module scope) it does nothing, since nothing would ever call it.
- *
- * @example
- *   function Clock() {
- *     const [now, setNow] = signal(Date.now());
- *     const id = setInterval(() => setNow(Date.now()), 1000);
- *     onCleanup(() => clearInterval(id));
- *     return <time>{new Date(now()).toLocaleTimeString()}</time>;
- *   }
- */
-export function onCleanup(fn: () => void): void {
-  if (owner !== null) (owner.cleanups ??= []).push(fn);
-}
-
-/** Run `fn` with `o` as the owner and no reader: what it creates belongs to `o`. */
-function within<T>(o: Owner | null, fn: () => T): T {
-  const po = owner,
-    pc = current;
-  owner = o;
-  current = null;
-  try {
-    return fn();
-  } finally {
-    owner = po;
-    current = pc;
   }
 }
 
@@ -291,22 +218,17 @@ export function signal<T>(v: T): [() => T, Setter<T>] {
 const IDLE = 0,
   RUNNING = 1,
   /** Notified while running: it runs again when the run ends. */
-  DIRTY = 2,
-  DISPOSED = 3;
-/** Re-runs in a row after which an effect that keeps changing what it reads is a cycle. */
-const MAX_RERUNS = 100;
+  DIRTY = 2;
+/** Runs in a row after which an effect that keeps changing what it reads is a cycle. */
+const MAX_RUNS = 100;
 
-/**
- * An effect: a function re-run whenever a source it read last time changes.
- * It owns the effects and cleanups its run makes.
- */
-class Effect extends Owner implements Observer {
-  private readonly fn: () => void;
+/** An effect: a function re-run whenever a source it read last time changes. */
+class Effect implements Observer {
+  protected readonly fn: () => void;
   private sources: Source[] = [];
   q = false;
   private state = IDLE;
   constructor(fn: () => void) {
-    super();
     this.fn = fn;
   }
   read(s: Source): void {
@@ -319,48 +241,37 @@ class Effect extends Owner implements Observer {
     // A write to what it read, made by its own run (or by a run it caused),
     // does not recurse: the run ends first, then it runs again.
     if (this.state === IDLE) this.run();
-    else if (this.state === RUNNING) this.state = DIRTY;
+    else this.state = DIRTY;
   }
-  /** Run `fn` as the current observer and owner, after dropping the sources and owned effects of the last run. */
+  /** Run, and again while a run was notified (it wrote what it read), up to MAX_RUNS in a row. */
   run(): void {
-    // What the last run made and read is gone: this run collects its own.
-    if (this.owned !== null || this.cleanups !== null) this.clean();
+    for (let n = 0; n < MAX_RUNS; n++) {
+      this.state = RUNNING;
+      try {
+        this.once();
+      } catch (err) {
+        this.state = IDLE;
+        throw err;
+      }
+      if (this.state === RUNNING) {
+        this.state = IDLE;
+        return;
+      }
+    }
+    this.state = IDLE;
+    throw new Error("reactre: an effect writes a signal it reads, so it never settles");
+  }
+  /** One run of `fn` as the current observer, after dropping the sources of the last run. */
+  protected once(): void {
     this.drop();
-    this.state = RUNNING;
-    const o = current,
-      ow = owner;
+    const o = current;
     current = this;
-    owner = this;
     try {
       this.fn();
-    } catch (err) {
-      if (this.state !== DISPOSED) this.state = IDLE;
-      throw err;
     } finally {
       current = o;
-      owner = ow;
-    }
-    // Notified while running (it wrote what it read): run again, out of this path.
-    if (this.state === DIRTY) this.again();
-    else if (this.state === RUNNING) this.state = IDLE;
-  }
-  /** The run ended with the effect notified again: run it again, up to MAX_RERUNS in a row. */
-  private again(): void {
-    this.state = IDLE;
-    if (++this.reruns === MAX_RERUNS) {
-      this.reruns = 0;
-      throw new Error(
-        `reactre: an effect re-ran ${MAX_RERUNS} times in a row: it writes a signal it reads (directly or through other effects), so it never settles`,
-      );
-    }
-    try {
-      this.run();
-    } finally {
-      this.reruns = 0;
     }
   }
-  /** Re-runs in a row so far, while `again` recurses. */
-  private reruns = 0;
   /** Unsubscribe from every source of the last run. */
   drop(): void {
     const ss = this.sources;
@@ -371,17 +282,148 @@ class Effect extends Owner implements Observer {
     }
     this.sources = [];
   }
-  /** Stop for good: unsubscribe, and dispose what the last run made. */
-  override dispose(): void {
-    this.state = DISPOSED;
-    this.drop();
-    this.clean();
+}
+
+/**
+ * The class the runtime's own effects (holes, lists, selectors) are made of: Effect, or
+ * OwnedEffect once the bundle holds anything that owns (see "Ownership"), so that those
+ * effects belong to the owner they are made in.
+ */
+let Eff: new (fn: () => void) => Effect = Effect;
+
+/** One of the runtime's own effects: run `fn` now and whenever what it read changes. */
+function track(fn: () => void): void {
+  new Eff(fn).run();
+}
+
+// #endregion
+
+// #region Ownership
+
+// What effects and cleanups belong to: an effect's run, a `<For>` row with mounts, or an
+// `attach`. Disposing an owner disposes what it owns, deepest first, and runs its cleanups. An
+// effect cleans itself before each re-run, so what one run made is gone before the next makes
+// its own.
+//
+// An app pays for owners only when it makes one. Everything here is reached from `Owned`,
+// whose initializer installs it, and `Owned` is used only by what makes an owner: `effect`,
+// `memo`, a slot (`__slot`, and `__frag` through it), a row with mounts (`__forMount`) and
+// `attach`. A bundle with none of them (the benchmark app's) drops the lot, and its effects are
+// plain Effects with `owner` null throughout, which is right: with nothing that disposes, no
+// effect is ever made inside another's run. `onCleanup` reads only `owner`, so it costs a few
+// bytes and does nothing until something owns.
+
+/** An owner: what it owns, and its cleanups. Both stay null until something is owned. */
+interface Owner {
+  owned: Owner[] | null;
+  cleanups: (() => void)[] | null;
+  dispose(): void;
+}
+
+/** The owner that effects and cleanups made now belong to; null outside any (nothing disposes them). */
+let owner: Owner | null = null;
+
+/** Dispose what `o` owns and run its cleanups, then forget both. */
+function clean(o: Owner): void {
+  const owned = o.owned,
+    c = o.cleanups;
+  o.owned = null;
+  o.cleanups = null;
+  if (owned !== null) for (let i = 0; i < owned.length; i++) owned[i]!.dispose();
+  if (c !== null) for (let i = 0; i < c.length; i++) c[i]!();
+}
+
+/** An owner that is not an effect: an `attach` root, or a row with mounts. */
+class Root implements Owner {
+  owned: Owner[] | null = null;
+  cleanups: (() => void)[] | null = null;
+  dispose(): void {
+    clean(this);
   }
+}
+
+/** An effect that owns what its run makes, and belongs to the owner it was made in. */
+class OwnedEffect extends Effect implements Owner {
+  owned: Owner[] | null = null;
+  cleanups: (() => void)[] | null = null;
+  private dead = false;
+  constructor(fn: () => void) {
+    super(fn);
+    if (owner !== null) (owner.owned ??= []).push(this);
+  }
+  override stale(): void {
+    // Disposed while queued in a batch: it does not run.
+    if (!this.dead) super.stale();
+  }
+  protected override once(): void {
+    if (this.dead) return;
+    // What the last run made is gone: this run makes its own.
+    if (this.owned !== null || this.cleanups !== null) clean(this);
+    const ow = owner;
+    owner = this;
+    try {
+      super.once();
+    } finally {
+      owner = ow;
+    }
+  }
+  /** Stop for good: unsubscribe, and dispose what the last run made. */
+  dispose(): void {
+    this.dead = true;
+    this.drop();
+    clean(this);
+  }
+  /** Run `fn` with `o` as the owner and no reader: what it creates belongs to `o`. */
+  static within<T>(o: Owner | null, fn: () => T): T {
+    const po = owner,
+      pc = current;
+    owner = o;
+    current = null;
+    try {
+      return fn();
+    } finally {
+      owner = po;
+      current = pc;
+    }
+  }
+}
+
+/** Makes list `l` disposed with the current owner; set once ownership is installed. */
+let ownList: ((l: ForList<unknown, unknown>) => void) | null = null;
+
+/** Make the runtime's effects owned, and lists disposable with their owner. */
+function installOwners(): typeof OwnedEffect {
+  Eff = OwnedEffect;
+  ownList = (l) => onCleanup(() => destroy(l));
+  return OwnedEffect;
+}
+
+/** Ownership, installed as the module loads; dropped from a bundle that never uses it. */
+const Owned = /* @__PURE__ */ installOwners();
+
+/**
+ * Run `fn` when the current owner is disposed or re-runs: in an effect,
+ * before its next run; in a component, when the slot or row holding it
+ * replaces it, or when `attach`'s disposer is called. Outside any owner (at
+ * module scope, or in a view given to `render`) it does nothing, since
+ * nothing would ever call it.
+ *
+ * @example
+ *   function Clock() {
+ *     const [now, setNow] = signal(Date.now());
+ *     const id = setInterval(() => setNow(Date.now()), 1000);
+ *     onCleanup(() => clearInterval(id));
+ *     return <time>{new Date(now()).toLocaleTimeString()}</time>;
+ *   }
+ */
+export function onCleanup(fn: () => void): void {
+  if (owner !== null) (owner.cleanups ??= []).push(fn);
 }
 
 /**
  * Run `fn` now and again whenever a signal it read changes. Each run records
- * its reads afresh, so conditional reads are tracked as they happen.
+ * its reads afresh, so conditional reads are tracked as they happen. It owns
+ * the effects and cleanups its run makes, and disposes them before it re-runs.
  *
  * @example
  *   const [name, setName] = signal("a");
@@ -389,9 +431,7 @@ class Effect extends Owner implements Observer {
  *   setName("b"); // the title is now "b"
  */
 export function effect(fn: () => void): void {
-  const e = new Effect(fn);
-  adopt(e);
-  e.run();
+  new Owned(fn).run();
 }
 
 /**
@@ -430,7 +470,7 @@ export function memo<T>(fn: () => T): () => T {
  */
 export function selector<K>(source: () => K): (k: K) => boolean {
   const sel = new Selector<K>();
-  effect(() => {
+  track(() => {
     const next = source();
     const prev = sel.key;
     sel.key = next;
@@ -445,11 +485,6 @@ export function selector<K>(source: () => K): (k: K) => boolean {
   };
 }
 
-/** One key of a selector, as a source: the observers outside rows that asked about it. */
-class KeySource implements Source {
-  subs: Observer[] = [];
-}
-
 /**
  * A selector's state: its current key and who asked about which key.
  *
@@ -457,7 +492,8 @@ class KeySource implements Source {
  * selector and the key it asked about on itself, and the selector keeps only
  * the list, once. On a change, each list scans its rows for the two keys:
  * one comparison per row, no subscription objects at all. A row that asks
- * more than one (selector, key) pair keeps them all in a list (see `more`).
+ * more than one (selector, key) pair needs @reactre/core/features/selectors
+ * (see "Rows with several selector keys").
  *
  * Any other reader subscribes to the key's source like to a signal, so it
  * stops following a key when a run no longer asks about it.
@@ -468,7 +504,7 @@ class Selector<K> {
   // Rows of lists that asked: by list, the rows remember their key themselves.
   readonly lists: ForList<unknown, unknown>[] = [];
   // Anything else that asked, by key.
-  readonly byKey = new Map<K, KeySource>();
+  readonly byKey = new Map<K, Source>();
   /** Record that reader `o` asked about key `k`. */
   watch(o: Reader, k: K): void {
     if (o === rowContext) {
@@ -486,7 +522,7 @@ class Selector<K> {
       return;
     }
     let src = this.byKey.get(k);
-    if (src === undefined) this.byKey.set(k, (src = new KeySource()));
+    if (src === undefined) this.byKey.set(k, (src = { subs: [] }));
     o.read(src);
   }
   /** The key moved from `prev` to `next`: re-run what asked about either. */
@@ -507,22 +543,62 @@ class Selector<K> {
   }
 }
 
-/**
- * Stands in a row's `sel` when the row asked more than one (selector, key)
- * pair; its `sk` then holds the pairs, flat: [selector, key, selector, key, ...].
- */
-const MANY = new Selector<unknown>();
+// #endregion
 
-/** Row `e` asks about a second (or later) pair: keep them all, and mark the list as having such rows. */
-function more(list: ForList<unknown, unknown>, e: Row<unknown>, sel: Selector<unknown>, k: unknown): void {
-  if (e.sel !== MANY) {
-    e.sk = [e.sel, e.sk];
-    e.sel = MANY;
-    list.many = true;
-  }
-  const pairs = e.sk as unknown[];
-  for (let i = 0; i < pairs.length; i += 2) if (pairs[i] === sel && pairs[i + 1] === k) return;
-  pairs.push(sel, k);
+// #region Rows with several selector keys
+
+// A row that asks more than one (selector, key) pair keeps them all: `sel` is MANY and `sk`
+// holds the pairs, flat, [selector, key, selector, key, ...], and its list scans rows for them on
+// a change. @reactre/core/features/selectors installs this (`__installSelectors`); the compiler
+// imports that module itself for a row whose reactive holes make two or more calls with
+// arguments. Until it is installed, a second pair throws: a row that reads a selector through a
+// function of its own is the case the compiler cannot see.
+
+/** Row `e` of `list` asks about a second (or later) pair `sel`, `k`. */
+let more = (_list: ForList<unknown, unknown>, _e: Row<unknown>, _sel: Selector<unknown>, _k: unknown): void => {
+  throw new Error(
+    'reactre: a <For> row read a second selector key; import "@reactre/core/features/selectors" to allow it',
+  );
+};
+/** `selectorChanged` for a list where some row has asked several pairs; set with `more`. */
+let scanMany: ((list: ForList<unknown, unknown>, sel: Selector<unknown>, prev: unknown, next: unknown) => void) | null =
+  null;
+
+/** Stands in a row's `sel` when the row asked more than one (selector, key) pair. */
+const MANY = {} as Selector<unknown>;
+
+/** Internal: allow rows with several selector keys (@reactre/core/features/selectors calls it). */
+export function __installSelectors(): void {
+  more = (list, e, sel, k) => {
+    if (e.sel !== MANY) {
+      e.sk = [e.sel, e.sk];
+      e.sel = MANY;
+      list.many = true;
+    }
+    const pairs = e.sk as unknown[];
+    for (let i = 0; i < pairs.length; i += 2) if (pairs[i] === sel && pairs[i + 1] === k) return;
+    pairs.push(sel, k);
+  };
+  scanMany = (list, sel, prev, next) => {
+    // The rows to refresh are found first: a refresh rewrites the pairs it scans.
+    const hit: Row<unknown>[] = [],
+      es = list.list.entries;
+    for (let i = 0; i < es.length; i++) {
+      const e = es[i]!;
+      if (e.sel === sel) {
+        if (e.sk === prev || e.sk === next) hit.push(e);
+      } else if (e.sel === MANY) {
+        const pairs = e.sk as unknown[];
+        for (let j = 0; j < pairs.length; j += 2) {
+          if (pairs[j] === sel && (pairs[j + 1] === prev || pairs[j + 1] === next)) {
+            hit.push(e);
+            break;
+          }
+        }
+      }
+    }
+    for (let i = 0; i < hit.length; i++) list.refresh(hit[i]!);
+  };
 }
 
 // #endregion
@@ -554,7 +630,7 @@ export interface ForSpec<T, K> {
   readonly each: () => readonly T[];
   readonly key: (item: T) => K;
   /** The row template. */
-  readonly t: Template;
+  readonly t: Prototype;
   /** Write the values of the holes that read only the row into `v`, by hole index. */
   readonly fill: (item: T, v: unknown[]) => void;
   /** Indexes of those holes. */
@@ -563,8 +639,11 @@ export interface ForSpec<T, K> {
   readonly dyn?: (item: T, v: unknown[]) => void;
   /** The template hole of each reactive value. */
   readonly dynHoles?: readonly number[];
-  /** Delegated handlers: [event type, hole of the element, handler of the row]. */
-  readonly events?: readonly (readonly [string, number, (item: T) => (e: Event) => void])[];
+  /**
+   * Delegated handlers: [event type, hole of the element, handler of the row], and 1 for an
+   * event that does not bubble, which the list catches in the capture phase.
+   */
+  readonly events?: readonly (readonly [string, number, (item: T) => (e: Event) => void, 1?])[];
   /**
    * With `__forMount`: the parts of a row that create something of their own (a slot, a nested
    * list, a property, a style, a ref, spread props), as [hole, part]. Each part runs with the
@@ -576,7 +655,7 @@ export interface ForSpec<T, K> {
 
 /** A row of a `__forMount` list: a row, plus the owner of what its mounts created. */
 interface MountRow<T> extends Row<T> {
-  own: Owner;
+  own: Root;
 }
 
 /**
@@ -645,7 +724,7 @@ class ForList<T, K> {
   private readonly dv: unknown[] = [];
   /** Number of reactive holes. */
   private readonly nd: number;
-  /** Whether a row has ever asked several selector pairs: then changes take the slower scan. */
+  /** Whether a row has ever asked several selector pairs: then changes take the slower scan (`scanMany`). */
   many = false;
   /** The selectors whose `lists` hold this list. */
   readonly sels: Selector<unknown>[] = [];
@@ -672,14 +751,14 @@ class ForList<T, K> {
     });
     if (spec.events) {
       // One listener per event type, with that type's holes and handlers.
-      const byType = new Map<string, [number[], ((item: T) => (e: Event) => void)[]]>();
-      for (const [type, hole, h] of spec.events) {
+      const byType = new Map<string, [number[], ((item: T) => (e: Event) => void)[], boolean]>();
+      for (const [type, hole, h, capture] of spec.events) {
         let t = byType.get(type);
-        if (t === undefined) byType.set(type, (t = [[], []]));
+        if (t === undefined) byType.set(type, (t = [[], [], capture === 1]));
         t[0].push(hole);
         t[1].push(h);
       }
-      for (const [type, [holes, hs]] of byType) this.listen(type, holes, hs);
+      for (const [type, [holes, hs, capture]] of byType) this.listen(type, holes, hs, capture);
     }
   }
 
@@ -797,51 +876,14 @@ class ForList<T, K> {
     if (e.obs !== null) e.obs.drop();
   }
 
-  /**
-   * The list's owner is disposed (a slot replaced it, or `render`'s disposer ran): its rows
-   * leave, its listeners go, and its selectors forget it.
-   */
-  destroy(): void {
-    this.list.clear();
-    for (const [type, fn, capture] of this.listeners) this.parent.removeEventListener(type, fn, capture);
-    for (const sel of this.sels) sel.lists.splice(sel.lists.indexOf(this as ForList<unknown, unknown>), 1);
-  }
-  /** The delegated listeners, for `destroy`. */
-  private readonly listeners: [string, (ev: Event) => void, boolean][] = [];
-
   /** A selector this list's rows asked has moved from prev to next. */
   selectorChanged(sel: Selector<unknown>, prev: unknown, next: unknown): void {
     const es = this.list.entries;
-    if (this.many) {
-      this.selectorChangedMany(sel, prev, next);
-      return;
-    }
+    if (this.many) return scanMany!(this as ForList<unknown, unknown>, sel, prev, next);
     for (let i = 0; i < es.length; i++) {
       const e = es[i]!;
       if (e.sel === sel && (e.sk === prev || e.sk === next)) this.refresh(e);
     }
-  }
-
-  /** `selectorChanged` for a list where some row has asked several pairs. */
-  private selectorChangedMany(sel: Selector<unknown>, prev: unknown, next: unknown): void {
-    // The rows to refresh are found first: a refresh rewrites the pairs it scans.
-    const hit: Row<T>[] = [],
-      es = this.list.entries;
-    for (let i = 0; i < es.length; i++) {
-      const e = es[i]!;
-      if (e.sel === sel) {
-        if (e.sk === prev || e.sk === next) hit.push(e);
-      } else if (e.sel === MANY) {
-        const pairs = e.sk as unknown[];
-        for (let j = 0; j < pairs.length; j += 2) {
-          if (pairs[j] === sel && (pairs[j + 1] === prev || pairs[j + 1] === next)) {
-            hit.push(e);
-            break;
-          }
-        }
-      }
-    }
-    for (let i = 0; i < hit.length; i++) this.refresh(hit[i]!);
   }
 
   /** Render the rows for `items`. */
@@ -853,12 +895,11 @@ class ForList<T, K> {
    * One listener per event type on the list's parent: the row is the
    * parent's child the event came through, its handler the one of the
    * innermost element with a handler for the type. `holes[i]` holds the
-   * element `hs[i]` handles.
+   * element `hs[i]` handles. An event that does not bubble (`capture`, as the compiler
+   * marks it) still passes the parent on its way down: it is caught there.
    */
-  private listen(type: string, holes: number[], hs: ((item: T) => (e: Event) => void)[]): void {
+  private listen(type: string, holes: number[], hs: ((item: T) => (e: Event) => void)[], capture: boolean): void {
     const parent = this.parent;
-    // An event that does not bubble still passes the parent on its way down: it is caught there.
-    const capture = NO_BUBBLE.has(type);
     const fn = (ev: Event): void => {
       // Climb from the target to the parent's child, keeping the path:
       // path[0] is the innermost element.
@@ -895,28 +936,19 @@ class ForList<T, K> {
     parent.addEventListener(type, fn, capture);
     this.listeners.push([type, fn, capture]);
   }
+  /** The delegated listeners, for `destroy`. */
+  readonly listeners: [string, (ev: Event) => void, boolean][] = [];
 }
 
-/** Events that do not bubble, which a list delegates in the capture phase. */
-const NO_BUBBLE = new Set([
-  "focus",
-  "blur",
-  "mouseenter",
-  "mouseleave",
-  "pointerenter",
-  "pointerleave",
-  "load",
-  "error",
-  "scroll",
-  "scrollend",
-  "toggle",
-  "invalid",
-  "play",
-  "pause",
-  "ended",
-  "volumechange",
-  "timeupdate",
-]);
+/**
+ * List `l`'s owner is disposed (a slot replaced it, or `attach`'s disposer ran): its rows
+ * leave, its listeners go, and its selectors forget it. Reached only through `ownList`.
+ */
+function destroy(l: ForList<unknown, unknown>): void {
+  l.list.clear();
+  for (const [type, fn, capture] of l.listeners) l.parent.removeEventListener(type, fn, capture);
+  for (const sel of l.sels) sel.lists.splice(sel.lists.indexOf(l), 1);
+}
 
 /**
  * A `<For>` whose rows hold mounts (see `ForSpec.mounts`). Each row gets an owner; its mounts
@@ -933,7 +965,7 @@ class MountList<T, K> extends ForList<T, K> {
   }
   protected override create(item: T): Row<T> {
     const e = super.create(item) as MountRow<T>;
-    e.own = new Owner();
+    e.own = new Root();
     this.mount(e);
     return e;
   }
@@ -941,17 +973,17 @@ class MountList<T, K> extends ForList<T, K> {
     const fresh = e.item !== item;
     super.update(e, item);
     if (fresh) {
-      (e as MountRow<T>).own.clean();
+      clean((e as MountRow<T>).own);
       this.mount(e as MountRow<T>);
     }
   }
   protected override dispose(e: Row<T>): void {
     super.dispose(e);
-    (e as MountRow<T>).own.clean();
+    clean((e as MountRow<T>).own);
   }
   private mount(e: MountRow<T>): void {
     const ms = this.spec.mounts!;
-    within(e.own, () => {
+    Owned.within(e.own, () => {
       for (let i = 0; i < ms.length; i++) ms[i]![1](e.item, this.node(e, ms[i]![0]));
     });
   }
@@ -962,8 +994,8 @@ class MountList<T, K> extends ForList<T, K> {
 // #region What compiled code calls
 
 /** Internal: a template from markup strings and hole markers (@reactre/compiler). */
-export function __template(strings: readonly string[], holes: readonly number[], svg?: boolean): Template {
-  return new Template(strings, holes, svg);
+export function __template(strings: readonly string[], holes: readonly number[], svg?: boolean): Prototype {
+  return new Prototype(strings, holes, svg);
 }
 
 /** Internal: a `<For>` in `parent`, before `anchor` (null: the list is the parent's only content). */
@@ -978,10 +1010,11 @@ export function __forMount<T, K>(parent: Element, anchor: Node | null, spec: For
 
 /** Render list `l` now and whenever `spec.each` changes; it is destroyed with the current owner. */
 function start<T, K>(l: ForList<T, K>, spec: ForSpec<T, K>): void {
-  if (owner !== null) onCleanup(() => l.destroy());
+  // A current owner means ownership is installed, and `ownList` with it.
+  if (owner !== null) ownList!(l as ForList<unknown, unknown>);
   // Rendering the rows reads the rows' items, not what the rows read: only
   // `each` is this effect's dependency.
-  effect(() => {
+  track(() => {
     const items = spec.each();
     untrack(() => l.render(items));
   });
@@ -1019,10 +1052,10 @@ export function __insert(anchor: Node, value: unknown, prev: Node[] | null): Nod
 }
 
 /** Internal: a hole whose value may change: written now and whenever what it reads changes. */
-export function __bind(t: Template, hole: number, node: Node, value: () => unknown): void {
+export function __bind(t: Prototype, hole: number, node: Node, value: () => unknown): void {
   // NONE matches no value, so the first run writes even undefined.
   let last: unknown = NONE;
-  effect(() => {
+  track(() => {
     const v = value();
     if (v !== last) {
       last = v;
@@ -1041,11 +1074,12 @@ export function __slot(anchor: Node, value: () => unknown): void {
       if (prev !== null) for (const n of prev) n.parentNode?.removeChild(n);
       prev = null;
     });
-  effect(() => {
+  // Owned: each run disposes what the last run's content made.
+  new Owned(() => {
     // Only `value()` is this effect's dependency; inserting is untracked.
     const v = value();
     prev = untrack(() => __insert(anchor, v, prev));
-  });
+  }).run();
 }
 
 /**
@@ -1072,7 +1106,7 @@ export function __frag(kids: readonly unknown[]): Node[] {
  */
 export function __apply(node: Node, set: (node: Node, v: unknown, prev: unknown) => void, value: () => unknown): void {
   let prev: unknown;
-  effect(() => {
+  track(() => {
     const v = value();
     set(node, v, prev);
     prev = v;
@@ -1157,7 +1191,7 @@ function prop(el: Element, k: string, v: unknown, old: unknown): void {
  */
 export function __on(node: Node, type: string, value: () => unknown): void {
   let h: unknown = null;
-  effect(() => {
+  track(() => {
     h = value();
   });
   node.addEventListener(type, function (this: Node, e: Event) {
@@ -1166,16 +1200,15 @@ export function __on(node: Node, type: string, value: () => unknown): void {
 }
 
 /** The "no value yet" sentinel of `__bind`. */
-const NONE = Symbol("none");
+const NONE = /* @__PURE__ */ Symbol("none");
 
 // #endregion
 
 // #region Rendering
 
 /**
- * Render the component `view` into `parent`, after what it holds. Components run once.
- * Returns a function that disposes the view: its effects stop, its cleanups
- * run, and its nodes leave `parent`.
+ * Render the component `view` into `parent`, after what it holds, for good. Components run
+ * once. Use `attach` for a view you will take out again.
  *
  * The component's own body is untracked: a signal it reads directly does not
  * re-run it. Only the holes and slots inside the markup follow signals.
@@ -1185,18 +1218,33 @@ const NONE = Symbol("none");
  *   const App = () => <button onClick={() => setCount((c) => c + 1)}>{count()}</button>;
  *   render(App, document.body);
  */
-export function render(view: () => unknown, parent: Element): () => void {
-  // An empty text node marks where the content goes, after existing children.
-  const anchor = document.createTextNode("");
-  parent.appendChild(anchor);
-  // The view's effects belong to one root, which the returned function disposes.
-  const root = new Owner();
-  const nodes = within(root, () => __insert(anchor, view(), null));
+export function render(view: () => unknown, parent: Element): void {
+  __insert(at(parent), untrack(view), null);
+}
+
+/**
+ * `render`, returning a function that disposes the view: its effects stop, its cleanups run,
+ * and its nodes leave `parent`. The view's effects belong to one owner, so an app that uses it
+ * includes ownership (about 0.3 KB gzipped; see the README).
+ *
+ * @example
+ *   const dispose = attach(App, document.body);
+ *   dispose(); // the page is as before
+ */
+export function attach(view: () => unknown, parent: Element): () => void {
+  const anchor = at(parent);
+  const root = new Root();
+  const nodes = Owned.within(root, () => __insert(anchor, view(), null));
   return () => {
     root.dispose();
     if (nodes !== null) for (const n of nodes) n.parentNode?.removeChild(n);
     anchor.parentNode?.removeChild(anchor);
   };
+}
+
+/** An empty text node appended to `parent`: where a view goes, after what `parent` holds. */
+function at(parent: Element): Text {
+  return parent.appendChild(document.createTextNode(""));
 }
 
 /**

@@ -3,3 +3,4 @@ node_modules/
 packages/*/dist/
 apps/jfb/.cache/
 apps/profiling/.cache/
+packages/core/.cache/

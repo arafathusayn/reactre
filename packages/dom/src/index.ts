@@ -250,9 +250,9 @@ export type BlockOf<T> = T extends Template<infer V> ? Block<V> : never;
 type Path = readonly number[];
 
 // Marks a hole whose current value is unknown, so its next set always writes.
-const UNSET: unique symbol = Symbol("unset");
+const UNSET: unique symbol = /* @__PURE__ */ Symbol("unset");
 // Caches a lazily created block on its element.
-const BLOCK: unique symbol = Symbol("@reactre/dom.block");
+const BLOCK: unique symbol = /* @__PURE__ */ Symbol("@reactre/dom.block");
 
 /**
  * A block obtained from `Template.block` for an element made by `mountRoot`:
@@ -264,7 +264,7 @@ type Locator = (root: Node, out: unknown[]) => void;
 
 // Compiled templates by call site: a tag function receives the same strings
 // array every time one call site runs.
-const cache = new WeakMap<TemplateStringsArray, Template<readonly unknown[]>>();
+const cache = /* @__PURE__ */ new WeakMap<TemplateStringsArray, Template<readonly unknown[]>>();
 // The end of a static string whose hole is an attribute value: the name, `=`,
 // and an optional opening quote.
 const ATTR_HOLE = /([^\s"'=<>/]+)\s*=\s*(["']?)$/;
@@ -330,13 +330,13 @@ export function svg<const H extends readonly number[]>(
 // #region Template
 
 /**
- * A compiled template. Make instances with `mount`.
- *
- * It owns a parsed prototype element. Mounting writes the instance's values
- * into the prototype (where they differ from the last ones) and deep-clones
- * it, so text, classes and attributes arrive with the clone.
+ * The part of a template that clones: the parsed prototype element, its holes' kinds, names
+ * and paths, `clone`, `locate`, `locator` and `write`. For layers that keep their own
+ * per-instance state and generate correct markup (@reactre/core's compiled templates): it does
+ * not check hole markers against their positions, and has no `mount` or blocks, so a bundle
+ * that uses only this class leaves those out. Most code wants `Template`.
  */
-export class Template<V extends readonly unknown[] = readonly unknown[]> {
+export class Prototype<V extends readonly unknown[] = readonly unknown[]> {
   /** Number of holes. */
   readonly n: number;
   /** Runtime kind code of each hole. */
@@ -345,16 +345,17 @@ export class Template<V extends readonly unknown[] = readonly unknown[]> {
   readonly names: readonly (string | undefined)[];
   /** Fills out[0, n) with the hole nodes under a clone of this template. */
   readonly locate: Locator;
-  private readonly root: Element;
+  protected readonly root: Element;
   // The prototype's own hole nodes and the values last written into them.
   private readonly proto: unknown[];
-  private readonly paths: readonly Path[];
+  protected readonly paths: readonly Path[];
 
   /**
    * Parse the markup and locate its holes.
    *
    * @param strings The static parts of the markup, one more than the holes.
-   * @param holes Each hole's marker (negative) or untyped index (>= 0); checked against its position.
+   * @param holes Each hole's marker (negative) or untyped index (>= 0). Only the slot marker
+   *   is read: a slot sits where text does, so position alone cannot tell it.
    * @param svg Parse the markup inside an `<svg>` element.
    */
   constructor(strings: readonly string[], holes: readonly number[] = [], svg = false) {
@@ -400,27 +401,7 @@ export class Template<V extends readonly unknown[] = readonly unknown[]> {
     const names: (string | undefined)[] = new Array(n);
     const paths: (Path | undefined)[] = new Array(n);
     walk(root, [], paths, this.kinds, names);
-    for (let i = 0; i < n; i++) {
-      if (!paths[i]) throw new Error(`@reactre/dom: hole ${i} could not be located`);
-      // A typed marker must sit where its kind says. Checked once per template.
-      const h = holes[i];
-      if (h === undefined || h >= 0) continue;
-      const k = this.kinds[i]!,
-        at = k === PROP && names[i]!.startsWith("on") ? EVENT : k;
-      // A slot is the one kind position alone cannot tell: it sits where text does.
-      if (h === -1 - SLOT && at === TEXT) this.kinds[i] = SLOT;
-      else if (-1 - h !== at) {
-        const want = MARKER_NAMES[-1 - h] ?? "unknown",
-          got = MARKER_NAMES[at] ?? "unknown",
-          hint =
-            at === EVENT
-              ? ": an on* name takes on()"
-              : at === ATTR && names[i] === "class"
-                ? ": class on an SVG element is an attribute, use attr()"
-                : "";
-        throw new Error(`@reactre/dom: hole ${i} is typed ${want}, but its position makes it ${got}${hint}`);
-      }
-    }
+    for (let i = 0; i < n; i++) if (holes[i] === -1 - SLOT && this.kinds[i] === TEXT) this.kinds[i] = SLOT;
     this.names = names;
     this.root = root as Element;
     this.paths = paths as Path[];
@@ -430,6 +411,85 @@ export class Template<V extends readonly unknown[] = readonly unknown[]> {
     this.locate(root, this.proto);
     // What the parsed prototype holds: empty text and class, absent attributes.
     for (let i = 0; i < n; i++) this.proto[n + i] = this.kinds[i] === ATTR ? null : "";
+  }
+
+  /**
+   * Bake `vals` into the prototype and deep-clone it. The clone holds the
+   * text, class and attribute values; property and slot holes are left for
+   * the caller (`mount` sets properties). For layers that keep their own
+   * per-instance state; most code wants `mount` or `mountRoot`.
+   */
+  clone(vals: V): Element {
+    const n = this.n,
+      kinds = this.kinds,
+      names = this.names,
+      proto = this.proto;
+    for (let i = 0; i < n; i++) {
+      const v = vals[i];
+      // Consecutive instances often share values (an empty class, say): only
+      // a value that differs from the prototype's costs a DOM write.
+      if (kinds[i] !== PROP && kinds[i] !== SLOT && proto[n + i] !== v) {
+        proto[n + i] = v;
+        apply(kinds[i] as KindCode, names[i], proto[i] as Node, v);
+      }
+    }
+    return this.root.cloneNode(true) as Element;
+  }
+
+  /**
+   * A locator like `locate` that finds only the given holes: it writes
+   * out[i] for each i in `holes` and leaves the other entries alone, so a
+   * layer can look up the nodes it needs at mount and the rest later.
+   */
+  locator(holes: readonly number[]): (root: Node, out: unknown[]) => void {
+    const sub: (Path | undefined)[] = new Array(this.n);
+    for (const i of holes) sub[i] = this.paths[i];
+    return compileLocator(sub);
+  }
+
+  /** Write value `v` into `node`, hole i's node under a clone (see `locate`), by the hole's kind. */
+  write(i: number, node: Node, v: unknown): void {
+    apply(this.kinds[i] as KindCode, this.names[i], node, v);
+  }
+}
+
+/**
+ * A compiled template. Make instances with `mount`.
+ *
+ * It owns a parsed prototype element. Mounting writes the instance's values
+ * into the prototype (where they differ from the last ones) and deep-clones
+ * it, so text, classes and attributes arrive with the clone.
+ */
+export class Template<V extends readonly unknown[] = readonly unknown[]> extends Prototype<V> {
+  /**
+   * Parse the markup and locate its holes, checking each typed marker against its position.
+   *
+   * @param strings The static parts of the markup, one more than the holes.
+   * @param holes Each hole's marker (negative) or untyped index (>= 0); checked against its position.
+   * @param svg Parse the markup inside an `<svg>` element.
+   */
+  constructor(strings: readonly string[], holes: readonly number[] = [], svg = false) {
+    super(strings, holes, svg);
+    for (let i = 0; i < this.n; i++) {
+      if (!this.paths[i]) throw new Error(`@reactre/dom: hole ${i} could not be located`);
+      // A typed marker must sit where its kind says. Checked once per template.
+      const h = holes[i];
+      if (h === undefined || h >= 0) continue;
+      const k = this.kinds[i]!,
+        at = k === PROP && this.names[i]!.startsWith("on") ? EVENT : k;
+      // A slot is the one kind position alone cannot tell (the prototype took it where text is).
+      if (-1 - h !== at) {
+        const want = MARKER_NAMES[-1 - h] ?? "unknown",
+          got = MARKER_NAMES[at] ?? "unknown",
+          hint =
+            at === EVENT
+              ? ": an on* name takes on()"
+              : at === ATTR && this.names[i] === "class"
+                ? ": class on an SVG element is an attribute, use attr()"
+                : "";
+        throw new Error(`@reactre/dom: hole ${i} is typed ${want}, but its position makes it ${got}${hint}`);
+      }
+    }
   }
 
   /**
@@ -487,48 +547,9 @@ export class Template<V extends readonly unknown[] = readonly unknown[]> {
     return b;
   }
 
-  /**
-   * Bake `vals` into the prototype and deep-clone it. The clone holds the
-   * text, class and attribute values; property and slot holes are left for
-   * the caller (`mount` sets properties). For layers that keep their own
-   * per-instance state; most code wants `mount` or `mountRoot`.
-   */
-  clone(vals: V): Element {
-    const n = this.n,
-      kinds = this.kinds,
-      names = this.names,
-      proto = this.proto;
-    for (let i = 0; i < n; i++) {
-      const v = vals[i];
-      // Consecutive instances often share values (an empty class, say): only
-      // a value that differs from the prototype's costs a DOM write.
-      if (kinds[i] !== PROP && kinds[i] !== SLOT && proto[n + i] !== v) {
-        proto[n + i] = v;
-        apply(kinds[i] as KindCode, names[i], proto[i] as Node, v);
-      }
-    }
-    return this.root.cloneNode(true) as Element;
-  }
-
-  /**
-   * A locator like `locate` that finds only the given holes: it writes
-   * out[i] for each i in `holes` and leaves the other entries alone, so a
-   * layer can look up the nodes it needs at mount and the rest later.
-   */
-  locator(holes: readonly number[]): (root: Node, out: unknown[]) => void {
-    const sub: (Path | undefined)[] = new Array(this.n);
-    for (const i of holes) sub[i] = this.paths[i];
-    return compileLocator(sub);
-  }
-
   /** The kind of hole i, from its position (and its marker, for a slot). */
   kind(i: number): HoleKind {
     return KIND_NAMES[this.kinds[i]!]!;
-  }
-
-  /** Write value `v` into `node`, hole i's node under a clone (see `locate`), by the hole's kind. */
-  write(i: number, node: Node, v: unknown): void {
-    apply(this.kinds[i] as KindCode, this.names[i], node, v);
   }
 
   // Whether any property hole has a value. Properties do not survive cloning.

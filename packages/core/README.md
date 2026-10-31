@@ -2,7 +2,7 @@
 
 A tiny, fast UI library for the web. You write components in TSX over signals.
 
-- **Small.** About 7.5 KB minified and gzipped, with no third-party dependencies.
+- **Small.** About 6 KB minified and gzipped (7 KB with every feature), with no third-party dependencies, and an app ships only what it uses ([what an app ships](#what-an-app-ships)).
 - **Fine-grained.** No virtual DOM and no tree diffing: components run once, and a signal's readers update.
 - **Fast lists.** A keyed list reuses rows and makes the fewest DOM moves. Selecting one row out of thousands touches two.
 - **Typed.** Template holes carry their value types, and the types cost nothing at runtime.
@@ -133,7 +133,21 @@ The template is parsed once. `mount` clones it with values for its holes, in ord
 | `selector(source)`   | `isSelected(key)`, where a change of selection re-runs only the readers of the old and new key. |
 | `onCleanup(fn)`      | Runs `fn` when the effect, component or row it was called in re-runs or goes away.              |
 | `<For each key>`     | A keyed list in TSX.                                                                            |
-| `render(view, root)` | Mounts a TSX view into an element. Returns a function that removes it and stops its effects.    |
+| `render(view, root)` | Mounts a TSX view into an element, for good.                                                    |
+| `attach(view, root)` | `render`, returning a function that removes the view and stops its effects.                     |
+
+## What an app ships
+
+An app ships only what it uses. With a bundler that tree-shakes (all of the plugin's do), two parts of the runtime come only when the app needs them:
+
+| Feature                         | How it comes                                                                                                                                                                                                           | Cost, gzipped | Without it                                                                                                                                                                                                                         |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Ownership                       | By use: `effect`, `memo`, a slot (a JSX expression that may change, `{cond() ? <A /> : <B />}`), a fragment, a row holding components, lists or slots, or `attach`. Nothing to turn on.                                |        0.3 KB | Nothing in the app needs it: with none of those, no effect is ever made inside another's run, so there is nothing to dispose.                                                                                                      |
+| Rows with several selector keys | `import "@reactre/core/features/selectors"`. The compiler adds the import itself to a file whose `<For>` row makes two or more calls with arguments in its reactive holes (`isSelected(row.id)`, `isHovered(row.id)`). |       0.16 KB | A row that reads a second selector key, or the same selector with a second key, throws an error naming the import. Only a row that reads the keys through a function of its own (`class={classes(row)}`) needs the import by hand. |
+
+Ownership is what makes `effect` own the effects and cleanups its run makes, a slot dispose its old content, a row dispose what it holds when it leaves, and `attach` return a disposer. `onCleanup` itself costs a few bytes: called where nothing owns (at module scope, in a view given to `render`), it does nothing.
+
+The js-framework-benchmark app (`apps/jfb/app/reactre.tsx`, a keyed list with a selector and delegated handlers) comes to 6.6 KB gzipped (6,726 bytes, app included), against 6,871 bytes for 0.0.2, which had neither feature. The whole package, with every feature, is 7.0 KB. [`sizes.json`](sizes.json) holds the budgets that `test/features.test.ts` checks.
 
 ## Browsers and bundlers
 

@@ -10,18 +10,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 - Changed: each export's `types` condition names a declaration file in `dist/` (`dist/index.d.ts`, `dist/features/*.d.ts`, ...), written by the build, not the TypeScript source. A project that imports reactre type-checks its declarations under its own settings, `skipLibCheck: false` included, with `moduleResolution` `bundler`, `node16` or `nodenext`; before, its compiler read reactre's sources and failed on their `.ts` imports unless it set `allowImportingTsExtensions`. Bun still runs the sources, through the `bun` condition.
 
+### @reactre/dom
+
+- Added: `Prototype`, the part of `Template` that clones: parsing, `clone`, `locate`, `locator` and `write`, without `mount`, blocks or the check of hole markers against their positions. `Template` extends it and is unchanged. @reactre/core's compiled templates use it, so an app built with reactre's compiler ships neither `Block` nor the checks (about 0.4 KB gzipped).
+
 ### @reactre/core
 
 - Added: JSX types for reactre's TSX. With `"jsxImportSource": "@reactre/core"`, TypeScript checks every HTML and SVG element's attributes, `on*` handlers by their event's type, children, and `<For>`'s rows by the type of `each`. `style` takes a string or an object of CSS properties, and `ref` a function or an object typed by the element. What the compiler cannot compile is a type error: a function as an attribute or a child, a capture handler, children of a void element.
 - Added: `@reactre/core/jsx-runtime` and `@reactre/core/jsx-dev-runtime`, where TypeScript finds those types. Their `jsx` functions throw, naming the compiler: compiled TSX never calls them.
 - Added: `onCleanup(fn)`. Each effect run owns the effects and cleanups it makes, and disposes them before it runs again. A slot that replaces its content (`{cond() ? <A /> : <B />}`) now stops the old content's effects; before, they stayed subscribed and wrote to detached nodes.
-- Added: `render` returns a function that removes the view and stops its effects.
+- Added: `attach(view, parent)`, `render` returning a function that removes the view and stops its effects. `render` itself returns nothing, as in 0.0.2.
 - Added: a `<For>` row can hold components, nested `<For>` lists and JSX expressions. They belong to the row: a new item for the row's key builds them again, and they are disposed when the row leaves. Before, these were compile errors.
-- Fixed: a `<For>` row that reads two selectors, or one selector with two keys, follows all of them. Before, it followed only the last one it read.
+- Fixed: a `<For>` row that reads two selectors, or one selector with two keys, follows all of them, with `@reactre/core/features/selectors`, which @reactre/compiler imports for a row whose reactive holes make two or more calls with arguments. Without the module, the row's second key throws an error naming it. Before, the row followed only the last key it read.
 - Fixed: an effect outside a list that stops asking a selector about a key no longer re-runs when that key gains or loses the selection.
 - Fixed: a batch that queues many effects takes time linear in their number; before, queueing searched the queue each time.
 - Changed: an effect that writes a signal it reads runs again after its run ends instead of inside it, and throws after 100 runs in a row. Before, it recursed until the stack overflowed.
-- Fixed: a `<For>` row's `onFocus`, `onBlur` and other handlers for events that do not bubble are called. The list's listener for them now listens in the capture phase.
+- Fixed: a `<For>` row's `onFocus`, `onBlur` and other handlers for events that do not bubble are called. The list's listener for them now listens in the capture phase, as the compiler marks them.
+- Changed: an app ships only the runtime it uses. Ownership (`onCleanup`'s owners, slots that dispose their content, rows that hold components, `attach`) comes with `effect`, `memo`, a slot, a fragment, a row with components, lists or slots, or `attach`; an app with none of them leaves it out, as it has nothing to dispose. The js-framework-benchmark app's bundle is 6,726 bytes gzipped, from 7,773 before and 6,871 in 0.0.2; the whole package, every feature in, is 7,008. `test/features.test.ts` checks each profile against `sizes.json`.
 
 ### @reactre/compiler
 
@@ -29,7 +34,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Fixed: an SVG element at the root of a template (a component that returns `<g>` or `<circle>`) gets the SVG namespace, and `class` inside SVG is set as an attribute.
 - Fixed: `value`, `checked` and `selected` that are not literals are set as properties, so they show the state after the user has typed or clicked.
 - Fixed: a handler outside a list whose expression reads a signal (`onClick={editing() ? save : edit}`) follows it. Before, it was bound once. A function literal is still bound once.
-- Changed: a file that uses none of these compiles to the same code as before.
+- Changed: a file that uses none of these compiles to the same code as before, except that a `<For>` row's handler for an event that does not bubble is marked for the capture phase, and a row that makes two or more calls with arguments in its reactive holes imports `@reactre/core/features/selectors`.
 - Added: `compileJsWithMap`, `compileJs` with a version 3 source map back to its input, and `@reactre/compiler/map`, which @reactre/compat/compiler shares. The code is `compileJs`'s, byte for byte.
 
 ### @reactre/full-compat

@@ -18,16 +18,19 @@ beforeEach(installFakeDocument);
 // and run it with the runtime, `root` in scope.
 function run<T>(src: string, root: FakeElement): T {
   // new Function cannot import: each `import { a, b as c } from "@reactre/core"`
-  // becomes `const` bindings to the runtime passed in as `rr`.
-  const js = compileSource(src).replace(/^import \{([^}]*)\} from "@reactre\/core";$/gm, (_, names: string) =>
-    names
-      .split(",")
-      .map((n) => {
-        const [a, b] = n.trim().split(" as ");
-        return `const ${b ?? a} = rr.${a};`;
-      })
-      .join("\n"),
-  );
+  // becomes `const` bindings to the runtime passed in as `rr`, and a feature module's import its
+  // install call.
+  const js = compileSource(src)
+    .replace(/^import \{([^}]*)\} from "@reactre\/core";$/gm, (_, names: string) =>
+      names
+        .split(",")
+        .map((n) => {
+          const [a, b] = n.trim().split(" as ");
+          return `const ${b ?? a} = rr.${a};`;
+        })
+        .join("\n"),
+    )
+    .replace(/^import "@reactre\/core\/features\/selectors";$/gm, "rr.__installSelectors();");
   return new Function("rr", "root", js)(runtime, root) as T;
 }
 
@@ -783,19 +786,21 @@ describe("reactre: ownership", () => {
     expect(html(root)).toBe("<div><b>2</b></div>");
   });
 
-  test("render returns a function that disposes the view; onCleanup outside any owner is ignored", () => {
+  test("attach returns a function that disposes the view; onCleanup outside any owner is ignored", () => {
     const root = box();
     const api = run<{ setN: (n: number) => void; dispose: () => void; runs: () => number }>(
       `
-      import { effect, onCleanup, render, signal } from "@reactre/core";
+      import { attach, effect, onCleanup, render, signal } from "@reactre/core";
       const [n, setN] = signal(0);
       let runs = 0;
       onCleanup(() => { throw new Error("never"); });
+      // render keeps its view for good, and returns nothing.
+      if (render(() => <i />, root) !== undefined) throw new Error("render returned something");
       function App() {
         effect(() => void (n(), runs++));
         return <p>{n()}</p>;
       }
-      const dispose = render(App, root);
+      const dispose = attach(App, root);
       return { setN, dispose, runs: () => runs };
     `,
       root,

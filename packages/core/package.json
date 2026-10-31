@@ -23,7 +23,10 @@
   "license": "Apache-2.0",
   "author": "Arafat Husayn",
   "type": "module",
-  "sideEffects": false,
+  "sideEffects": [
+    "./src/features/*.ts",
+    "./dist/features/*.js"
+  ],
   "exports": {
     ".": {
       "reactre-source": "./src/index.ts",
@@ -42,6 +45,12 @@
       "types": "./dist/jsx-dev-runtime.d.ts",
       "bun": "./src/jsx-dev-runtime.ts",
       "default": "./dist/jsx-dev-runtime.js"
+    },
+    "./features/*": {
+      "reactre-source": "./src/features/*.ts",
+      "types": "./dist/features/*.d.ts",
+      "bun": "./src/features/*.ts",
+      "default": "./dist/features/*.js"
     }
   },
   "files": [
@@ -49,7 +58,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/index.ts src/jsx-runtime.ts src/jsx-dev-runtime.ts --outdir dist --target browser --format esm --packages external && bun ../../scripts/declarations.ts"
+    "build": "rm -rf dist && bun build src/index.ts src/jsx-runtime.ts src/jsx-dev-runtime.ts src/features/selectors.ts --outdir dist --target browser --format esm --packages external && bun ../../scripts/declarations.ts"
   },
   "dependencies": {
     "@reactre/dom": "workspace:*"

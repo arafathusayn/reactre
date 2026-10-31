@@ -21,7 +21,9 @@
 //     elements and values (a component, a nested list, a JSX expression, a
 //     property, a style, a ref or a spread) becomes a `__forMount` list, whose
 //     rows own what those parts create; a row of host elements and values
-//     compiles as before.
+//     compiles as before. A row whose reactive holes make two or more calls
+//     with arguments may read two selector keys: the file imports
+//     @reactre/core/features/selectors.
 //   - A component element `<Button id="run" />` is the call `Button({ id: "run" })`,
 //     made once (components run once in reactre).
 //   - A fragment's children join the parent's template; a fragment that is
@@ -234,7 +236,8 @@ function compile(js: string, map: boolean): string {
   let names = `__template as __rrT, __for as __rrFor, __insert as __rrInsert, __bind as __rrBind, __slot as __rrSlot, untrack as __rrUntrack`;
   for (const [name, alias] of EXTRA_HELPERS)
     if (new RegExp(`\\b${alias}\\b`).test(code)) names += `, ${name} as ${alias}`;
-  return `import { ${names} } from "@reactre/core";\n` + code;
+  const features = c.selectors ? `import "@reactre/core/features/selectors";\n` : "";
+  return `${features}import { ${names} } from "@reactre/core";\n` + code;
 }
 
 /** @reactre/core's helpers for the newer constructs, with their local names. */
@@ -259,6 +262,8 @@ class Compiler {
   readonly fragments: Set<string>;
   /** Module-scope template declarations, in the order they were made. */
   readonly templates: string[] = [];
+  /** Whether a row may read several selector keys, so the file imports @reactre/core/features/selectors. */
+  selectors = false;
   /** Whether the output carries marks for a source map (./map.ts). */
   readonly map: boolean;
   constructor(helpers: Set<string>, fragments: Set<string> = new Set(), map = false) {
@@ -733,9 +738,13 @@ class Compiler {
       dynHoles: number[] = [],
       events: string[] = [],
       mounts: string[] = [];
+    // Calls with arguments in the reactive holes: a selector is read as one (`isSelected(row.id)`).
+    let keyCalls = 0;
     t.holes.forEach((h, i) => {
       if (h.kind === "event") {
-        events.push(`[${JSON.stringify(h.type)}, ${i}, (${param}) => (${this.rewrite(h.expr, h.at)})]`);
+        // An event that does not bubble is caught in the capture phase: the 1 says so.
+        const capture = NO_BUBBLE.has(h.type) ? ", 1" : "";
+        events.push(`[${JSON.stringify(h.type)}, ${i}, (${param}) => (${this.rewrite(h.expr, h.at)})${capture}]`);
         return;
       }
       if (h.kind === "slot") {
@@ -753,6 +762,7 @@ class Compiler {
       }
       const e = this.rewrite(h.expr, h.at);
       if (reactive(h.expr)) {
+        keyCalls += callsWithArguments(h.expr);
         dyn.push(`__d[${dynHoles.length}] = (${e});`);
         dynHoles.push(i);
       } else {
@@ -768,6 +778,8 @@ class Compiler {
       (events.length ? `, events: [${events.join(", ")}]` : "") +
       (mounts.length ? `, mounts: [${mounts.join(", ")}]` : "") +
       " }";
+    // A row that may read two selector keys needs the runtime's support for several.
+    if (keyCalls > 1) this.selectors = true;
     // Only a row with mounts takes the list that runs them: a row of host elements and values
     // costs what it always has.
     const call = mounts.length ? "__rrForM" : "__rrFor";
@@ -805,32 +817,7 @@ class Compiler {
  * after a name, a literal, `)` or `]`; anywhere else it only groups.
  */
 function reactive(expr: string): boolean {
-  let prev = "",
-    word = "";
-  for (let i = 0; i < expr.length;) {
-    const j = skipToken(expr, i, prev, word);
-    if (j !== i) {
-      i = j;
-      prev = "a";
-      continue;
-    }
-    const c = expr[i]!;
-    if (c === "(" && (isIdent(prev) || prev === ")" || prev === "]" || prev === "a")) return true;
-    if (isIdent(c)) {
-      let e = i;
-      while (isIdent(expr[e])) e++;
-      word = expr.slice(i, e);
-      prev = "a";
-      i = e;
-      continue;
-    }
-    if (!/\s/.test(c)) {
-      prev = c;
-      word = "";
-    }
-    i++;
-  }
-  return false;
+  return callAt(expr, 0) >= 0;
 }
 
 /**
@@ -848,6 +835,59 @@ function isFunction(expr: string): boolean {
     .trimStart()
     .startsWith("=>");
 }
+
+/**
+ * The calls with arguments in an expression: `isSelected(row.id)` is one, `count()` none. The
+ * count is of the expression's own text, so a call inside a function it calls is not seen.
+ */
+function callsWithArguments(expr: string): number {
+  let n = 0;
+  for (let i = 0; i < expr.length;) {
+    const j = callAt(expr, i);
+    if (j < 0) break;
+    if (expr.slice(j + 1).trimStart()[0] !== ")") n++;
+    i = j + 1;
+  }
+  return n;
+}
+
+/** Where the next call's `(` is in `expr`, from `from`, as `reactive` finds calls; -1 for none. */
+function callAt(expr: string, from: number): number {
+  let prev = "",
+    word = "";
+  for (let i = from; i < expr.length;) {
+    const j = skipToken(expr, i, prev, word);
+    if (j !== i) {
+      i = j;
+      prev = "a";
+      continue;
+    }
+    const c = expr[i]!;
+    if (c === "(" && (isIdent(prev) || prev === ")" || prev === "]" || prev === "a")) return i;
+    if (isIdent(c)) {
+      let e = i;
+      while (isIdent(expr[e])) e++;
+      word = expr.slice(i, e);
+      prev = "a";
+      i = e;
+      continue;
+    }
+    if (!/\s/.test(c)) {
+      prev = c;
+      word = "";
+    }
+    i++;
+  }
+  return -1;
+}
+
+/** Events that do not bubble, which a list delegates in the capture phase. */
+const NO_BUBBLE = new Set(
+  (
+    "focus blur mouseenter mouseleave pointerenter pointerleave load error scroll scrollend toggle " +
+    "invalid play pause ended volumechange timeupdate"
+  ).split(" "),
+);
 
 /** Text escaped for markup between tags. */
 const text = (s: string): string => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
