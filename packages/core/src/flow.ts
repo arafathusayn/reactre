@@ -191,3 +191,5 @@ export function __class(v: unknown): string {
 }
 
 // #endregion
+
+export * from "./props.ts";

@@ -162,7 +162,8 @@ describe("compile errors", () => {
 
 describe("output", () => {
   test("a <Show> whose when calls nothing has no memo; one standing alone is a fragment's slot", () => {
-    const out = compileSource(withImport("Show", `export const X = (p) => <Show when={p.on}>x</Show>;`));
+    // X is not exported, and no call site passes it `on` reactively: `p.on` is written once.
+    const out = compileSource(withImport("Show", `const X = (p) => <Show when={p.on}>x</Show>;`));
     expect(out).toContain('__rrFrag([((__rrX0) => () => (__rrX0 ? "x" : null))(p.on)])');
     expect(out).not.toContain("__rrMemo");
   });

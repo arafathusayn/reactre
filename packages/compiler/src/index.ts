@@ -69,7 +69,35 @@
 import type { BunPlugin } from "bun";
 
 import { hasMarks, mark, type SourceMapV3, unmark } from "./map.ts";
+import {
+  type Def,
+  findDefs,
+  isFunction,
+  moduleFacts,
+  type PropFacts,
+  propReads,
+  type PropUse,
+  propUse,
+  readsOf,
+  scanModule,
+  scopeAt,
+  touches,
+} from "./program.ts";
 import { isIdent, literal, NOT_LITERAL, skipToken, splitAt, trimAt, until } from "./scan.ts";
+
+export type { PropFacts } from "./program.ts";
+
+/** Options for compiling one file. */
+export interface CompileOptions {
+  /**
+   * The props each component the file defines may be passed reactively, by the component's name
+   * (`@reactre/compiler/program` finds them for a whole program). A component missing from the
+   * map is reactive in every prop. Without the option, the file is seen alone: a component it
+   * neither exports nor uses as a value has all its call sites in it, and any other is reactive in
+   * every prop.
+   */
+  readonly props?: PropFacts;
+}
 
 // #region Plugin
 
@@ -109,14 +137,22 @@ export function reactreCompiler(options: ReactreCompilerOptions = {}): BunPlugin
  * @example
  *   const js = compileSource(`export const A = () => <p class="x">{count()}</p>;`);
  */
-export function compileSource(source: string, loader: "jsx" | "tsx" = "tsx"): string {
+export function compileSource(source: string, loader: "jsx" | "tsx" = "tsx", options?: CompileOptions): string {
+  return compileJs(transpileSource(source, loader), options);
+}
+
+/**
+ * One TSX (or JSX) source as Bun transpiles it for the compiler: TypeScript stripped, JSX turned
+ * into jsx calls. What `compileJs` reads, and what `@reactre/compiler/program` scans.
+ */
+export function transpileSource(source: string, loader: "jsx" | "tsx" | "ts" | "js" = "tsx"): string {
   // jsxImportSource only names the runtime Bun would import; no runtime is imported, because every
   // jsx call is compiled away.
   const t = new Bun.Transpiler({
     loader,
     tsconfig: { compilerOptions: { jsx: "react-jsx", jsxImportSource: "@reactre/core" } },
   } as ConstructorParameters<typeof Bun.Transpiler>[0]);
-  return compileJs(t.transformSync(source));
+  return t.transformSync(source);
 }
 
 // #endregion
@@ -240,8 +276,8 @@ export class ReactreCompileError extends Error {}
  * @throws ReactreCompileError when a jsx or Fragment call is left after compiling (a fragment, or
  *   a call in a place the compiler does not reach).
  */
-export function compileJs(js: string): string {
-  return compile(js, false);
+export function compileJs(js: string, options?: CompileOptions): string {
+  return compile(js, false, options);
 }
 
 /**
@@ -251,15 +287,15 @@ export function compileJs(js: string): string {
  *   is `js`) or holds the characters the map's marks use (see ./map.ts).
  * @throws ReactreCompileError as `compileJs` does.
  */
-export function compileJsWithMap(js: string): { code: string; map: SourceMapV3 | null } {
-  if (hasMarks(js)) return { code: compileJs(js), map: null };
-  const marked = compile(js, true);
+export function compileJsWithMap(js: string, options?: CompileOptions): { code: string; map: SourceMapV3 | null } {
+  if (hasMarks(js)) return { code: compileJs(js, options), map: null };
+  const marked = compile(js, true, options);
   if (marked === js) return { code: js, map: null };
   return unmark(marked, js);
 }
 
 /** `compileJs`, with marks for a source map in the code when `map` is set. */
-function compile(js: string, map: boolean): string {
+function compile(js: string, map: boolean, options: CompileOptions = {}): string {
   // Bun's transpiler names the runtime's helpers with a hash suffix (jsx_w77yafs4, ...); those
   // names are what the compiler looks for.
   const helpers = new Set<string>();
@@ -267,7 +303,14 @@ function compile(js: string, map: boolean): string {
   if (helpers.size === 0) return js;
   const fragments = new Set<string>();
   for (const m of js.matchAll(/\bFragment_[a-z0-9]{8}\b/g)) fragments.add(m[0]);
-  const c = new Compiler(helpers, fragments, map, flowNames(js));
+  // The components the file defines, and which of their props may be passed reactively.
+  let defs: Def[], props: PropFacts;
+  if (options.props !== undefined) [defs, props] = [findDefs(js), options.props];
+  else {
+    const info = scanModule(js);
+    [defs, props] = [[...info.defs], moduleFacts(js, info)];
+  }
+  const c = new Compiler(helpers, fragments, map, flowNames(js), defs, props);
   const body = c.rewrite(js, 0);
   // Nothing may fall back to a JSX runtime, since reactre has none.
   for (const m of body.matchAll(/\b(jsxs|jsx|jsxDEV|Fragment)_[a-z0-9]{8}\b/g)) {
@@ -296,6 +339,7 @@ const EXTRA_HELPERS: readonly (readonly [string, string])[] = [
   ["signal", "__rrSignal"],
   ["onCleanup", "__rrOnCleanup"],
   ["__class", "__rrClass"],
+  ["__props", "__rrProps"],
 ];
 
 /**
@@ -335,16 +379,54 @@ class Compiler {
   private readonly flow: ReadonlyMap<string, Flow>;
   /** Numbers the names control flow declares (`__rrC0`), so nested ones are told apart. */
   private uid = 0;
+  /** The file's components, and the props each may be passed reactively (see `CompileOptions`). */
+  private readonly defs: readonly Def[];
+  private readonly props: PropFacts;
+  /** The components the jsx call being compiled is written in, outermost first. */
+  private scope: readonly Def[] = [];
   constructor(
     helpers: Set<string>,
-    fragments: Set<string> = new Set(),
-    map = false,
-    flow: ReadonlyMap<string, Flow> = new Map(),
+    fragments: Set<string>,
+    map: boolean,
+    flow: ReadonlyMap<string, Flow>,
+    defs: readonly Def[],
+    props: PropFacts,
   ) {
     this.helpers = helpers;
     this.fragments = fragments;
     this.map = map;
     this.flow = flow;
+    this.defs = defs;
+    this.props = props;
+  }
+
+  /**
+   * Whether an expression may change: it calls something (a signal read), or reads a prop that a
+   * call site of the component it is written in may pass reactively.
+   */
+  private changes(expr: string): boolean {
+    return reactive(expr) || this.readsChanging(propReads(expr, this.scope));
+  }
+
+  /**
+   * Whether member reads (`props.title`) read what may change: a prop some call site passes
+   * reactively. Every member read the compiler judges comes here, at call sites and in holes.
+   */
+  private readsChanging(reads: PropUse["reads"]): boolean {
+    return reads.some(([d, r]) => touches(this.props.get(d.name) ?? true, r));
+  }
+
+  /**
+   * Whether an element's child reads `children` from its component's props (`{props.children}`, or
+   * `{children}` from a pattern): content, which may be nodes, so it is inserted, not text.
+   */
+  private readsChildren(expr: string): boolean {
+    for (const d of this.scope) {
+      if (d.param.kind === "pattern") {
+        for (const [local, key] of d.param.locals) if (key === "children" && readsOf(expr, local) !== null) return true;
+      }
+    }
+    return propReads(expr, this.scope).some(([, r]) => r !== true && r.has("children"));
   }
 
   /** The mark for input offset `at`, when the output carries marks and `at` is known; else "". */
@@ -390,7 +472,12 @@ class Compiler {
         // A helper's name as a property (`x.jsx_...(`) is some other function.
         if (this.helpers.has(name) && src[e] === "(" && src[i - 1] !== ".") {
           const close = until(src, e + 1, "");
+          // The components around the call, where it is known: a call compiled from another's
+          // text (at -1) is in the components that one is in.
+          const outer = this.scope;
+          if (at >= 0) this.scope = scopeAt(this.defs, at + i);
           out += this.call(this.parse(src.slice(e + 1, close), src.slice(i, close + 1), at < 0 ? -1 : at + e + 1));
+          this.scope = outer;
           i = close + 1;
           prev = "a";
           word = "";
@@ -467,7 +554,7 @@ class Compiler {
    * or it calls nothing: such a key never changes, so it means nothing.
    */
   private keyed(c: Call): string | null {
-    if (c.key === undefined || !reactive(c.key)) return null;
+    if (c.key === undefined || !this.changes(c.key)) return null;
     return `(${this.rewrite(c.key, c.keyAt)}), ${this.host({ ...c, key: undefined, keyAt: -1 })}`;
   }
 
@@ -499,7 +586,7 @@ class Compiler {
       if (flow !== null)
         kids.push(this.m(at) + ("fn" in flow ? flow.fn : "host" in flow ? this.call(flow.host) : flow.expr));
       else if (inner !== null) kids.push(this.m(at) + this.call(inner));
-      else if (this.hasJsx(child) || reactive(child)) kids.push(`() => (${this.rewrite(child, at)})`);
+      else if (this.hasJsx(child) || this.changes(child)) kids.push(`() => (${this.rewrite(child, at)})`);
       else kids.push(`(${this.rewrite(child, at)})`);
     }
     return `__rrFrag([${kids.join(", ")}])`;
@@ -523,9 +610,44 @@ class Compiler {
   /**
    * `<C a={x} />`: C called once with its props, outside any tracking. Untracked so the signals
    * the component reads while it sets up do not subscribe the effect that happens to create it.
+   * A prop that may change, or holds JSX, is a getter (see `passProps`).
    */
   component(c: Call): string {
-    return `__rrUntrack(() => ${this.m(c.typeAt)}${c.type}(${this.rewrite(c.props, c.propsAt)}))`;
+    const props = this.passProps(this.object(c.props, true, c.propsAt)) ?? this.rewrite(c.props, c.propsAt);
+    return `__rrUntrack(() => ${this.m(c.typeAt)}${c.type}(${props}))`;
+  }
+
+  /**
+   * A component's props object, as Solid passes them: a prop whose expression may change (it calls
+   * something, or reads a prop passed reactively) is a getter, so the component reads it where it
+   * uses it, in a hole that follows it; one that holds JSX (children, mostly) is a getter too, so
+   * it is built when the component reads it, after the component's own code before that. Spread
+   * props are merged by `__props`, which keeps their getters. Null when every prop is a value and
+   * there is no spread: the props are written as they are.
+   */
+  private passProps(entries: readonly [string, string, number][]): string | null {
+    const kinds = entries.map(([k, v]) => {
+      if (k === "...") return "spread";
+      const use = propUse(v, this.helpers, this.scope);
+      if (use.fn) return "value";
+      return use.lazy || use.calls || this.readsChanging(use.reads) ? "getter" : "value";
+    });
+    if (kinds.every((k) => k === "value")) return null;
+    const groups: string[] = [];
+    let group: string[] | null = null;
+    entries.forEach(([k, v, at], i) => {
+      if (kinds[i] === "spread") {
+        if (group !== null) groups.push(`{ ${group.join(", ")} }`);
+        group = null;
+        groups.push(this.rewrite(v.slice(3), at < 0 ? -1 : at + 3));
+        return;
+      }
+      const key = /^[A-Za-z_$][\w$]*$/.test(k) ? k : JSON.stringify(k);
+      const e = this.rewrite(v, at);
+      (group ??= []).push(kinds[i] === "getter" ? `get ${key}() { return ${e}; }` : `${key}: ${e}`);
+    });
+    if (group !== null) groups.push(`{ ${(group as string[]).join(", ")} }`);
+    return kinds.includes("spread") ? `__rrProps(${groups.join(", ")})` : groups[0]!;
   }
 
   /**
@@ -777,6 +899,11 @@ class Compiler {
         else this.hole(t, { kind: "slot", slot: "comp", expr: this.m(at) + flow.expr, only, at: -1 });
       } else if (inner !== null)
         this.hole(t, { kind: "slot", slot: "comp", expr: this.m(at) + this.component(inner), only, at: -1 });
+      // A component's children may be nodes: inserted, and followed when they may change.
+      else if (this.readsChildren(child)) {
+        const expr = this.rewrite(child, at);
+        this.hole(t, { kind: "slot", slot: this.changes(child) ? "expr" : "comp", expr, only, at: -1 });
+      }
       // An expression that holds JSX (a conditional, a map) may change what it renders: a slot.
       else if (this.hasJsx(child))
         this.hole(t, { kind: "slot", slot: "expr", expr: this.rewrite(child, at), only, at: -1 });
@@ -833,7 +960,7 @@ class Compiler {
     const late: string[] = [];
     t.holes.forEach((h, i) => {
       if (h.kind === "value") {
-        if (reactive(h.expr)) {
+        if (this.changes(h.expr)) {
           vals.push('""');
           after.push(`${this.m(h.at)}__rrBind(${id}, ${i}, __n[${i}], () => (${this.value(h)}));`);
         } else vals.push(`(${this.value(h)})`);
@@ -844,7 +971,7 @@ class Compiler {
       if (h.kind === "event") {
         // A handler that reads a signal (and is not a function literal, which only reads when
         // called) is followed: the listener calls its current value.
-        if (reactive(h.expr) && !isFunction(h.expr))
+        if (this.changes(h.expr) && !isFunction(h.expr))
           after.push(
             `${this.m(h.at)}__rrOn(__n[${i}], ${JSON.stringify(h.type)}, () => (${this.rewrite(h.expr, h.at)}));`,
           );
@@ -979,7 +1106,7 @@ class Compiler {
         return;
       }
       const e = this.value(h);
-      if (reactive(h.expr)) {
+      if (this.changes(h.expr)) {
         keyCalls += callsWithArguments(h.expr);
         dyn.push(`__d[${dynHoles.length}] = (${e});`);
         dynHoles.push(i);
@@ -1027,7 +1154,7 @@ class Compiler {
         .map(([c, x, at]) => {
           const e = this.rewrite(x, at),
             name = JSON.stringify(c);
-          return reactive(x)
+          return this.changes(x)
             ? `${this.m(at)}__rrApply(${node}, (__rrE, __rrV) => __rrE.classList.toggle(${name}, !!__rrV), () => (${e}));`
             : `${this.m(at)}${node}.classList.toggle(${name}, !!(${e}));`;
         })
@@ -1047,13 +1174,15 @@ class Compiler {
     const e = this.rewrite(h.expr, h.at);
     const m = this.m(h.at);
     if (h.kind === "prop")
-      return reactive(h.expr)
+      return this.changes(h.expr)
         ? `${m}__rrBind(${id}, ${i}, ${node}, () => (${e}));`
         : `${m}${id}.write(${i}, ${node}, (${e}));`;
     // A ref is called once, with the element; a function literal passed as one reads nothing.
     if (h.fn === "ref") return `${m}__rrRef(${node}, ${e});`;
     const fn = h.fn === "style" ? "__rrStyle" : "__rrSpread";
-    return reactive(h.expr) ? `${m}__rrApply(${node}, ${fn}, () => (${e}));` : `${m}${fn}(${node}, (${e}), undefined);`;
+    return this.changes(h.expr)
+      ? `${m}__rrApply(${node}, ${fn}, () => (${e}));`
+      : `${m}${fn}(${node}, (${e}), undefined);`;
   }
 
   // #endregion
@@ -1099,7 +1228,8 @@ class Compiler {
       n = this.uid++,
       x = `__rrX${n}`;
     const kids = (arg: () => string) => this.content(this.kids(p), arg);
-    if (!reactive(when)) return `((${x}) => () => (${x} ? ${kids(() => (keyed ? x : `() => ${x}`))} : ${fb}))(${w})`;
+    if (!this.changes(when))
+      return `((${x}) => () => (${x} ? ${kids(() => (keyed ? x : `() => ${x}`))} : ${fb}))(${w})`;
     if (keyed) {
       const v = `__rrV${n}`;
       return `(() => { const ${v} = __rrMemo(() => (${w})); return () => ((${x}) => (${x} ? ${kids(() => x)} : ${fb}))(${v}()); })()`;
@@ -1205,14 +1335,14 @@ class Compiler {
       k === "..."
         ? this.rewrite(v, at)
         : `${JSON.stringify(k)}: ${spread ? spreadValue(k, this.rewrite(v, at)) : this.rewrite(v, at)}`;
-    const props = `{ ${rest.map((e) => compiled(e, false)).join(", ")} }`;
+    const props = this.passProps(rest) ?? `{ ${rest.map((e) => compiled(e, false)).join(", ")} }`;
     const attrs = rest.filter(([k]) => k !== "children"),
       kids = rest.find(([k]) => k === "children");
     const obj = `{ ${attrs.map((e) => compiled(e, true)).join(", ")} }`;
     const set =
       attrs.length === 0
         ? ""
-        : attrs.some(([, v]) => reactive(v))
+        : attrs.some(([, v]) => this.changes(v))
           ? `__rrApply(__rrE, __rrSpread, () => (${obj})); `
           : `__rrSpread(__rrE, ${obj}, undefined); `;
     const put =
@@ -1225,7 +1355,7 @@ class Compiler {
     const build =
       `((__rrD) => __rrUntrack(() => typeof __rrD === "function" ? __rrD(${props}) : ` +
       `__rrD ? ((__rrE) => { ${set}${put}return __rrE; })(${create}) : null))(${this.rewrite(comp[1], comp[2])})`;
-    return reactive(comp[1]) ? { fn: `() => ${build}` } : { expr: build };
+    return this.changes(comp[1]) ? { fn: `() => ${build}` } : { expr: build };
   }
 
   /**
@@ -1247,7 +1377,7 @@ class Compiler {
       const inner = this.only(k, at);
       if (inner !== null) return this.m(at) + this.call(inner);
       if (arg !== null && isFunction(k)) return `__rrUntrack(() => (${this.rewrite(k, at)})(${arg()}))`;
-      if (arg !== null && !this.hasJsx(k) && !reactive(k))
+      if (arg !== null && !this.hasJsx(k) && !this.changes(k))
         return `((__rrK) => typeof __rrK === "function" ? __rrUntrack(() => __rrK(${arg()})) : __rrK)(${this.rewrite(k, at)})`;
     }
     return this.frag(kept);
@@ -1340,22 +1470,6 @@ function reactive(expr: string): boolean {
 }
 
 /**
- * Whether an expression is a function literal (an arrow or a function expression), whose calls
- * happen only when it is called: as a handler it is bound once, whatever it reads.
- */
-function isFunction(expr: string): boolean {
-  const s = expr.trim();
-  if (/^(async\s+)?function\b/.test(s) || /^(async\s+)?[A-Za-z_$][\w$]*\s*=>/.test(s)) return true;
-  const open = /^(async\s*)?\(/.exec(s);
-  if (open === null) return false;
-  const close = until(s, open[0].length, "");
-  return s
-    .slice(close + 1)
-    .trimStart()
-    .startsWith("=>");
-}
-
-/**
  * The calls with arguments in an expression: `isSelected(row.id)` is one, `count()` none. The
  * count is of the expression's own text, so a call inside a function it calls is not seen.
  */
@@ -1377,6 +1491,17 @@ function callAt(expr: string, from: number): number {
   for (let i = from; i < expr.length;) {
     const j = skipToken(expr, i, prev, word);
     if (j !== i) {
+      // A template literal's substitutions are code: `${count()}` calls.
+      if (expr[i] === "`")
+        for (let k = i + 1; k < j; k++) {
+          if (expr[k] === "\\") k++;
+          else if (expr[k] === "$" && expr[k + 1] === "{") {
+            const close = until(expr, k + 2, "}");
+            const at = callAt(expr.slice(0, close), k + 2);
+            if (at >= 0) return at;
+            k = close;
+          }
+        }
       i = j;
       prev = "a";
       continue;
