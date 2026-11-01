@@ -107,6 +107,15 @@ export type PropFacts = ReadonlyMap<string, ReadonlySet<string> | true> & {
    * Without it, the module's own locals, as it says them alone.
    */
   readonly jsx?: ReadonlySet<string>;
+  /**
+   * The names whose call may return JSX (`ModuleInfo.calls`): the module's imports from the app's
+   * own files, and its locals made of one. A hole that calls one (`{make()}`, `{ns.make()}`,
+   * `{o.render()}`) is inserted, as one that mentions a name of `jsx` is. They are the same for
+   * the module alone and in a whole program, which does not narrow such a call to text when it
+   * sees what the function returns, so a dev server and a build compile the hole alike. Without
+   * it, the module's own, as it says them alone.
+   */
+  readonly calls?: ReadonlySet<string>;
 };
 
 /** Reactive props, as a set or true for all; also what an expression reads of a props object. */
@@ -377,8 +386,32 @@ export function rootsIn(expr: string, roots: ReadonlySet<string>, helpers?: Read
 }
 
 /**
+ * The names of `roots` that `expr` calls: a mention of one (as `rootsIn` finds them) that a call
+ * follows, through its members: `make()`, `make?.()`, `ns.make()` (of a root `ns.*`),
+ * `o.render()`, `o.list.map(f)`, `o[k]()`.
+ */
+export function callsIn(expr: string, roots: ReadonlySet<string>, helpers?: ReadonlySet<string>): string[] {
+  if (roots.size === 0) return [];
+  const tokens = tokenize(expr);
+  return mentions(tokens, matches(tokens), 0, tokens.length, roots, helpers, true, true);
+}
+
+/** Whether a call starts at token j, after a name, through its members (`.x`, `?.x`, `[k]`). */
+function callAt(tokens: readonly Token[], m: Int32Array, j: number): boolean {
+  for (;;) {
+    const t = tokens[j]?.t;
+    if (t === "(") return true;
+    if (t === "?" && tokens[j + 1]?.t === ".") j += isName(tokens[j + 2]?.t) ? 3 : 2;
+    else if (t === "." && isName(tokens[j + 1]?.t)) j += 2;
+    else if (t === "[" && m[j]! > j) j = m[j]! + 1;
+    else return false;
+  }
+}
+
+/**
  * `rootsIn` over tokens [from, to) of a tokenized source. With `fns` false, a function literal's
  * body is read too: a local made of it (`const get = () => store.todos`) gives what it mentions.
+ * With `called`, only the roots it calls (`callsIn`).
  */
 function mentions(
   tokens: readonly Token[],
@@ -388,6 +421,7 @@ function mentions(
   roots: ReadonlySet<string>,
   helpers: ReadonlySet<string> | undefined,
   fns: boolean,
+  called = false,
 ): string[] {
   const out: string[] = [];
   for (let i = from; i < to; i++) {
@@ -408,6 +442,7 @@ function mentions(
     const member = tokens[i + 1]?.t === "." ? tokens[i + 2]?.t : undefined;
     if (root === null && isName(member) && (roots.has(`${t}.${member}`) || roots.has(`${t}.*`)))
       root = `${t}.${member}`;
+    if (called && root !== null && !callAt(tokens, m, root === t ? i + 1 : i + 3)) continue;
     if (root !== null && !out.includes(root)) out.push(root);
   }
   return out;
@@ -760,8 +795,18 @@ export interface ModuleInfo {
    * `const view = memo(() => <p />)`, `const o = { render() { return <i />; } }`), else the names
    * it mentions that may hold JSX: other such locals, and imports from outside @reactre (a
    * namespace import's member). The program says which imports hold JSX (`Program.factsOf`).
+   * A value that calls one of `calls` (`const x = make()`, `function f() { return t("k"); }`) is
+   * true too, whatever the program sees.
    */
   readonly jsx: ReadonlyMap<string, readonly string[] | true>;
+  /**
+   * The names whose call may return JSX, as a file alone sees them: the module's imports from the
+   * app's own files (`ownFile`: a relative specifier, an alias; not a package's, nor @reactre's,
+   * nor an asset's), a namespace import's members (`ns.*`), and the locals made of one without
+   * calling it (`const mine = make`, `const o = { make }`). A hole that calls one (`{make()}`,
+   * `{ns.make()}`, `{o.make()}`) is a slot, alone and in a whole program alike.
+   */
+  readonly calls: ReadonlySet<string>;
 }
 
 /** What a local that may hold a store is made of: see `ModuleInfo.aliases`. */
@@ -962,8 +1007,10 @@ export function scanModule(src: string): ModuleInfo {
   const decls = boundIn(tokens, m, defs);
   const aliases = aliasesIn(src, tokens, m, defs, roots, helpers, decls);
   // The locals that may hold JSX: made of a jsx call, of such a local, or of an import that may be
-  // one (the program says which are).
-  const jsx = jsxIn(tokens, m, decls, imported, helpers);
+  // one (the program says which are), or that call an import from the app's own files.
+  const app = new Set<string>();
+  for (const [local, b] of imports) if (ownFile(b.spec)) app.add(b.name === "*" ? `${local}.*` : local);
+  const { jsx, calls } = jsxIn(tokens, m, decls, imported, app, helpers);
   for (const a of aliases.keys()) roots.add(a);
   const stores = ownStores(own, aliases);
   const rows: (Alias & { readonly name: string; readonly start: number; readonly end: number })[] = [];
@@ -1067,7 +1114,22 @@ export function scanModule(src: string): ModuleInfo {
       else if (set !== true) nsEscapes.set(tok.t, (set ?? new Set()).add(member));
     } else if (b !== undefined || named.has(tok.t)) escapes.add(tok.t);
   }
-  return { defs, imports, exports, stars, specs, sites, escapes, nsEscapes, whole, opaque, stores, aliases, jsx };
+  return {
+    defs,
+    imports,
+    exports,
+    stars,
+    specs,
+    sites,
+    escapes,
+    nsEscapes,
+    whole,
+    opaque,
+    stores,
+    aliases,
+    jsx,
+    calls,
+  };
 }
 
 /**
@@ -1143,17 +1205,20 @@ function aliasesIn(
 }
 
 /**
- * The locals of a module whose value may hold JSX (see `ModuleInfo.jsx`), given its bindings and
- * the names it imports (`imported`): found until no more are.
+ * The locals of a module whose value may hold JSX (see `ModuleInfo.jsx`), and the names whose
+ * call may return it (`ModuleInfo.calls`), given its bindings, the names it imports (`imported`)
+ * and those of them from the app's own files (`app`): found until no more are.
  */
 function jsxIn(
   tokens: readonly Token[],
   m: Int32Array,
   decls: readonly Bound[],
   imported: ReadonlySet<string>,
+  app: ReadonlySet<string>,
   helpers: ReadonlySet<string>,
-): Map<string, readonly string[] | true> {
-  const out = new Map<string, readonly string[] | true>();
+): { jsx: Map<string, readonly string[] | true>; calls: Set<string> } {
+  const out = new Map<string, readonly string[] | true>(),
+    calls = new Set(app);
   // A value that holds a jsx call holds JSX; one that mentions such a local or an import may.
   const own = decls.map((d) => {
     for (let j = d.from; j < d.to; j++) if (helpers.has(tokens[j]!.t) && tokens[j + 1]?.t === "(") return true;
@@ -1167,6 +1232,17 @@ function jsxIn(
     const known = new Set([...imported, ...out.keys()]);
     decls.forEach((d, k) => {
       if (own[k]) return;
+      // A value that calls what may return JSX may hold it (`const x = make()`); one made of such
+      // a name otherwise may return it when called: an alias (`const mine = make`), an object of
+      // one, a function whose body calls one (`const f = () => make()`, `function f() {}`).
+      const declared = tokens[d.from - 2]?.t === "function";
+      if (!declared && mentions(tokens, m, d.from, d.to, calls, undefined, true, true).length > 0) {
+        own[k] = grew = true;
+        for (const n of d.names) out.set(n, true);
+        return;
+      }
+      if (mentions(tokens, m, d.from, d.to, calls, undefined, false).length > 0)
+        for (const n of d.names) if (!calls.has(n)) (calls.add(n), (grew = true));
       const found = mentions(tokens, m, d.from, d.to, known, undefined, false);
       if (found.length === 0) return;
       for (const n of d.names) {
@@ -1177,7 +1253,7 @@ function jsxIn(
       }
     });
   }
-  return out;
+  return { jsx: out, calls };
 }
 
 /** What comes before a module's first token: no token at all. */
@@ -1373,7 +1449,7 @@ export class Program {
     }
     return Object.assign(
       out,
-      { jsx },
+      { jsx, calls: new Set(mod?.info.calls) },
       stores.size === 0 ? {} : { stores },
       storeProps.size === 0 ? {} : { storeProps },
       contentProps.size === 0 ? {} : { contentProps },
@@ -1557,8 +1633,9 @@ export class Program {
   /**
    * Whether `name` may hold JSX in module `file`: a local made of a jsx call or of what holds JSX
    * (`ModuleInfo.jsx`), or an import of such a value from a module of the program (`ns.member`, a
-   * namespace import's). An import the program cannot see is not known to: a hole that calls it
-   * stays text, which the development build checks (`NODE_AS_TEXT`).
+   * namespace import's). An import the program cannot see is not known to: a hole that reads it
+   * stays text, which the development build checks (`NODE_AS_TEXT`), unless it calls a function
+   * of the app's own files (`ModuleInfo.calls`).
    */
   private jsxIn(file: string, name: string, seen = new Set<string>()): boolean {
     const mod = this.modules.get(file)!;
@@ -1653,6 +1730,20 @@ export function moduleFacts(js: string, info: ModuleInfo = scanModule(js)): Prop
 function exportsStores(spec: string): boolean {
   return !spec.startsWith("@reactre/") && !ASSET.test(spec.replace(/[?#].*$/, ""));
 }
+
+/**
+ * Whether module `spec` is one of the app's own files: one that may export a store
+ * (`exportsStores`) and is not a package's. A package is named bare (`lib`, `lib/sub`,
+ * `@scope/lib`) or with a scheme (`node:fs`, `virtual:x`); anything else is a path (`./x`, `/x`)
+ * or an alias of one (`~/x`, `@/x`, `#x`, `$lib/x`). Its calls in a hole are slots in both modes
+ * (`ModuleInfo.calls`), as a file alone cannot see what they return.
+ */
+function ownFile(spec: string): boolean {
+  return exportsStores(spec) && !PACKAGE.test(spec);
+}
+
+/** A package's specifier: a bare name, scoped or not, and a subpath, or a scheme. */
+const PACKAGE = /^(?:@[\w-][\w.-]*\/)?[\w-][\w.-]*(?:\/|$)|^[a-z][\w+.-]*:/i;
 
 /**
  * Whether module `spec`, which leads to `to`, may export a store the program cannot see: one it

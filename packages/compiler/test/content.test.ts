@@ -175,14 +175,17 @@ describe("a hole that holds JSX", () => {
     const whole = compileJs(js(src), { props: p.factsOf("main") });
     for (const h of ["make()", "renamed()", "deep()", "UI.make()", "mine()"]) expect(whole).toContain(`() => (${h}));`);
     expect(whole).toContain("__rrInsert(__n[1], el, null);");
-    // Text, and a package the program cannot see.
-    expect(whole).toContain("__rrBind(__rrT0, 2, __n[2], () => (text()));");
-    expect(whole).toContain("__rrBind(__rrT0, 6, __n[6], () => (UI.text()));");
+    // A call of a function of the app's own files is a slot, though the program sees it returns
+    // text, as alone; a package's, which the program cannot see, is text.
+    expect(whole).toContain("__rrSlot(__n[2], () => (text()));");
+    expect(whole).toContain("__rrSlot(__n[6], () => (UI.text()));");
     expect(whole).toContain("__rrBind(__rrT0, 8, __n[8], () => (pkg()));");
-    // Alone, the file cannot see what its imports hold: text, which the development build checks
-    // (NODE_AS_TEXT); its own local made of one is the import's.
+    // Alone, the file cannot see what its imports hold: a value is text, which the development
+    // build checks (NODE_AS_TEXT); a call is a slot, as in the program.
     const alone = compileJs(js(src));
-    expect(alone).not.toMatch(/__rrInsert\(|__rrSlot\(/);
+    expect(alone).toContain("__rrSlot(__n[0], () => (make()));");
+    expect(alone).toContain("__rrBind(__rrT0, 8, __n[8], () => (pkg()));");
+    expect(alone).not.toContain("__rrInsert(");
   });
 
   test("the scan: what each local is made of, and the program's names", () => {
@@ -212,6 +215,158 @@ describe("a hole that holds JSX", () => {
     expect([...cycle.factsOf("main").jsx!]).toEqual([]);
   });
 });
+
+// #endregion
+
+// #region Calls of the app's own imports
+
+/** A module of the app: functions that return JSX, text and a flag, and an object of two. */
+const UI = `
+  export function make() { return <b>b</b>; }
+  export function text() { return "t"; }
+  export function flag() { return true; }
+  export const obj = { render() { return <i>i</i>; }, label() { return "l"; } };
+`;
+
+/** Each case: what the module declares, and a hole that calls a function of `./ui` through it. */
+const CALLS: Record<string, [string, string]> = {
+  jsx: ["", "make()"],
+  text: ["", "text()"],
+  flag: ["", "flag()"],
+  namespace: ["", "UI.make()"],
+  "namespace text": ["", "UI.text()"],
+  method: ["", "obj.render()"],
+  "method text": ["", "obj.label()"],
+  optional: ["", "obj?.label()"],
+  computed: ["", `obj["label"]()`],
+  conditional: ["", "on() ? text() : null"],
+  alias: ["const mine = text;", "mine()"],
+  object: ["const o = { text };", "o.text()"],
+  result: ["const x = text();", "x.trim()"],
+  wrapper: ["function fmt(n) { return text() + n; }", "fmt(1)"],
+  arrow: ["const f = () => UI.text();", "f()"],
+};
+
+/** What a slot at the `<div>`'s first child is, in each build. */
+const SLOT = [
+  ["client", {}, /__rrSlot\(__n\[0\], |__rrInsert\(__n\[0\], /],
+  ["hydrate", { hydrate: true }, /__rrhS\(__n\[0\], |__rrhI\(__n\[0\], /],
+  ["server", { server: true }, /__rrsS\(/],
+] as const;
+
+describe("a hole that calls a function of the app's own files", () => {
+  test("is a slot alone and in a whole program, which compile it alike, in client, hydrate and server builds", () => {
+    for (const [name, [own, hole]] of Object.entries(CALLS)) {
+      const src = `import { make, text, flag, obj } from "./ui"; import * as UI from "./ui"; ${own} export const App = () => <div>{${hole}}</div>;`;
+      for (const [build, options, slot] of SLOT) {
+        const [alone, whole] = both(src, options, { ui: UI });
+        expect({ name, build, same: alone === whole, slot: slot.test(alone) }).toEqual({
+          name,
+          build,
+          same: true,
+          slot: true,
+        });
+      }
+    }
+    // A value made of such a call is a slot too. Alone it is followed, as a store may be (an
+    // import's member); the program sees it is none, and inserts it once.
+    const [alone, whole] = both(
+      `import { text } from "./ui"; const x = text(); export const App = () => <div>{x}</div>;`,
+      {},
+      { ui: UI },
+    );
+    expect(alone).toContain("__rrSlot(__n[0], () => (x));");
+    expect(whole).toContain("__rrInsert(__n[0], x, null);");
+  });
+
+  test("an import from a path or an alias is the app's; a package's, @reactre's and an asset's are as they were", () => {
+    const specs: Record<string, boolean> = {
+      "./ui": true,
+      "../ui": true,
+      "/src/ui": true,
+      "~/ui": true,
+      "@/ui": true,
+      "#ui": true,
+      $lib: true,
+      lib: false,
+      "lib/sub": false,
+      "@scope/lib": false,
+      "@scope/lib/sub": false,
+      "node:x": false,
+      "virtual:x": false,
+      "@reactre/core": false,
+      "./a.css": false,
+      "./data.json?raw": false,
+    };
+    for (const [spec, app] of Object.entries(specs)) {
+      const src = `import f, { g } from "${spec}"; export const App = () => <div>{f()}{g.h()}</div>;`;
+      for (const [build, options, slot] of SLOT) {
+        const [alone, whole] = both(src, options);
+        expect({ spec, build, same: alone === whole, slot: slot.test(alone) }).toEqual({
+          spec,
+          build,
+          same: true,
+          slot: app,
+        });
+      }
+    }
+  });
+
+  test("a value of one is as it was: a slot in a whole program when it holds JSX, alone text", () => {
+    const [alone, whole] = both(
+      `import { obj } from "./ui"; export const App = () => <div>{obj}{obj.label}</div>;`,
+      {},
+      { ui: UI },
+    );
+    expect(alone).not.toMatch(/__rrInsert\(|__rrSlot\(/);
+    expect(whole).toContain("__rrInsert(__n[0], obj, null); __rrInsert(__n[1], obj.label, null);");
+  });
+
+  test("the scan: the names whose call may return JSX, and the values that call one", () => {
+    const src = `
+      import { make } from "./ui";
+      import * as N from "~/n";
+      import lib from "lib";
+      import data from "./data.json";
+      const mine = make, o = { make }, f = () => N.x(), m = lib({ fn: () => make() });
+      const x = make(), y = o.make(), z = lib(), w = data.get(), v = mine;
+      function g() { return mine(); }
+    `;
+    const info = scanModule(js(src));
+    const calls = ["N.*", "f", "g", "m", "make", "mine", "o", "v"];
+    expect([...info.calls].sort()).toEqual(calls);
+    expect([...info.jsx].filter(([, v]) => v === true).map(([k]) => k)).toEqual(["x", "y"]);
+    // The program gives them as they are.
+    expect([...program({ main: src }).factsOf("main").calls!].sort()).toEqual(calls);
+  });
+});
+
+describe("at runtime, a hole that calls a function of the app's own files", () => {
+  test("alone, it inserts the function's nodes and writes its text; true, false and null render nothing", () => {
+    const ui = `
+      import { signal } from "@reactre/core";
+      export const [n, setN] = signal(1);
+      export function make() { return <b>{n()}</b>; }
+      export const text = () => "t" + n();
+      export const yes = () => n() > 0, no = () => false, none = () => null;
+    `;
+    const main = `
+      import { render } from "@reactre/core";
+      import { make, setN, text, yes, no, none } from "./ui";
+      render(() => <div>{make()}{text()}{yes()}{no()}{none()}</div>, root);
+      return { setN };
+    `;
+    const root = new FakeElement("DIV");
+    const app = link<{ setN: (v: number) => void }>({ ui: compileJs(js(ui)), main: compileJs(js(main)) }, root);
+    expect(html(root)).toBe("<div><b>1</b>t1</div>");
+    app.setN(2);
+    expect(html(root)).toBe("<div><b>2</b>t2</div>");
+  });
+});
+
+// #endregion
+
+// #region Holes at runtime, and fragments
 
 describe("at runtime, a hole that holds JSX renders its nodes", () => {
   test("a local, a function, an array, a method, an arrow, a memo, and a conditional of locals, which updates", () => {

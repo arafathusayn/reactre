@@ -114,6 +114,7 @@ import { hasMarks, mark, remark, type SourceMapV3, unmark } from "./map.ts";
 import { observedCalls } from "./observed.ts";
 import {
   analyze,
+  callsIn,
   CORE_RUNTIME,
   coreRuntime,
   type Def,
@@ -561,8 +562,10 @@ function compile(
   // may be one (`moduleFacts`).
   for (const s of props.stores ?? []) stores.add(s);
   const c = new Compiler(helpers, fragments, map, flow, defs, props, stores);
-  // The names that may hold JSX: the program's, or the file's own locals, as it says them alone.
-  c.jsx = props.jsx ?? moduleFacts(js).jsx!;
+  // The names that may hold JSX: the program's, or the file's own locals, as it says them alone;
+  // and those whose call may return it, the same alone and in a program.
+  const alone = props.jsx === undefined || props.calls === undefined ? moduleFacts(js) : props;
+  [c.jsx, c.calls] = [props.jsx ?? alone.jsx!, props.calls ?? alone.calls!];
   if (options.server === true) c.server = new ServerEmit(c);
   c.hydrate = hydrate;
   const body = c.rewrite(js, 0);
@@ -774,15 +777,18 @@ export class Compiler {
 
   /** The names that may hold JSX where the file is compiled (`PropFacts.jsx`). */
   jsx: ReadonlySet<string> = NO_STORES;
+  /** The names whose call may return JSX where the file is compiled (`PropFacts.calls`). */
+  calls: ReadonlySet<string> = NO_STORES;
 
   /**
    * Whether an element's child mentions what may hold JSX (`PropFacts.jsx`): a local made of JSX
    * (`{el}`, `{items}`, `{on() ? a : b}`), a function that returns it (`{make()}`, `{view()}`,
-   * `{o.render()}`), or an import of such a value from the program. Its value may be nodes, so it
-   * is inserted, not written as text.
+   * `{o.render()}`), or an import of such a value from the program; or calls what may return it
+   * (`PropFacts.calls`: `{make()}` of a function imported from the app's own files). Its value may
+   * be nodes, so it is inserted, not written as text.
    */
   holdsJsx(expr: string): boolean {
-    return rootsIn(expr, this.jsx, this.helpers).length > 0;
+    return rootsIn(expr, this.jsx, this.helpers).length > 0 || callsIn(expr, this.calls, this.helpers).length > 0;
   }
 
   /** The mark for input offset `at`, when the output carries marks and `at` is known; else "". */
