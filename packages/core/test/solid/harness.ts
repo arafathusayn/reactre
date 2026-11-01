@@ -99,7 +99,8 @@ export const GAPS = {
   "merge-views": "merge/omit views: function sources, one-source identity, predicates",
   "projection-chain": "a projection whose fn returns a store follows it; a projection with no seed",
   "reconcile-identity": "reconcile throws when the root's key differs from the store's",
-  "ssr-semantics": "server primitives: memos computed when read, optimistic writes, no throw on async outside Loading",
+  "ssr-semantics":
+    "server primitives as Solid's server has them: eager memos, inert actions and optimistic writes, deep as identity, a throw on async outside Loading",
   "class-values": "a class object or array works written in place only, not as a runtime value",
   "async-signal": "createSignal(async fn), a writable signal of an async value",
   "array-text": "an array in a call hole is written as its string (a,b), not as its items",

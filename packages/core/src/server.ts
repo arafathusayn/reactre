@@ -15,7 +15,8 @@
 //     themselves, so they have server versions (./server/async.ts, ./server/dynamic.ts), and so
 //     do the effects of features/reaction, timing and errors (./server/reaction.ts, ...).
 //   - Signals and memos work as on the client; the app's effects do not run (this module's
-//     `effect` is `__ssrEffect`), and its memos compute when first read (`__ssrMemo`).
+//     `effect` is `__ssrEffect`), and its memos compute at once, or with `lazy` when first read,
+//     and keep their value (`__ssrMemo`), as Solid 2.0's server memos do.
 //   - Async data: a read that is not ready throws, as on the client. A hole or slot that may
 //     change is compiled to a thunk (`__ssrLazy`): when it throws so, it becomes a cell, filled by
 //     an effect that runs it again when the value comes, as a hole's effect does on the client.
@@ -743,25 +744,47 @@ export function __ssrEffect(_fn: () => void, _options?: unknown): void {}
 export { __ssrEffect as effect };
 
 /**
- * Internal: `memo` in a module compiled for the server: computed when first read, then kept. A
- * function that returns a Promise or an AsyncIterable is an async memo, as on the client.
+ * Internal: `memo` in a module compiled for the server: computed at once, as Solid 2.0's server
+ * memos are, or with `lazy: true` when first read; then kept. What `fn` throws, each read throws
+ * again, but a read of a value that is not ready yet: the next read computes again, for the value
+ * may have come. A function that returns a Promise or an AsyncIterable is an async memo, as on
+ * the client.
  */
-export function __ssrMemo<T>(fn: () => T): () => T {
+export function __ssrMemo<T>(fn: () => T, options?: { readonly lazy?: boolean }): () => T {
+  // 0: to compute; 1: `v` is its value; 2: `v` is what `fn` threw; 3: `v` is an async memo's read.
   let state = 0,
-    v: T,
-    read: (() => T) | undefined;
-  return () => {
-    if (state === 1) return v;
-    if (read !== undefined) return read();
-    const r = fn();
+    v: unknown;
+  const read = (): T => {
+    if (state === 1) return v as T;
+    if (state === 2) throw v;
+    if (state === 3) return (v as () => T)();
+    let r: T;
+    try {
+      r = fn();
+    } catch (e) {
+      if (!notReady(e)) {
+        state = 2;
+        v = e;
+      }
+      throw e;
+    }
     if (r !== null && typeof r === "object" && ("then" in r || Symbol.asyncIterator in r)) {
       let first = true;
-      read = coreMemo(() => (first ? ((first = false), r) : fn()));
-      return read();
+      state = 3;
+      v = coreMemo(() => (first ? ((first = false), r) : fn()));
+      return (v as () => T)();
     }
     state = 1;
-    return (v = r);
+    return (v = r) as T;
   };
+  // Made, not read: what `fn` reads is not the maker's to follow, and what it throws is the read's.
+  if (options?.lazy !== true)
+    try {
+      untrack(read);
+    } catch {
+      // Thrown again by the read (see above).
+    }
+  return read;
 }
 
 // #endregion
@@ -1135,9 +1158,11 @@ function start(mode: Mode, app: () => unknown, options: RenderOptions, sink: Sin
 
 /**
  * Render the component `app` to HTML, synchronously. A `<Loading>` whose children read a value
- * that is not ready yet renders its fallback; a hole that reads one outside any `<Loading>`,
- * nothing. The render's effects stop and its cleanups run before it returns. The values its
- * hydration writer was given follow the HTML, in a script.
+ * that is not ready yet renders its fallback. The render's effects stop and its cleanups run
+ * before it returns. The values its hydration writer was given follow the HTML, in a script.
+ *
+ * @throws Error when what is outside every `<Loading>` reads a value that is not ready yet, as
+ *   Solid 2.0's does: the render cannot wait for it (`renderToStream` and `renderToStringAsync` do).
  *
  * @example
  *   import { renderToString } from "@reactre/core/server";
@@ -1147,6 +1172,12 @@ function start(mode: Mode, app: () => unknown, options: RenderOptions, sink: Sin
 export function renderToString(app: () => unknown, options: RenderOptions = {}): string {
   const r = start("string", app, options, null);
   try {
+    if (r.top.n !== 0)
+      throw new Error(
+        "reactre: renderToString rendered a read of a value that is not ready yet outside every <Loading>, where it " +
+          "cannot wait for it: put what reads it in a <Loading>, whose fallback is written, or render with " +
+          "renderToStream or renderToStringAsync, which wait for it",
+      );
     const html = r.html(r.shell) + r.data();
     // The head is final before the render's cleanups run: what is live now is the response's.
     r.committed = true;

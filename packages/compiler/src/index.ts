@@ -137,7 +137,7 @@ import {
   walk,
 } from "./program.ts";
 import { isIdent, literal, NOT_LITERAL, skipToken, splitAt, trimAt, until } from "./scan.ts";
-import { CORE_FEATURE, SERVER_HELPERS, ServerEmit, serverImports } from "./server.ts";
+import { CORE_FEATURE, SERVER_HELPERS, ServerEmit, serverImports, serverLate } from "./server.ts";
 
 export type { PropFacts } from "./program.ts";
 export { HYDRATE_FILE, hydrateImports } from "./hydrate.ts";
@@ -487,13 +487,16 @@ export class ReactreCompileError extends Error {}
  *   a call in a place the compiler does not reach).
  */
 export function compileJs(js: string, options?: CompileOptions): string {
-  // A server build compiles the module with its imports pointed at the server.
+  // A server build compiles the module with its imports pointed at the server (those of
+  // features/actions and /store once it is compiled, as its stores are known by them).
   // A hydrate build, with its imports of features/async and /errors pointed at the hydrate builds.
-  const src = options?.server === true ? serverImports(js) : options?.hydrate === true ? hydrateImports(js) : js;
+  const server = options?.server === true;
+  const src = server ? serverImports(js, true, false) : options?.hydrate === true ? hydrateImports(js) : js;
   // Calls of features/memo's `memo` and `signal` that pass `lazy` or `unobserved` go to the
   // reader-counting entry (./observed.ts); a file without them is compiled as it was.
   const observed = observedCalls(src);
-  return compile(observed?.code ?? src, false, options, flowNames(js), observed !== null);
+  const out = compile(observed?.code ?? src, false, options, flowNames(js), observed !== null);
+  return server ? serverLate(out) : out;
 }
 
 /**
@@ -506,13 +509,17 @@ export function compileJs(js: string, options?: CompileOptions): string {
 export function compileJsWithMap(js: string, options?: CompileOptions): { code: string; map: SourceMapV3 | null } {
   // A server build maps back to the module with its imports pointed at the server: the lines
   // after its imports are the module's own.
-  const src = options?.server === true ? serverImports(js) : options?.hydrate === true ? hydrateImports(js) : js;
+  const server = options?.server === true;
+  const src = server ? serverImports(js, true, false) : options?.hydrate === true ? hydrateImports(js) : js;
   if (hasMarks(src)) return { code: compileJs(js, options), map: null };
   // The marks of a compile of the rewritten calls are moved back to `src` (see `observedCalls`).
   const observed = observedCalls(src);
   const marked = compile(observed?.code ?? src, true, options, flowNames(js), observed !== null);
-  if (marked === src) return { code: src, map: null };
-  return unmark(observed === null ? marked : remark(marked, observed.back), src);
+  if (marked === src) return { code: server ? serverLate(src) : src, map: null };
+  const out = unmark(observed === null ? marked : remark(marked, observed.back), src);
+  // An import of features/actions or /store pointed at the server's is shorter: the columns of
+  // the generated code after it, on its line alone, are off by that.
+  return server ? { code: serverLate(out.code), map: out.map } : out;
 }
 
 /**

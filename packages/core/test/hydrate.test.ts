@@ -31,6 +31,7 @@ import * as server from "../src/server.ts";
 import * as serverAsync from "../src/server/async.ts";
 import * as serverErrors from "../src/server/errors.ts";
 import * as serverHydrate from "../src/server/hydrate.ts";
+import * as serverStore from "../src/server/store.ts";
 
 // #region Harness
 
@@ -57,7 +58,7 @@ const serverModules: Record<string, unknown> = {
   "@reactre/core/server/async": serverAsync,
   "@reactre/core/server/errors": serverErrors,
   "@reactre/core/server/hydrate": serverHydrate,
-  "@reactre/core/features/store": storeApi,
+  "@reactre/core/server/store": serverStore,
 };
 /** What a source compiled for hydration imports. */
 const clientModules: Record<string, unknown> = {

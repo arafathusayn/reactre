@@ -12,6 +12,9 @@
 //     the client replaces (or it reads as its `loadingValue`).
 //   - `from`, which takes a subscription's first value and stops it there, as Solid 2.0's server
 //     does: the client reconnects, and a source that never ends cannot hold the render open.
+//   - `isPending`, false, as nothing is in flight in a server render; but a read of a value that
+//     is not ready yet throws on, as Solid 2.0's server has it, so that what reads it waits for
+//     the value (or its `<Loading>` writes its fallback), and the page shows the settled state.
 
 import {
   __LIVE,
@@ -74,6 +77,15 @@ export function memo<R>(fn: () => R, options?: MemoOptions<Settled<R>>): () => S
     }
   }
   return lv ? __loading(m, options.loadingValue as Settled<R>) : m;
+}
+
+/**
+ * `isPending` from @reactre/core/features/async, on the server: `fn` runs, and the answer is
+ * false. What it throws is thrown on, a read of a value that is not ready yet included.
+ */
+export function isPending(fn: () => unknown): boolean {
+  fn();
+  return false;
 }
 
 /**

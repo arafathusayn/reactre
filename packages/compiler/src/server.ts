@@ -18,8 +18,10 @@
 //   - Imports are pointed at the server: @reactre/core at @reactre/core/server, its
 //     features/async, dynamic, effects, errors, hydrate, reaction and timing at their server
 //     versions (features/hydrate's, so shared code can take hydration values), and `effect`
-//     (which does not run there) and `memo` (computed when first read) at the server's
-//     (`serverImports`).
+//     (which does not run there) and `memo` (computed at once, and kept) at the server's
+//     (`serverImports`). Its features/actions and features/store, whose stores the compiler
+//     follows by those specifiers, are pointed at theirs once the module is compiled
+//     (`serverLate`).
 //
 // The `<For>` and `<Repeat>` handling is in `list` and `forProps`, apart from the rest, as the
 // client's is in index.ts's `forList`.
@@ -47,8 +49,8 @@ import { literal, NOT_LITERAL } from "./scan.ts";
 /**
  * The modules a server build of an app imports in place of the client's: the core, and the
  * feature modules that touch the DOM (`<Loading>`, `dynamic()`, `clientOnly`, hydration) or run
- * effects (`reaction`'s apply half, `onSettled`, `effect(fn, { error })`, `bind`'s apply,
- * `autorun`, `onFlush`), which do not run on the server.
+ * effects (`reaction`'s apply half, `onSettled`, `effect(fn, { error })`, `autorun`,
+ * `onFlush`), which do not run on the server, and `bind`'s apply, which runs once there.
  */
 const SERVER_MODULES: Record<string, string> = {
   "@reactre/core": "@reactre/core/server",
@@ -59,6 +61,17 @@ const SERVER_MODULES: Record<string, string> = {
   "@reactre/core/features/hydrate": "@reactre/core/server/hydrate",
   "@reactre/core/features/reaction": "@reactre/core/server/reaction",
   "@reactre/core/features/timing": "@reactre/core/server/timing",
+};
+
+/**
+ * The modules a server build of an app imports in place of the client's once the module is
+ * compiled (`serverLate`): features/actions and features/store, whose optimistic writes and
+ * `deep` are inert on the server. The compiler knows the stores their functions make by the
+ * client's specifiers, so it compiles the module with those.
+ */
+const LATE: Record<string, string> = {
+  "@reactre/core/features/actions": "@reactre/core/server/actions",
+  "@reactre/core/features/store": "@reactre/core/server/store",
 };
 
 /** A module specifier of @reactre/core in an import or export: `from "..."`, `import "..."`, `import("...")`. */
@@ -80,9 +93,10 @@ export const CORE_FEATURE: RegExp = /[\\/]core[\\/](?:src|dist(?:[\\/]dev)?)[\\/
  * of `effect` (from the core or features/errors) become @reactre/core/server's `__ssrEffect`,
  * which does not run, and of `memo` from the core its `__ssrMemo`, computed when first read.
  * Without, for @reactre/core's own feature modules, only the core itself points at the server,
- * but for its `effect`, the core's own, which runs.
+ * but for its `effect`, the core's own, which runs. Without `late`, for a module about to be
+ * compiled, its imports of the modules of `LATE` stay as they are, for `serverLate` to point.
  */
-export function serverImports(js: string, app: boolean = true): string {
+export function serverImports(js: string, app: boolean = true, late: boolean = true): string {
   let out = js;
   if (app)
     out = out.replace(NAMED, (whole, list: string, _q: string, from: string) => {
@@ -101,7 +115,11 @@ export function serverImports(js: string, app: boolean = true): string {
       return (kept.length === 0 ? `import "${from}";` : `import { ${kept.join(", ")} } from "${from}";`) + own;
     });
   out = out.replace(SPECIFIER, (whole, head: string, q: string, spec: string) => {
-    const to = app ? SERVER_MODULES[spec] : spec === "@reactre/core" ? "@reactre/core/server" : undefined;
+    const to = app
+      ? (SERVER_MODULES[spec] ?? (late ? LATE[spec] : undefined))
+      : spec === "@reactre/core"
+        ? "@reactre/core/server"
+        : undefined;
     return to === undefined ? whole : `${head}${q}${to}${q}`;
   });
   if (app) return out;
@@ -116,6 +134,17 @@ export function serverImports(js: string, app: boolean = true): string {
       (kept.length === 0 ? "" : `import { ${kept.join(", ")} } from "@reactre/core/server";`) +
       `import { ${effect.join(", ")} } from "@reactre/core";`
     );
+  });
+}
+
+/**
+ * A compiled module's imports of the modules of `LATE`, pointed at their server versions: what
+ * `serverImports(js, true, false)` left for after the compile.
+ */
+export function serverLate(js: string): string {
+  return js.replace(SPECIFIER, (whole, head: string, q: string, spec: string) => {
+    const to = LATE[spec];
+    return to === undefined ? whole : `${head}${q}${to}${q}`;
   });
 }
 

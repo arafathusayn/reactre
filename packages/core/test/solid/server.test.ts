@@ -191,7 +191,7 @@ describe("packages/solid/test/server/signals.spec.ts", () => {
       expect(m["v"]).toBe("Hello");
     });
 
-    gap("ssr-semantics", "a memo on the server computes when first read", "memo is eager by default", async () => {
+    test("memo is eager by default", async () => {
       const m = await server(`
         import { memo } from "@reactre/core";
         let calls = 0;
@@ -294,12 +294,8 @@ describe("packages/solid/test/server/signals.spec.ts", () => {
   });
 
   describe("Server createRenderEffect", () => {
-    gap(
-      "ssr-semantics",
-      "bind's apply does not run on the server, as no effect does there; Solid's render effect applies once",
-      "computes and runs effect once",
-      async () => {
-        const m = await server(`
+    test("computes and runs effect once", async () => {
+      const m = await server(`
         import { bind } from "@reactre/core/features/effects";
         export const calls = { compute: 0, effect: [] };
         export function App() {
@@ -307,10 +303,9 @@ describe("packages/solid/test/server/signals.spec.ts", () => {
           return <p>x</p>;
         }
       `);
-        m.renderToString(m.App);
-        expect(m["calls"]).toEqual({ compute: 1, effect: [[42, undefined]] });
-      },
-    );
+      m.renderToString(m.App);
+      expect(m["calls"]).toEqual({ compute: 1, effect: [[42, undefined]] });
+    });
 
     test("defer: true skips the initial effect run but still computes (#2811)", async () => {
       const m = await server(`
@@ -409,7 +404,7 @@ describe("packages/solid/test/server/signals.spec.ts", () => {
   });
 
   describe("Server optimistic no-ops", () => {
-    gap("ssr-semantics", "an optimistic write lands on the server", "createOptimistic writes do not land", async () => {
+    test("createOptimistic writes do not land", async () => {
       const m = await server(`
         import { createOptimistic } from "@reactre/core/features/actions";
         const [value, setValue] = createOptimistic(1);
@@ -419,28 +414,19 @@ describe("packages/solid/test/server/signals.spec.ts", () => {
       expect(m["v"]).toBe(1);
     });
 
-    gap(
-      "ssr-semantics",
-      "an optimistic setter runs its updater on the server",
-      "createOptimistic never invokes updaters",
-      async () => {
-        const m = await server(`
+    test("createOptimistic never invokes updaters", async () => {
+      const m = await server(`
         import { createOptimistic } from "@reactre/core/features/actions";
         const [value, setValue] = createOptimistic(1);
         export let called = 0;
         setValue(() => (called++, 2));
         export const v = value();
       `);
-        expect([m["called"], m["v"]]).toEqual([0, 1]);
-      },
-    );
+      expect([m["called"], m["v"]]).toEqual([0, 1]);
+    });
 
-    gap(
-      "ssr-semantics",
-      "an optimistic store's setter runs on the server",
-      "createOptimisticStore setters do not run or land",
-      async () => {
-        const m = await server(`
+    test("createOptimisticStore setters do not run or land", async () => {
+      const m = await server(`
         import { createOptimisticStore } from "@reactre/core/features/actions";
         const [state, setState] = createOptimisticStore([{ id: "x" }]);
         export let called = 0;
@@ -449,9 +435,8 @@ describe("packages/solid/test/server/signals.spec.ts", () => {
         setState(() => [{ id: "z" }]);
         export const id = state[0].id;
       `);
-        expect([m["called"], m["length"], m["id"]]).toEqual([0, 1, "x"]);
-      },
-    );
+      expect([m["called"], m["length"], m["id"]]).toEqual([0, 1, "x"]);
+    });
   });
 
   describe("Server reconcile", () => {
@@ -468,7 +453,7 @@ describe("packages/solid/test/server/signals.spec.ts", () => {
   });
 
   describe("Server deep", () => {
-    gap("ssr-semantics", "deep() returns a copy, on the server too", "is identity", async () => {
+    test("is identity", async () => {
       const m = await server(`
         import { deep } from "@reactre/core/features/store";
         export const obj = { a: 1 };
@@ -574,21 +559,16 @@ describe("packages/solid/test/server/signals.spec.ts", () => {
       expect(m["v"]).toBe(false);
     });
 
-    gap(
-      "ssr-semantics",
-      "isPending is false for a first async read, as on the client",
-      "isPending propagates NotReadyError from ownerful initial async reads",
-      async () => {
-        const m = await server(`
+    test("isPending propagates NotReadyError from ownerful initial async reads", async () => {
+      const m = await server(`
         import { isPending, memo, NotReadyError } from "@reactre/core/features/async";
         const data = memo(() => new Promise(() => {}));
         let thrown;
         try { isPending(() => data()); } catch (e) { thrown = e; }
         export const notReady = thrown instanceof NotReadyError;
       `);
-        expect(m["notReady"]).toBe(true);
-      },
-    );
+      expect(m["notReady"]).toBe(true);
+    });
 
     test("latest passes through", async () => {
       const m = await server(`
@@ -598,7 +578,7 @@ describe("packages/solid/test/server/signals.spec.ts", () => {
       expect(m["v"]).toBe(42);
     });
 
-    gap("ssr-semantics", "action() wraps its function on the server too", "action passes through", async () => {
+    test("action passes through", async () => {
       const m = await server(`
         import { action } from "@reactre/core/features/actions";
         const fn = function* (x) { return x + 1; };
@@ -1523,21 +1503,16 @@ describe("packages/web/test/server/ssr-stream.spec.tsx", () => {
       expect(html).toBe("<div><p>shown</p><ul><li>a</li><li>b</li></ul></div>");
     });
 
-    gap(
-      "ssr-semantics",
-      "an async read outside every <Loading> renders nothing",
-      "throws on async content without Loading boundary",
-      async () => {
-        const m = await server(`
+    test("throws on async content without Loading boundary", async () => {
+      const m = await server(`
         import { memo } from "@reactre/core/features/async";
         export function App() {
           const data = memo(() => new Promise(() => {}));
           return <p>{data()}</p>;
         }
       `);
-        expect(() => m.renderToString(m.App)).toThrow();
-      },
-    );
+      expect(() => m.renderToString(m.App)).toThrow();
+    });
   });
 });
 

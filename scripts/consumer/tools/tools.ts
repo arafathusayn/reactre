@@ -5,12 +5,14 @@ import * as compiler from "@reactre/compiler";
 import * as scan from "@reactre/compiler/scan";
 // The core's server renderer, and the feature modules a server build points the app's imports at.
 import * as server from "@reactre/core/server";
+import * as serverActions from "@reactre/core/server/actions";
 import * as serverAsync from "@reactre/core/server/async";
 import * as serverDynamic from "@reactre/core/server/dynamic";
 import * as serverEffects from "@reactre/core/server/effects";
 import * as serverErrors from "@reactre/core/server/errors";
 import * as serverHydrate from "@reactre/core/server/hydrate";
 import * as serverReaction from "@reactre/core/server/reaction";
+import * as serverStore from "@reactre/core/server/store";
 import * as serverTiming from "@reactre/core/server/timing";
 import * as plugin from "@reactre/plugin";
 import bun from "@reactre/plugin/bun";
@@ -36,7 +38,22 @@ const whole: Promise<string> = server.renderToStringAsync(
     const writer: server.HydrationWriter | undefined = server.getHydrationWriter();
     const wrote: boolean | undefined = writer?.write("app:user", Promise.resolve({ id: 1 }), { deferStream: true });
     const user: () => { id: number } = serverAsync.memo(async () => ({ id: 1 }), { id: "user", deferStream: true });
-    return [wrote, user().id, serverHydrate.isHydrating()];
+    // On the server an action is its function, an optimistic setter does nothing, and deep is identity.
+    const save: (n: number) => Generator<unknown, number, unknown> = serverActions.action(function* (n: number) {
+      return n;
+    });
+    const [likes, setLikes] = serverActions.createOptimistic(1);
+    setLikes(2);
+    const [todos] = serverStore.createStore({ list: [1] });
+    return [
+      wrote,
+      user().id,
+      serverHydrate.isHydrating(),
+      save,
+      likes(),
+      serverStore.deep(todos).list,
+      serverAsync.isPending(likes),
+    ];
   },
   { response, nonce: "abc", hydrate: true },
 );
@@ -59,12 +76,14 @@ export const all: unknown[] = [
   js,
   p,
   server,
+  serverActions,
   serverAsync,
   serverDynamic,
   serverEffects,
   serverErrors,
   serverHydrate,
   serverReaction,
+  serverStore,
   serverTiming,
   html,
   stream,

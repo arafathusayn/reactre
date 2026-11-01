@@ -53,7 +53,7 @@ describe("imports", () => {
         `import * as R from '@reactre/core/server';`,
         `import { Loading } from "@reactre/core/server/async";`,
         `import { dynamic } from "@reactre/core/server/dynamic";`,
-        `import { createStore } from "@reactre/core/features/store";`,
+        `import { createStore } from "@reactre/core/server/store";`,
         `export { batch } from "@reactre/core/server";`,
         `import "@reactre/core/server";`,
         `const lazy = import("@reactre/core/server/async");`,
@@ -119,6 +119,36 @@ describe("imports", () => {
     );
     expect(serverImports(`import { signal } from "@reactre/core";`, false)).toBe(
       `import { signal } from "@reactre/core/server";`,
+    );
+  });
+
+  test("features/actions and /store point at the server's once the module is compiled, with its stores known", () => {
+    const src = [
+      `import { createStore } from "@reactre/core/features/store";`,
+      `import * as A from "@reactre/core/features/actions";`,
+      `const [state] = createStore({ items: [{ name: "a" }] });`,
+      `const [todos] = A.createOptimisticStore([{ name: "b" }]);`,
+      `export function App() {`,
+      `  const item = state.items[0];`,
+      `  return <p>{item.name}{todos[0].name}</p>;`,
+      `}`,
+    ].join("\n");
+    const out = server(src);
+    expect(out).toContain(`import { createStore } from "@reactre/core/server/store";`);
+    expect(out).toContain(`import * as A from "@reactre/core/server/actions";`);
+    // A read through a store's local is followed as it is in the client's compile.
+    expect(out).toContain("__rrsL(() => __rrsT((item.name), 0))");
+    const mapped = compileJsWithMap(transpileSource(src, "tsx"), { server: true });
+    expect(mapped.code).toContain(`from "@reactre/core/server/store";`);
+    expect(mapped.map).not.toBeNull();
+    // Without JSX, the module is not compiled, and its imports are pointed all the same.
+    const plain = `import { deep } from "@reactre/core/features/store";\nexport const d = deep;`;
+    expect(compileJsWithMap(plain, { server: true })).toEqual({
+      code: `import { deep } from "@reactre/core/server/store";\nexport const d = deep;`,
+      map: null,
+    });
+    expect(serverImports(`import { action } from "@reactre/core/features/actions";`, true, false)).toBe(
+      `import { action } from "@reactre/core/features/actions";`,
     );
   });
 

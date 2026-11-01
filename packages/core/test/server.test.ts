@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { compileSource, reactreCompiler } from "@reactre/compiler";
 import { FakeElement, type FakeNode, FakeText, installFakeDocument, withStyles } from "@reactre/testdom";
 
+import * as actionsApi from "../src/features/actions.ts";
 import * as asyncApi from "../src/features/async.ts";
 import { __hooks } from "../src/features/async.ts";
 import { configureClientErrors, Errored } from "../src/features/errors.ts";
@@ -23,15 +24,18 @@ import * as forApi from "../src/features/for.ts";
 import * as indexApi from "../src/features/index.ts";
 import * as memoApi from "../src/features/memo.ts";
 import { createRoot } from "../src/features/owner.ts";
+import * as storeApi from "../src/features/store.ts";
 import * as timing from "../src/features/timing.ts";
 import * as core from "../src/index.ts";
 import * as browser from "../src/server.browser.ts";
 import * as server from "../src/server.ts";
+import * as serverActions from "../src/server/actions.ts";
 import * as serverAsync from "../src/server/async.ts";
 import * as serverDynamic from "../src/server/dynamic.ts";
 import * as serverEffects from "../src/server/effects.ts";
 import * as serverErrors from "../src/server/errors.ts";
 import * as serverReaction from "../src/server/reaction.ts";
+import * as serverStore from "../src/server/store.ts";
 import * as serverTiming from "../src/server/timing.ts";
 
 const SVG = "http://www.w3.org/2000/svg";
@@ -474,25 +478,44 @@ describe("what only the server writes", () => {
     expect(server.renderToString(api["Frag"]!, { hydrate: true })).toBe("<i>a</i><!--[-->1<!--]-->");
   });
 
-  test("effects do not run; memos compute when first read, and once", () => {
-    const api = ssr<{ App: () => unknown; log: string[]; reads: () => number }>(`
+  test("effects do not run; memos compute at once (with lazy, when first read), and once", () => {
+    const api = ssr<{ App: () => unknown; log: string[]; reads: () => number; setN: (v: number) => void }>(`
       import { effect, memo as m, signal } from "@reactre/core";
       const log = [];
       let reads = 0;
-      const [n] = signal(2);
+      const [n, setN] = signal(2);
       const double = m(() => (reads++, n() * 2));
-      const unread = m(() => log.push("unread"));
+      const later = m(() => (log.push("later"), n()), { lazy: true });
       const App = () => {
         effect(() => log.push("effect"));
-        return <p>{double()} {double()}</p>;
+        return <p>{double()} {double()} {later()}</p>;
       };
-      return { App, log, reads: () => reads };
+      return { App, log, reads: () => reads, setN };
     `);
-    expect(api.reads()).toBe(0);
-    expect(server.renderToString(api.App)).toBe("<p>4 4</p>");
-    expect(api.reads()).toBe(1);
-    expect(api.log).toEqual([]);
+    expect([api.reads(), api.log]).toEqual([1, []]);
+    expect(server.renderToString(api.App)).toBe("<p>4 4 2</p>");
+    // Kept: nothing the server renders goes on changing.
+    api.setN(5);
+    expect(server.renderToString(api.App)).toBe("<p>4 4 2</p>");
+    expect([api.reads(), api.log]).toEqual([1, ["later"]]);
     expect(server.__ssrEffect(() => {}, {})).toBeUndefined();
+  });
+
+  test("a memo's error is thrown by each read, and a read that was not ready computes again", () => {
+    let calls = 0;
+    const bad = server.__ssrMemo(() => {
+      calls++;
+      throw new Error("bad");
+    });
+    expect(bad).toThrow("bad");
+    expect(bad).toThrow("bad");
+    expect(calls).toBe(1);
+    const [ready, setReady] = core.signal(false);
+    const word = asyncApi.memo(() => new Promise<string>(() => {}));
+    const later = server.__ssrMemo(() => (ready() ? "now" : word()));
+    expect(later).toThrow(asyncApi.NotReadyError);
+    setReady(true);
+    expect(later()).toBe("now");
   });
 
   test("a component's cleanups run when the render ends", () => {
@@ -528,20 +551,30 @@ describe("what only the server writes", () => {
 // #region Async data
 
 describe("async data", () => {
-  test("renderToString writes a <Loading>'s fallback while its children wait, and nothing for a read outside one", () => {
-    const api = ssr<{ App: () => unknown }>(`
+  test("renderToString writes a <Loading>'s fallback while its children wait, and throws for a read outside one", () => {
+    const api = ssr<{ App: () => unknown; Outside: () => unknown; log: string[] }>(`
+      import { onCleanup } from "@reactre/core";
       import { Loading, memo } from "@reactre/core/features/async";
       const word = memo(() => new Promise(() => {}));
+      const log = [];
       const App = () => (
         <main>
           <Loading fallback={<i>wait</i>}><b>{word()}</b></Loading>
           <Loading fallback={<i>wait</i>}><b>ready</b></Loading>
-          <p>{word()}</p>
         </main>
       );
-      return { App };
+      const Outside = () => {
+        onCleanup(() => log.push("cleanup"));
+        return <p>{word()}</p>;
+      };
+      return { App, Outside, log };
     `);
-    expect(server.renderToString(api.App)).toBe("<main><i>wait</i><b>ready</b><p></p></main>");
+    expect(server.renderToString(api.App)).toBe("<main><i>wait</i><b>ready</b></main>");
+    // It cannot wait, as renderToStream and renderToStringAsync do: the render ends, and throws.
+    expect(() => server.renderToString(api.Outside)).toThrow(
+      /renderToString rendered a read of a value that is not ready yet outside every <Loading>/,
+    );
+    expect(api.log).toEqual(["cleanup"]);
   });
 
   test("renderToStream: the shell with the fallbacks, then each boundary as it is ready, nested ones after", async () => {
@@ -1028,23 +1061,32 @@ describe("effects on the server", () => {
     expect(serverErrors.Errored).not.toBe(Errored);
   });
 
-  test("bind computes, given its last value, and never applies; autorun and onFlush never run", async () => {
+  test("bind computes, given its last value, and applies once (with defer, never); autorun and onFlush never run", async () => {
     const log: string[] = [];
     const [n, setN] = core.signal(1);
+    const d = deferred<string>();
+    const data = asyncApi.memo(() => d.p);
     const App = () => {
       serverEffects.bind(
         (prev: number | undefined) => (log.push(`compute ${prev} ${n()}`), n()),
-        (v) => void log.push(`apply ${v}`),
+        (v, prev) => void log.push(`apply ${v} ${prev}`),
+      );
+      serverEffects.bind(
+        () => n(),
+        (v) => void log.push(`deferred ${v}`),
         { defer: true },
       );
       serverEffects.autorun(() => void log.push("autorun"));
       serverEffects.onFlush(() => void log.push("flush"));
-      return "x";
+      return serverAsync.Loading({ fallback: "…", children: () => server.__frag([() => data()]) });
     };
-    expect(server.renderToString(App)).toBe("x");
-    await tick();
+    const html = server.renderToStringAsync(App);
+    // The render goes on while its data waits: a write runs the binding again, and applies nothing.
     setN(2);
-    expect(log).toEqual(["compute undefined 1"]);
+    await tick();
+    d.ok("x");
+    expect(await html).toBe("x");
+    expect(log).toEqual(["compute undefined 1", "apply 1 undefined", "compute 1 2"]);
   });
 });
 
@@ -1117,7 +1159,7 @@ describe("in a server build", () => {
     return (await import(file)) as Built;
   }
 
-  test("no effect of the app or of a feature module runs, however it is imported; computations do", async () => {
+  test("no effect of the app or of a feature module runs, however it is imported; computations do, and bind applies once", async () => {
     const m = await build(`
       import * as core from "@reactre/core";
       import { effect } from "@reactre/core";
@@ -1150,7 +1192,54 @@ describe("in a server build", () => {
     `);
     expect(await m.renderToStringAsync(m.App)).toBe("<p>4 data 10,20</p>");
     await tick();
-    expect(m["log"]).toEqual(["bind", "compute", "resolved data"]);
+    expect(m["log"]).toEqual(["bind", "bind's apply", "compute", "resolved data"]);
+  });
+
+  test("actions, optimistic writes and deep are inert, and isPending throws for a value that is not ready", async () => {
+    const m = await build(`
+      import { action, createOptimistic, createOptimisticStore } from "@reactre/core/features/actions";
+      import * as A from "@reactre/core/features/actions";
+      import { createStore, deep } from "@reactre/core/features/store";
+      import { isPending, memo, NotReadyError } from "@reactre/core/features/async";
+      export const log = [];
+      const save = function* (n) { log.push("ran"); return n; };
+      export const same = action(save) === save && A.action(save) === save;
+      save(1);
+      const [likes, setLikes] = createOptimistic(() => 2);
+      setLikes(3);
+      const [todos, setTodos] = createOptimisticStore((d) => { d.push("b"); }, ["a"]);
+      setTodos((d) => { log.push("updater"); d.push("c"); });
+      const [state] = createStore({ list: [1] });
+      export const deepIsState = deep(state) === state;
+      export const pending = isPending(() => likes());
+      const never = memo(() => new Promise(() => {}));
+      try { isPending(() => never()); } catch (e) { log.push(e instanceof NotReadyError ? "not ready" : "other"); }
+      export function App() {
+        const item = todos[1];
+        return <p>{likes()} {todos.join(",")} {item}</p>;
+      }
+    `);
+    expect([m["same"], m["deepIsState"], m["pending"]]).toEqual([true, true, false]);
+    expect(m.renderToString(m.App)).toBe("<p>2 a,b b</p>");
+    expect(m["log"]).toEqual(["not ready"]);
+  });
+
+  test("bind applies a value that was not ready once it comes; with defer, never", async () => {
+    const m = await build(`
+      import { bind } from "@reactre/core/features/effects";
+      import { Loading, memo } from "@reactre/core/features/async";
+      import { signal } from "@reactre/core";
+      export const log = [];
+      const [n] = signal(1);
+      export function App() {
+        const data = memo(() => new Promise((ok) => setTimeout(() => ok("data"), 1)));
+        bind(() => data() + n(), (v, prev) => log.push([v, prev]));
+        bind(() => n(), (v) => log.push(["deferred", v]), { defer: true });
+        return <Loading fallback="…"><p>{data()}</p></Loading>;
+      }
+    `);
+    expect(await m.renderToStringAsync(m.App)).toBe("<p>data</p>");
+    expect(m["log"]).toEqual([["data1", undefined]]);
   });
 
   /** An app whose data rejects, under `<Errored>` in `<Loading>`, when `reject` is called. */
@@ -1649,6 +1738,40 @@ describe("the memo's options on the server", () => {
     const again = serverAsync.from<number>(() => () => log.push("stopped"))[Symbol.asyncIterator]();
     await again.return!();
     expect(log).toEqual(["open", "close", "stopped"]);
+  });
+
+  test("isPending is false, and throws on what a read of a value that is not ready throws", () => {
+    const never = asyncApi.memo(() => new Promise<number>(() => {}));
+    expect(serverAsync.isPending(() => 1)).toBe(false);
+    expect(() => serverAsync.isPending(never)).toThrow(asyncApi.NotReadyError);
+    expect(() =>
+      serverAsync.isPending(() => {
+        throw new Error("bad");
+      }),
+    ).toThrow("bad");
+  });
+});
+
+describe("actions and stores on the server", () => {
+  test("an action is its function; optimistic setters do nothing; deep is the store", () => {
+    const log: string[] = [];
+    const save = function* (n: number): Generator<unknown, number, unknown> {
+      log.push("ran");
+      return n;
+    };
+    expect(serverActions.action(save)).toBe(save);
+    const [likes, setLikes] = serverActions.createOptimistic(1);
+    setLikes((n) => (log.push("updater"), n + 1));
+    const [derived] = serverActions.createOptimistic(() => likes() * 10);
+    const [todos, setTodos] = serverActions.createOptimisticStore([{ id: 1 }]);
+    setTodos((d) => void d.push({ id: 2 }));
+    const [made] = serverActions.createOptimisticStore((d: { id: number }[]) => void d.push({ id: 3 }), [], {});
+    expect([likes(), derived(), todos.length, made.map((t) => t.id)]).toEqual([1, 10, 1, [3]]);
+    expect(log).toEqual([]);
+    // The rest of each module is the client's.
+    expect(serverActions.affects).toBe(actionsApi.affects);
+    expect(serverStore.deep(todos)).toBe(todos);
+    expect(serverStore.createStore).toBe(storeApi.createStore);
   });
 });
 

@@ -63,12 +63,14 @@ for (const r of [
       // Server rendering (@reactre/core/server), which imports the core as the feature modules do.
       "server.ts",
       "server.browser.ts",
+      "server/actions.ts",
       "server/async.ts",
       "server/dynamic.ts",
       "server/effects.ts",
       "server/errors.ts",
       "server/hydrate.ts",
       "server/reaction.ts",
+      "server/store.ts",
       "server/timing.ts",
       // Hydration's <Loading> and <Errored>, which import the feature modules as an app does.
       "hydrate/async.ts",
