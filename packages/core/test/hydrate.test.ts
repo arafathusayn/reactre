@@ -566,7 +566,7 @@ describe("the hydrate builds of <Loading> and <Errored>", () => {
     const L = hydrateAsync.Loading as (p: object) => unknown;
     expect((L({ children: "x" }) as FakeNode[]).map((n) => n.textContent).join("")).toBe("x");
     const root = rooted("<p>ok</p>");
-    const p = root.firstChild;
+    const p = find(root, "p");
     hydrateApi.hydrate(() => L({ fallback: "wait", children: para("ok") }), root as unknown as Element);
     expect(shown(root)).toBe("<p>ok</p>");
     expect(find(root, "p")).toBe(p);

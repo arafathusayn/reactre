@@ -8,15 +8,17 @@
 // and packages/web/test/client-only.spec.tsx. Ported from Solid: MIT License, Copyright (c)
 // 2016-2025 Ryan Carniato; the license is in ./harness.ts.
 //
-// Every port here is a gap: each reads the function it needs off the module that would export it
-// (@reactre/core for the client's, @reactre/core/server for the server's), which throws at once
-// while reactre has none, and then does what Solid's test does. A port's view is compiled as the
-// plugin compiles it, with ./harness.ts.
+// Each port reads the function it needs off the module that exports it, or would
+// (@reactre/core/features/hydrate for hydration's, @reactre/core for the client's other ones,
+// @reactre/core/server for the server's), which throws at once while reactre has none, and then
+// does what Solid's test does; all but isHydrating's are gaps. A port's view is compiled as the
+// plugin compiles it, with ./harness.ts (for hydration, with its `hydrate` option).
 
-import { afterEach, describe, expect, mock } from "bun:test";
+import { afterEach, describe, expect, mock, test } from "bun:test";
 
 import { FakeElement, installFakeDocument } from "@reactre/testdom";
 
+import * as hydrateApi from "../../src/features/hydrate.ts";
 import { signal } from "../../src/features/memo.ts";
 import { createRoot } from "../../src/features/owner.ts";
 import { flush } from "../../src/features/timing.ts";
@@ -34,64 +36,82 @@ function missing<F>(mod: object, name: string): F {
 /** `hydrate(view, container)`: claim the server's HTML in `container` for `view`, returning a disposer. */
 type Hydrate = (view: () => unknown, container: FakeElement) => () => void;
 
+/** What a view compiled for hydration imports: the core's modules, and features/hydrate. */
+const hydrating: Record<string, unknown> = { ...base, "@reactre/core/features/hydrate": hydrateApi };
+
 afterEach(() => {
   installFakeDocument();
   delete (globalThis as Record<string, unknown>)["_$HY"];
 });
 
 describe("packages/web/test/hydration/class.spec.tsx", () => {
-  gap("hydration", "hydrate() is missing", "updates an object value after an in-place mutation", () => {
-    const hydrate = missing<Hydrate>(core, "hydrate");
-    const container = new FakeElement("DIV");
-    const classes = { before: true, after: false };
-    const [value, setValue] = signal(classes, { equals: false });
-    container.innerHTML = '<div class="before"></div>';
-    const { view } = compile<{ view: () => unknown }>(`return { view: () => <div class={value()} /> };`, base, {
-      value,
-    });
-    const dispose = hydrate(view, container);
-    const element = container.firstChild as FakeElement;
-    element.setAttribute("class", "before external");
-    classes.before = false;
-    classes.after = true;
-    setValue(classes);
-    flush();
-    expect(element.getAttribute("class")).toBe("external after");
-    dispose();
-  });
+  gap(
+    "hydration",
+    "a class object is taken apart only as JSX",
+    "updates an object value after an in-place mutation",
+    () => {
+      const hydrate = missing<Hydrate>(hydrateApi, "hydrate");
+      const container = new FakeElement("DIV");
+      const classes = { before: true, after: false };
+      const [value, setValue] = signal(classes, { equals: false });
+      container.innerHTML = '<div class="before"></div>';
+      const { view } = compile<{ view: () => unknown }>(
+        `return { view: () => <div class={value()} /> };`,
+        hydrating,
+        { value },
+        "hydrate",
+      );
+      const dispose = hydrate(view, container);
+      const element = container.firstChild as FakeElement;
+      element.setAttribute("class", "before external");
+      classes.before = false;
+      classes.after = true;
+      setValue(classes);
+      flush();
+      expect(element.getAttribute("class")).toBe("external after");
+      dispose();
+    },
+  );
 });
 
 describe("packages/web/test/hydration/hydrate-falsy-sole-child-issue-3571.spec.tsx", () => {
-  gap("hydration", "hydrate() is missing", "server 0 text node is dropped when the hole becomes an element", () => {
-    const hydrate = missing<Hydrate>(core, "hydrate");
-    const container = new FakeElement("DIV");
-    container.innerHTML = "<span>0</span>";
-    const span = container.firstChild as FakeElement;
-    const serverText = span.firstChild;
-    const { view, setLoading } = compile<{ view: () => unknown; setLoading: (v: boolean) => void }>(
-      `
+  gap(
+    "hydration",
+    "hydrate() needs the server's markers",
+    "server 0 text node is dropped when the hole becomes an element",
+    () => {
+      const hydrate = missing<Hydrate>(hydrateApi, "hydrate");
+      const container = new FakeElement("DIV");
+      container.innerHTML = "<span>0</span>";
+      const span = container.firstChild as FakeElement;
+      const serverText = span.firstChild;
+      const { view, setLoading } = compile<{ view: () => unknown; setLoading: (v: boolean) => void }>(
+        `
       import { signal } from "@reactre/core";
       const [loading, setLoading] = signal(false);
       return { view: () => <span>{loading() ? <i>load</i> : 0}</span>, setLoading };
       `,
-      base,
-    );
-    const dispose = hydrate(view, container);
-    // The server element and its text node were adopted, not replaced.
-    expect(container.firstChild).toBe(span);
-    expect(span.firstChild).toBe(serverText);
-    setLoading(true);
-    expect(span.innerHTML).toBe("<i>load</i>");
-    setLoading(false);
-    expect(span.innerHTML).toBe("0");
-    expect(span.childNodes.length).toBe(1);
-    dispose();
-  });
+        hydrating,
+        {},
+        "hydrate",
+      );
+      const dispose = hydrate(view, container);
+      // The server element and its text node were adopted, not replaced.
+      expect(container.firstChild).toBe(span);
+      expect(span.firstChild).toBe(serverText);
+      setLoading(true);
+      expect(span.innerHTML).toBe("<i>load</i>");
+      setLoading(false);
+      expect(span.innerHTML).toBe("0");
+      expect(span.childNodes.length).toBe(1);
+      dispose();
+    },
+  );
 });
 
 describe("packages/solid/test/hydration-state-api.spec.ts", () => {
-  gap("hydration", "isHydrating() is missing", "false outside hydration (client-only render)", () => {
-    const isHydrating = missing<() => boolean>(core, "isHydrating");
+  test("false outside hydration (client-only render)", () => {
+    const isHydrating = missing<() => boolean>(hydrateApi, "isHydrating");
     let seen: boolean | undefined;
     createRoot(() => {
       seen = isHydrating();

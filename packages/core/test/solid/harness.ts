@@ -164,20 +164,25 @@ export const folded = { memo: memo.__observedMemo, signal: memo.__observedSignal
 
 /**
  * Compile a TSX module body ending in `return { ... }` as the plugin compiles it (for the server
- * with `server`), and run it. Its imports of @reactre/core and its feature modules, and the ones
- * the compiler adds, bind to `modules` by specifier; `scope`'s names are in scope.
+ * with `server` true, for hydration with "hydrate"), and run it. Its imports of @reactre/core and
+ * its feature modules, and the ones the compiler adds, bind to `modules` by specifier; `scope`'s
+ * names are in scope.
  */
 export function compile<T>(
   src: string,
   modules: Record<string, unknown>,
   scope: Record<string, unknown> = {},
-  server = false,
+  server: boolean | "hydrate" = false,
 ): T {
   const mod = (from: string): string => {
     if (!(from in modules)) throw new Error(`harness: no module for ${from}`);
     return `rr[${JSON.stringify(from)}]`;
   };
-  const js = compileSource(src, "tsx", server ? { server: true } : undefined)
+  const js = compileSource(
+    src,
+    "tsx",
+    server === true ? { server: true } : server === "hydrate" ? { hydrate: true } : undefined,
+  )
     .replace(/^(\s*)export /gm, "$1")
     .replace(/^import "([^"]*)";$/gm, (_, from: string) => (mod(from), ""))
     .replace(

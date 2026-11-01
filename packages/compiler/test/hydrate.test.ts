@@ -6,7 +6,7 @@
 // output is the client's as before: the golden snapshots (compiler.test.ts) hold it.
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { unlinkSync } from "node:fs";
+import { mkdtempSync, rmSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -143,8 +143,12 @@ describe("the hydrate compile error", () => {
 });
 
 describe("reactreCompiler({ hydrate: true })", () => {
-  const files: string[] = [];
-  afterAll(() => files.forEach((f) => unlinkSync(f)));
+  const files: string[] = [],
+    dirs: string[] = [];
+  afterAll(() => {
+    files.forEach((f) => unlinkSync(f));
+    dirs.forEach((d) => rmSync(d, { recursive: true, force: true }));
+  });
 
   /** The plugin's load hooks, from a stand-in for Bun's build object. */
   function hooks(options: Parameters<typeof reactreCompiler>[0]) {
@@ -186,8 +190,13 @@ describe("reactreCompiler({ hydrate: true })", () => {
     expect(prod).not.toContain("HYDRATION_MISMATCH");
     expect(prod).toContain("export function hydrate(");
     expect(await coreRuntime(src, () => code, false, false, true)).toBeNull();
-    const dist = join(ROOT, "packages/core/dist/features/hydrate.js"),
-      dev = join(ROOT, "packages/core/dist/dev/features/hydrate.js");
+    // A core's two builds of it, in a folder of their own (this test does not build the package).
+    const at = mkdtempSync(join(tmpdir(), "reactre-compiler-hydrate-core-"));
+    const dist = join(at, "core/dist/features/hydrate.js"),
+      dev = join(at, "core/dist/dev/features/hydrate.js");
+    await Bun.write(dist, "");
+    await Bun.write(dev, "");
+    dirs.push(at);
     expect(await coreRuntime(dist, () => "", false, false)).toBeNull();
     expect(await coreRuntime(dist, () => "", false, false, true)).toBe(`export * from "../dev/features/hydrate.js";\n`);
     expect(await coreRuntime(dev, () => "", false, false, true)).toBeNull();
