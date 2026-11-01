@@ -18,8 +18,11 @@
 //     file too, and so is one with a module the program cannot see into (`import(expr)`, a
 //     virtual module, a file type that may import code).
 //   - A module the program did not reach (another plugin's output, a module only a later plugin
-//     imports) joins it when it is transformed. If it passes a prop reactively to a component
-//     compiled already without it, the build fails with that component's name, never ships it.
+//     imports) joins it when it is transformed, compiled or not: the plugin's second transform
+//     (`@reactre/plugin:program`) sees every module of the app it does not compile, a `.js` file
+//     or a virtual module that may call a component by hand. If it passes a prop reactively to a
+//     component compiled already without it, the build fails with that component's name, never
+//     ships it; a late file that is not a script it can read fails the build too.
 
 import { dirname, resolve } from "node:path";
 

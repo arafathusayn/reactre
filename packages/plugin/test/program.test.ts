@@ -111,14 +111,20 @@ describe("readBuild", () => {
 });
 
 describe("the plugin's hooks", () => {
-  /** The plugin's raw options for Vite (its hooks as unplugin gives them). */
-  const raw = (options = {}) =>
-    reactre.raw(options, { framework: "vite" } as never) as unknown as {
-      buildStart?: (this: unknown, input: unknown) => Promise<void>;
-      // Synchronous without a program, a promise with one.
-      transform: { handler: (this: unknown, code: string, id: string) => { code: string } | Promise<{ code: string }> };
-      vite: { configResolved(c: { command: string }): void };
-    };
+  type Raw = {
+    buildStart?: (this: unknown, input: unknown) => Promise<void>;
+    // Synchronous without a program, a promise with one.
+    transform: { handler: (this: unknown, code: string, id: string) => { code: string } | Promise<{ code: string }> };
+    vite: { configResolved(c: { command: string }): void };
+  };
+  /**
+   * The plugin's raw options for Vite (its hooks as unplugin gives them); with the whole program,
+   * `joiner` is the plugin that joins the modules it does not compile.
+   */
+  const raw = (options = {}): Raw & { joiner?: { transform: Raw["transform"] } } => {
+    const r = reactre.raw(options, { framework: "vite" } as never) as unknown as Raw | [Raw, Raw];
+    return Array.isArray(r) ? { ...r[0], joiner: r[1] } : r;
+  };
 
   test("a one-shot build compiles each module with the program's facts; with wholeProgram off, each alone", async () => {
     const source = await Bun.file(join(dir, "l.tsx")).text();
@@ -141,6 +147,21 @@ describe("the plugin's hooks", () => {
       p.transform.handler.call({}, `import { L } from "./l.tsx"; export const B = () => <L t={n()} />;`, late),
     ).catch((e: unknown) => e as Error);
     expect((err as Error).message.split(late).length).toBe(2);
+    // A module the plugin does not compile joins too: one that calls L by hand uses it as a value.
+    const byHand = join(dir, "hand.js");
+    const joined = await Promise.resolve(
+      p.joiner!.transform.handler.call({}, `import { L } from "./l.tsx"; L({ get t() { return n(); } });`, byHand),
+    ).catch((e: unknown) => e as Error);
+    expect((joined as Error).message).toContain(`${byHand} was not in the program read before the build`);
+    expect((joined as Error).message).toContain("passes (every prop) reactively to L");
+    // Styles, and what the plugin compiles, are not its to join; nor is anything without a program.
+    expect(await p.joiner!.transform.handler.call({}, "a {}", join(dir, "a.css"))).toBeNull();
+    expect(await p.joiner!.transform.handler.call({}, "", join(dir, "l.tsx"))).toBeNull();
+    const dev = raw();
+    dev.vite.configResolved({ command: "serve" });
+    await dev.buildStart!.call(rollupLike(), { input: [entry] });
+    expect(await dev.joiner!.transform.handler.call({}, "export {};", byHand)).toBeNull();
+    expect(raw({ wholeProgram: false }).joiner).toBeUndefined();
     // A compile error of its own gets the path in front.
     const bad = raw({ wholeProgram: false }).transform.handler;
     expect(() => bad.call({}, `export const x = <input>x</input>;`, join(dir, "bad.tsx"))).toThrow(

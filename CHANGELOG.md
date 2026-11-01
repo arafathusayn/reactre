@@ -41,6 +41,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### @reactre/plugin
 
 - Added: core mode reads the whole program at a one-shot build's start (`vite build`, Rollup, Rolldown, esbuild, webpack, Rspack, Bun), following each import the bundler's own resolver places among the app's files, so a component's holes that read a prop are bound only where some call site passes that prop reactively. A dev server and watch mode, and a build whose graph cannot be seen (`import(expr)`, `import.meta.glob`, a virtual module, webpack's function entries), compile each file alone. The `wholeProgram` option (default true) turns it off.
+- Added: a module the program read at the start did not reach (a chunk another plugin adds) joins it when the bundler transforms it, compiled or not: a `.js` or `.ts` module, or a virtual one, that calls a component by hand counts as one of its callers. Transformed before the component, it is in the facts the component is compiled with; after, the build fails, naming both. A late file the plugin cannot read as a script (a `.vue` or `.mdx` file) fails the build too. So no production build ships a hole written once that a caller passes a prop reactively; `test/missed.test.ts` builds each way a caller can be missed with Vite, Rollup, esbuild and webpack.
 
 ## [0.0.3] - 2026-11-01
 

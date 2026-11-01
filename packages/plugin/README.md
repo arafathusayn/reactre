@@ -102,7 +102,7 @@ In reactre mode, a prop that may change is passed to a component as a getter, an
 
 - Only a one-shot build reads it: `vite build`, Rollup, Rolldown, esbuild (again at each rebuild of a context), webpack, Rspack and `Bun.build`. A dev server and watch mode compile each file alone, where a component the file exports gets every prop reactively.
 - A build whose graph the plugin cannot see (`import(expr)`, `import.meta.glob`, `require.context`, a virtual module, a file type that may import code, webpack's function entries) compiles each file alone too.
-- A module the program did not reach joins it at its transform. If it passes a prop reactively to a component compiled already without it, the build fails, naming both; `wholeProgram: false` compiles each file alone.
+- A module the program did not reach (a chunk another plugin adds) joins it at its transform, whether the plugin compiles it or not: a `.js` or `.ts` module, or a virtual one, that calls a component by hand is one of its callers. If it passes a prop reactively to a component compiled already without it, the build fails, naming both, and so does a late file that is not a script the plugin can read (a `.vue` or `.mdx` file); `wholeProgram: false` compiles each file alone. A build never ships a hole written once that some caller passes a prop reactively.
 
 ### Switching React APIs off
 

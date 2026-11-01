@@ -135,6 +135,13 @@ const REQUEST = /^(?:react(?:-dom)?(?:\/.*)?|@reactre\/(?:full-)?compat(?:\/core
 /** The modules the API scan reads. */
 const SCRIPT = /\.[cm]?[jt]sx?(?:$|\?)/;
 
+/** A dependency's files, which cannot reach the app's own modules. */
+const NODE_MODULES = /[\\/]node_modules[\\/]/;
+
+/** Files that import no code: styles, data, images, fonts, media; a virtual one's too (`\0x.css`). */
+const ASSET =
+  /\.(?:css|scss|sass|less|styl|stylus|pcss|postcss|json|json5|svg|png|jpe?g|gif|webp|avif|ico|bmp|tiff?|woff2?|eot|ttf|otf|mp4|webm|ogg|mp3|wav|flac|aac|txt|wasm)$/;
+
 /** esbuild's pluginData for a resolve the plugin asks for itself, which it then leaves alone. */
 const OWN = Symbol("@reactre/plugin");
 
@@ -282,7 +289,38 @@ export const reactre: UnpluginInstance<ReactreOptions | undefined, boolean> = cr
         serve = config.command === "serve";
       },
     };
-    return plugin;
+    if (options.wholeProgram === false) return plugin;
+    // Every other module of the app joins the program too, though it is not compiled: a script
+    // the plugin does not compile (a .js or .ts file, a file `exclude` names) or a virtual module
+    // may call a component by hand, passing a prop as a getter. One the program read already is
+    // left as it is; one it did not (a chunk another plugin adds) joins as a compiled module
+    // joins, so the components compiled after it are compiled with its uses, and the build fails
+    // if one was compiled already without them.
+    const joiner: UnpluginOptions = {
+      name: "@reactre/plugin:program",
+      enforce: "pre",
+      transform: {
+        filter: { id: { exclude: [NODE_MODULES] } },
+        async handler(code, id) {
+          const path = id.replace(/[?#].*$/, "");
+          const compiled = include.some((r) => r.test(id)) && !exclude.some((r) => r.test(id));
+          if (compiled || ASSET.test(path)) return null;
+          const w = await programs.get(envOf(this));
+          if (w == null) return null;
+          // A module made from part of a file (an HTML page's inline script) is a module of its own.
+          if (SCRIPT.test(id) || id.startsWith("\0"))
+            await factsFor(w.program, id, w.host.transpile(path, code), w.host);
+          // A file the program would have given up on (a .vue or .mdx file), which it did not reach.
+          else if (!w.program.has(id))
+            throw new ReactreCompileError(
+              `reactre: ${id} was not in the program read before the build, and it is not a script the ` +
+                "plugin can read; set the plugin's `wholeProgram` option to false",
+            );
+          return null;
+        },
+      },
+    };
+    return [plugin, joiner];
   }
 
   switch (meta.framework) {
