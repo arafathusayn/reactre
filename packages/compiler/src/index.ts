@@ -151,8 +151,10 @@ export interface CompileOptions {
    * map is reactive in every prop. Without the option, the file is seen alone: a component it
    * neither exports nor uses as a value has all its call sites in it, and any other is reactive in
    * every prop. The facts' `stores` are the stores the file imports (`Program.factsOf` gives
-   * them); without them, only the stores the file binds itself are known. Without the option, any
-   * import from outside @reactre (but an asset's) may be a store, and is taken for one.
+   * them); without them, only the stores the file binds itself are known. Their `storeProps` are
+   * the props its call sites pass a store, of each component it neither exports nor uses as a
+   * value. Without the option, any import from outside @reactre (but an asset's) may be a store,
+   * and is taken for one.
    */
   readonly props?: PropFacts;
   /**
@@ -383,6 +385,9 @@ export const DEFAULTS: ReadonlySet<string> = new Set([
   "defaultSelected",
   "defaultMuted",
 ]);
+/** No props: what a component no call site passes a store is passed one in. */
+const NO_STORES: ReadonlySet<string> = new Set();
+
 /** The elements @reactre/core's control flow compiles, by their exported names. */
 const FLOW = ["For", "Show", "Switch", "Match", "Repeat", "Portal", "Dynamic"] as const;
 export type Flow = (typeof FLOW)[number];
@@ -698,9 +703,31 @@ export class Compiler {
     );
   }
 
-  /** Whether `expr` mentions a store root (see `rootsIn`). */
+  /**
+   * Whether `expr` mentions a store root (see `rootsIn`), or reads a prop that some call site of
+   * the component it is written in may pass a store (`PropFacts.storeProps`).
+   */
   private readsStore(expr: string): boolean {
-    return rootsIn(expr, this.stores).length > 0;
+    if (rootsIn(expr, this.stores).length > 0) return true;
+    const given = this.props.storeProps;
+    return (
+      given !== undefined && propReads(expr, this.scope).some(([d, r]) => touches(given.get(d.name) ?? NO_STORES, r))
+    );
+  }
+
+  /**
+   * `build`, with the parameter of `<Show>`'s or `<Match>`'s child function a store root while it
+   * runs when `when` mentions one (or reads a prop that may be one): the value, or the accessor
+   * of it, that the child is called with is that store.
+   */
+  private storeChild(children: readonly [string, number][], when: string, build: () => string): string {
+    const kept = children.filter(([x]) => !isNothing(x));
+    const param = kept.length === 1 ? /^\(?\s*([A-Za-z_$][\w$]*)\s*\)?\s*=>/.exec(kept[0]![0])?.[1] : undefined;
+    if (param === undefined || this.stores.has(param) || !this.readsStore(when)) return build();
+    this.stores.add(param);
+    const out = build();
+    this.stores.delete(param);
+    return out;
   }
 
   /**
@@ -1720,7 +1747,7 @@ export class Compiler {
       fb = this.fallback(p),
       n = this.uid++,
       x = `__rrX${n}`;
-    const kids = (arg: () => string) => this.content(this.kids(p), arg);
+    const kids = (arg: () => string) => this.storeChild(this.kids(p), when, () => this.content(this.kids(p), arg));
     if (!this.changes(when))
       return `((${x}) => () => (${x} ? ${kids(() => (keyed ? x : `() => ${x}`))} : ${fb}))(${w})`;
     if (keyed) {
@@ -1757,7 +1784,7 @@ export class Compiler {
           throw new ReactreCompileError(`reactre: <Switch> takes only <Match> children: ${k}`);
         const mp = this.flowProps(m, "Match", ["when", "keyed", "children"]);
         const [when, whenAt] = need(mp, "when", "Match");
-        return { w: this.rewrite(when, whenAt), keyed: keyedOf(mp, "Match"), props: mp };
+        return { w: this.rewrite(when, whenAt), when, keyed: keyedOf(mp, "Match"), props: mp };
       });
     const keyed = matches.some((m) => m.keyed);
     const chain = matches
@@ -1766,7 +1793,9 @@ export class Compiler {
       .join(" : ");
     const cases = matches
       .map((m, k) => {
-        const kids = this.content(this.kids(m.props), () => (m.keyed ? value : accessor(m.w)));
+        const kids = this.storeChild(this.kids(m.props), m.when, () =>
+          this.content(this.kids(m.props), () => (m.keyed ? value : accessor(m.w))),
+        );
         return `case ${k}: return ${kids};`;
       })
       .join(" ");

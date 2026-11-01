@@ -2015,7 +2015,8 @@ describe("for.nonkeyed.store.spec.tsx, and store reads in TSX", () => {
   });
 
   // Solid tracks a store read where it runs, so each of these updates in Solid. reactre's compiler
-  // binds a hole only for a read it can follow to a store (README, "Feature modules").
+  // binds a hole for a read it can follow to a store (README, "Feature modules"): through a local,
+  // an object, a function's result, and a prop of a component whose callers are all in its file.
 
   /** Render `jsx` (a view over `store`) and write `store.todos` and `store.count`: what it shows before and after. */
   function aliased(prelude: string, jsx: string): [string, string] {
@@ -2047,9 +2048,7 @@ describe("for.nonkeyed.store.spec.tsx, and store reads in TSX", () => {
     ).toEqual(["1a", "2ab"]);
   });
 
-  const aliasWhy = "the compiler cannot follow the read to a store, so the hole is written once";
-
-  gap("store-alias", aliasWhy, "a store's array read through a local alias", () => {
+  test("a store's array read through a local alias", () => {
     expect(
       aliased(
         "const todos = store.todos;",
@@ -2058,11 +2057,11 @@ describe("for.nonkeyed.store.spec.tsx, and store reads in TSX", () => {
     ).toEqual(["1a", "2ab"]);
   });
 
-  gap("store-alias", aliasWhy, "a store read through a box", () => {
+  test("a store read through a box", () => {
     expect(aliased("const box = { store };", `<p>{box.store.count}</p>`)).toEqual(["1", "2"]);
   });
 
-  gap("store-alias", aliasWhy, "a store's array returned by a function, and its rows' reads", () => {
+  test("a store's array returned by a function, and its rows' reads", () => {
     expect(
       aliased(
         "const getTodos = () => store.todos;",
@@ -2071,7 +2070,7 @@ describe("for.nonkeyed.store.spec.tsx, and store reads in TSX", () => {
     ).toEqual(["a", "ab"]);
   });
 
-  gap("store-alias", aliasWhy, "a store's array passed as props.list", () => {
+  test("a store's array passed as props.list", () => {
     expect(
       aliased(
         "function List(props) { return <ul><For each={props.list} key={(t) => t.title}>{(t) => <li>{t.title}</li>}</For></ul>; }",

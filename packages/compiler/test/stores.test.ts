@@ -56,7 +56,8 @@ describe("store roots", () => {
       if (x === make({})) y += make({});
       o.make({}); S.other({});
     `);
-    expect([...findStores(src)].sort()).toEqual(["a", "b", "c", "d", "e", "f"]);
+    // `tuple` keeps a store's tuple whole: `tuple[0]` is the store.
+    expect([...findStores(src)].sort()).toEqual(["a", "b", "c", "d", "e", "f", "tuple"]);
     // Without the store module's import, nothing is a store, whatever its name.
     expect(findStores(js(`import { createStore } from "./mine"; const [s] = createStore({});`))).toEqual(new Set());
     expect(
@@ -201,19 +202,129 @@ describe("compiling store reads", () => {
     expect(shadow).toContain("() => (t.title)");
   });
 
-  test("what the compiler cannot follow stays as before: a local made of a member, a store in an object", () => {
+  test("a local made of a store's member is a store root: its holes are bound, a <For> over it is copied", () => {
     const out = compileSource(`
       import { For } from "@reactre/core";
       ${STORE}
       const [s] = createStore({ todos: [] });
-      const todos = s.todos, box = { s };
+      const todos = s.todos, { list: first = [] } = s, plain = { n: 1 }, n = plain.n;
       export const A = () => (
-        <div>{box.s.n}<ul><For each={todos} key={(t) => t.id}>{(t) => <li>{t.title}</li>}</For></ul></div>
+        <div>
+          {todos.length}{first.length}{n}
+          <ul><For each={todos} key={(t) => t.id}>{(t) => <li>{t.title}</li>}</For></ul>
+        </div>
       );
     `);
-    expect(out).toContain('clone([(box.s.n), ""])');
-    expect(out).toContain("each: () => (todos)");
-    expect(out).toContain("fill: (t, __v) => { __v[0] = (t.title); }");
+    expect(out).toContain("() => (todos.length)");
+    expect(out).toContain("() => (first.length)");
+    expect(out).toContain("each: () => ([...(todos)])");
+    expect(out).toContain("dyn: (t, __d) => { __d[0] = (t.title); }");
+    // A local made of what holds no store is as before.
+    expect(out).toContain('clone(["", "", (n), ""])');
+  });
+
+  test("a store in an object, a store's tuple kept whole, and what is assigned one are store roots", () => {
+    const out = compileSource(`
+      ${STORE}
+      const [s] = createStore({ n: 1 });
+      const box = { s }, t = createStore({ n: 1 }), nested = { inner: { get s() { return s; } } };
+      let late, slots = {}, list = [];
+      late = s; slots.a = s; list[0] = s;
+      class C { f = s; m() { this.x = s; } }
+      export const A = () => <p>{box.s.n}{t[0].n}{nested.inner.s.n}{late.n}{slots.a.n}{list[0].n}</p>;
+    `);
+    for (const read of ["box.s.n", "t[0].n", "nested.inner.s.n", "late.n", "slots.a.n", "list[0].n"])
+      expect(out).toContain(`() => (${read})`);
+  });
+
+  test("a function that returns a store is a store root: a hole and a <For> that read its result follow it", () => {
+    const out = compileSource(`
+      import { For } from "@reactre/core";
+      ${STORE}
+      const [s] = createStore({ todos: [] });
+      function useTodos() { return s; }
+      const getTodos = () => s.todos, current = useTodos();
+      export const A = () => (
+        <div data-n={current.n}>
+          <ul><For each={useTodos().todos} key={(t) => t.id}>{(t) => <li>{t.title}</li>}</For></ul>
+          <ol><For each={getTodos()} key={(t) => t.id}>{(t) => <li>{t.done ? "+" : "-"}</li>}</For></ol>
+        </div>
+      );
+    `);
+    expect(out).toContain("() => (current.n)");
+    expect(out).toContain("each: () => ([...(useTodos().todos)])");
+    expect(out).toContain("each: () => ([...(getTodos())])");
+    expect(out).toContain("dyn: (t, __d) => { __d[0] = (t.title); }");
+    expect(out).toContain('dyn: (t, __d) => { __d[0] = (t.done ? "+" : "-"); }');
+  });
+
+  test("a store's array passed in as a prop: the component's <For> over it is copied and its rows follow", () => {
+    const out = compileSource(`
+      import { For } from "@reactre/core";
+      ${STORE}
+      const [s] = createStore({ todos: [] });
+      function List(props) {
+        const todos = props.todos;
+        return (
+          <div>
+            <ul><For each={props.todos} key={(t) => t.id}>{(t) => <li><Item todo={t} /></li>}</For></ul>
+            <ol><For each={todos} key={(t) => t.id}>{(t) => <li>{t.title}</li>}</For></ol>
+            <Pattern list={props.todos} />
+          </div>
+        );
+      }
+      function Pattern({ list }) {
+        return <ul><For each={list} key={(t) => t.id}>{(t) => <li>{t.title}</li>}</For></ul>;
+      }
+      function Item(props) { return <ul><For each={props.todo.tags} key={(g) => g}>{(g) => <b>{g}</b>}</For></ul>; }
+      function Plain(props) { return <ul><For each={props.rows} key={(r) => r.id}>{(r) => <li>{r.title}</li>}</For></ul>; }
+      export const A = () => <main><List todos={s.todos} /><Plain rows={[{ id: 1, title: "a" }]} /></main>;
+    `);
+    expect(out).toContain("each: () => ([...(props.todos)])");
+    expect(out).toContain("each: () => ([...(todos)])");
+    expect(out).toContain("each: () => ([...(list)])");
+    expect(out).toContain("Item({ get todo() { return t; } })");
+    expect(out).toContain("each: () => ([...(props.todo.tags)])");
+    // A component no call site passes a store compiles as before.
+    expect(out).toContain("each: () => (props.rows)");
+    expect(out).toContain("fill: (r, __v) => { __v[0] = (r.title); }");
+  });
+
+  test("a component its file exports is passed no store, as its file seen alone cannot see its callers: as before", () => {
+    const list = `
+      import { For } from "@reactre/core";
+      export function List(props) { return <ul><For each={props.todos} key={(t) => t.id}>{(t) => <li>{t.title}</li>}</For></ul>; }
+      export const Count = ({ value }) => <p>{value}</p>;
+    `;
+    const alone = compileSource(list);
+    expect(alone).toContain("each: () => (props.todos)");
+    expect(alone).toContain("clone([(value)])");
+    // A program that sees a caller pass it a store's array compiles it the same.
+    const p = program({
+      list,
+      main: `${STORE} import { List, Count } from "./list"; const [s] = createStore({ todos: [] }); export const A = () => <div><List todos={s.todos} /><Count value={s} /></div>;`,
+    });
+    expect(compileJs(js(list), { props: p.factsOf("list") })).toBe(alone);
+    expect(p.factsOf("list").storeProps).toBeUndefined();
+  });
+
+  test("a keyed <Show>'s and <Match>'s child gets a store: its holes that read it are bound", () => {
+    const out = compileSource(`
+      import { Match, Show, Switch } from "@reactre/core";
+      ${STORE}
+      const [s] = createStore({ user: null });
+      const plain = { user: { name: "a" } };
+      export const A = () => (
+        <div>
+          <Show when={s.user} keyed>{(u) => <p>{u.name}</p>}</Show>
+          <Switch><Match when={s.user} keyed>{(m) => <i>{m.name}</i>}</Match></Switch>
+          <Show when={plain.user} keyed>{(v) => <b>{v.name}</b>}</Show>
+        </div>
+      );
+    `);
+    expect(out).toContain("() => (u.name)");
+    expect(out).toContain("() => (m.name)");
+    expect(out).toContain("clone([(v.name)])");
   });
 
   test("a file seen alone takes an import for a store, as it may be one; not @reactre's, an asset's or a local", () => {
@@ -345,6 +456,81 @@ describe("stores across a program", () => {
       props: p.factsOf("item"),
     });
     expect(out).toContain("() => (props.todo.title)");
+  });
+
+  test("what a module makes of a store and exports is a store where another imports it; what it makes of none is not", () => {
+    const made = `
+      import { store, plain } from "./state";
+      import { lib } from "some-package";
+      export const todos = store.todos, box = { store }, n = plain.n, fromLib = lib.x;
+      export function useStore() { return store; }
+      export const getPlain = () => plain;
+    `;
+    const main = `
+      import { For } from "@reactre/core";
+      import { todos, box, n, fromLib, useStore, getPlain } from "./made";
+      export const A = () => (
+        <div>
+          {todos.length}{box.store.n}{n}{fromLib.y}{getPlain().n}
+          <ul><For each={useStore().todos} key={(t) => t.id}>{(t) => <li>{t.title}</li>}</For></ul>
+          <ol><For each={getPlain().list} key={(t) => t.id}>{(t) => <li>{t.title}</li>}</For></ol>
+        </div>
+      );
+    `;
+    const p = program({ state, made, main });
+    expect(facts(p, "made").stores).toEqual(["box", "fromLib", "lib", "store", "todos", "useStore"]);
+    expect(facts(p, "main").stores).toEqual(["box", "fromLib", "todos", "useStore"]);
+    const out = compileJs(js(main), { props: p.factsOf("main") });
+    expect(out).toContain("() => (todos.length)");
+    expect(out).toContain("() => (box.store.n)");
+    expect(out).toContain("() => (fromLib.y)");
+    expect(out).toContain("[...(useStore().todos)]");
+    expect(out).toContain("dyn: (t, __d) => { __d[0] = (t.title); }");
+    // `n` and `getPlain` hold no store: written once, and a list over them is not copied.
+    expect(out).toContain('clone(["", "", (n), "", "", "", ""])');
+    expect(out).toContain("each: () => (getPlain().list)");
+  });
+
+  test("scanModule: the locals that may hold a store, with what they are made of", () => {
+    const info = scanModule(
+      js(`
+        ${STORE}
+        import { ext } from "./ext";
+        const [s] = createStore({});
+        const a = s.x, b = a.y, { c, d: e = 1, ...f } = ext;
+        for (const g of s.list) use(g);
+        for (const [h] of a) use(h);
+        function fn() { return b; }
+        function Comp(props) { const i = props.i; return i; }
+        function Pat({ j, k: l }) { return j; }
+        let none = 1, m = () => s;
+        if (none == s) none += s;
+        this.q = s; obj[key].r = s;
+      `),
+    );
+    const roots = Object.fromEntries([...info.aliases].map(([k, a]) => [k, [...a.roots].sort()]));
+    // A function is one by what its body mentions, its own locals too (Comp's `i`, Pat's `j`, `l`).
+    expect(roots).toEqual({
+      Comp: ["i"],
+      Pat: ["j", "l"],
+      a: ["s"],
+      b: ["a"],
+      c: ["ext"],
+      e: ["ext"],
+      f: ["ext"],
+      g: ["s"],
+      h: ["a"],
+      fn: ["b"],
+      i: [],
+      j: [],
+      l: [],
+      m: ["s"],
+      obj: ["s"],
+    });
+    expect(info.aliases.get("i")!.reads.map(([d, r]) => [d.name, [...(r as Set<string>)]])).toEqual([["Comp", ["i"]]]);
+    expect(info.aliases.get("l")!.reads.map(([d, r]) => [d.name, [...(r as Set<string>)]])).toEqual([["Pat", ["k"]]]);
+    // Those its own store alone makes stores are its stores.
+    expect([...info.stores].sort()).toEqual(["a", "b", "fn", "g", "h", "m", "obj", "s"]);
   });
 
   test("with the program's facts, a module of it that exports no store is exact: its reads are written once", () => {

@@ -41,7 +41,7 @@ type State = { count: number; title: string; todos: Todo[] };
 type App = { mount(el: unknown): StoreSetter<State> };
 
 const builds = {
-  vite: async (dir: string) => {
+  vite: async (dir: string, entry = APP) => {
     await vite({
       configFile: false,
       logLevel: "silent",
@@ -50,13 +50,13 @@ const builds = {
         outDir: dir,
         emptyOutDir: true,
         minify: false,
-        lib: { entry: APP, formats: ["es"], fileName: () => "main.js" },
+        lib: { entry, formats: ["es"], fileName: () => "main.js" },
       },
     });
   },
-  esbuild: async (dir: string) => {
+  esbuild: async (dir: string, entry = APP) => {
     await esbuild({
-      entryPoints: [APP],
+      entryPoints: [entry],
       outfile: join(dir, "main.js"),
       bundle: true,
       format: "esm",
@@ -131,5 +131,75 @@ describe("a store in one module, read in others", () => {
     await builds.vite(dir);
     expect(dev).toEqual(drive((await import(join(dir, "main.js"))) as App));
     expect(dev).toEqual(UPDATES);
+  }, 60_000);
+});
+
+// fixtures/stores/aliases.tsx reads the same store through what is made of it: locals, exports of
+// ./state.ts, a box, a function's result, a keyed <Show>'s value, a tuple kept whole, a prop.
+
+const ALIASES = FIXTURE + "aliases.tsx";
+
+type Aliases = {
+  mount(el: unknown): { setStore: StoreSetter<State>; setTuple: StoreSetter<{ n: number }> };
+};
+
+/** Mount aliases.tsx, write to its stores, and say what each of its parts showed each time. */
+function driveAliases(app: Aliases): string[][] {
+  installFakeDocument();
+  const root = new FakeElement("DIV");
+  const { setStore, setTuple } = app.mount(root);
+  const seen = () =>
+    ((root.firstChild as FakeElement).childNodes as FakeElement[])
+      .filter((n) => n.tagName)
+      .map((n) => n.textContent ?? "");
+  const shown = [seen()];
+  setStore((s) => {
+    s.count = 1;
+    s.todos.push({ id: 1, title: "x", done: false }, { id: 2, title: "y", done: false });
+  });
+  setTuple((t) => {
+    t.n = 1;
+  });
+  shown.push(seen());
+  setStore((s) => {
+    s.todos[0]!.title = "X";
+    s.todos[0]!.done = true;
+    s.todos.splice(1, 1);
+  });
+  shown.push(seen());
+  return shown;
+}
+
+/** What each part of aliases.tsx shows at each step when every read follows the store. */
+const ALIAS_UPDATES = [
+  ["0", "0", "", "", "", "0", "0"],
+  ["2", "1", "xy", "--", "x", "1", "2xy"],
+  ["1", "1", "X", "+", "X", "1", "1X"],
+];
+
+describe("a store read through what is made of it, in one module and in others", () => {
+  for (const [name, build] of Object.entries(builds))
+    test(`${name} build`, async () => {
+      const dir = join(out, "aliases-" + name);
+      await build(dir, ALIASES);
+      expect(driveAliases((await import(join(dir, "main.js"))) as Aliases)).toEqual(ALIAS_UPDATES);
+    }, 60_000);
+
+  test("vite's dev server, each file alone, renders the same updates as vite build", async () => {
+    const server = await createServer({
+      configFile: false,
+      logLevel: "silent",
+      root: FIXTURE,
+      plugins: [vitePlugin()],
+      appType: "custom",
+      server: { middlewareMode: true, ws: false },
+    });
+    let dev: string[][];
+    try {
+      dev = driveAliases((await server.ssrLoadModule("/aliases.tsx")) as Aliases);
+    } finally {
+      await server.close();
+    }
+    expect(dev).toEqual(ALIAS_UPDATES);
   }, 60_000);
 });

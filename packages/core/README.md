@@ -305,20 +305,22 @@ The store APIs are Solid 2.0's, under its names but one: setters are draft-first
 
 A `<For>` over a store's array reads a copy of it, which reads its length and every index tracked, since a list needs a new array for each render and a store's array changes in place; the items stay the same proxies, so only new rows are built. In its rows, a hole that reads only the item follows the item's in-place writes, and so do a nested `<For each={t.tags}>` and a component passed the item (`<Item todo={t} />`). An app whose files bind and import no store compiles as before, and so does each list over anything else.
 
-What the compiler cannot follow to a store is written once, as any member read is. Which reads update, the same on a dev server as in a production build:
+What is made of a store is followed too: a local of it or of its member, an object that holds it, a function that returns it, a keyed `<Show>`'s value, and a prop a component's own file passes it. What the compiler cannot follow to a store is written once, as any member read is. Which reads update, the same on a dev server as in a production build:
 
-| Pattern                                                                                         | Updates?                                                    |
-| ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| `{store.count}`, `{ns.store.count}`, `{t.title}` in a store's row, with `store` imported or not | yes                                                         |
-| `<For each={store.todos}>`, `<For each={[...store.todos]}>`                                     | yes                                                         |
-| `<Label text={store.title} />`, `<Card s={store} />`, `<Item todo={t} />`                       | yes                                                         |
-| `{getStore().count}`, `<For each={[...getTodos()]}>`                                            | yes: it calls something                                     |
-| `const todos = store.todos` then `{todos.length}`, `<For each={todos}>`                         | no: use `{todos.length.toString()}`, `each={[...todos]}`    |
-| `const box = { store }` then `{box.store.count}`                                                | no: read `store.count`, or call something                   |
-| `<For each={getTodos()}>` and its rows' `{t.title}`                                             | no: spread it, and make the hole call (`{String(t.title)}`) |
-| `<For each={props.todos}>`, a caller passing `todos={store.todos}`, and its rows' `{t.title}`   | no: the same, `each={[...props.todos]}` and a call          |
+| Pattern                                                                                          | Updates?                                                                 |
+| ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------ |
+| `{store.count}`, `{ns.store.count}`, `{t.title}` in a store's row, with `store` imported or not  | yes                                                                      |
+| `<For each={store.todos}>`, `<For each={[...store.todos]}>`                                      | yes                                                                      |
+| `<Label text={store.title} />`, `<Card s={store} />`, `<Item todo={t} />`                        | yes                                                                      |
+| `{getStore().count}`, `<For each={[...getTodos()]}>`                                             | yes: it calls something                                                  |
+| `const todos = store.todos` then `{todos.length}`, `<For each={todos}>`, in a module or imported | yes                                                                      |
+| `const box = { store }` then `{box.store.count}`; `const t = createStore(...)` then `{t[0].n}`   | yes                                                                      |
+| `function useTodos() { return store; }` then `<For each={useTodos().list}>`, its rows' reads     | yes                                                                      |
+| `<Show when={store.user} keyed>{(u) => <p>{u.name}</p>}</Show>`                                  | yes                                                                      |
+| `<For each={props.todos}>`, a caller passing `todos={store.todos}`, and its rows' `{t.title}`    | yes, where the file neither exports the component nor uses it as a value |
+| the same in a component its file exports or uses as a value                                      | no: `each={[...props.todos]}`, and a call (`{String(t.title)}`)          |
 
-The rows that say no are the same in both modes: each needs its workaround on a dev server and in a production build alike. The store itself is always current: a hole the compiler cannot follow keeps the value it was written with until the content around it is built again.
+The row that says no is the same in both modes: it needs its workaround on a dev server and in a production build alike, since a file seen alone cannot see the component's callers. The store itself is always current: a hole the compiler cannot follow keeps the value it was written with until the content around it is built again.
 
 ### Context and error boundaries
 

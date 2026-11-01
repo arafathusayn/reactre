@@ -969,7 +969,7 @@ describe("in compiled TSX", () => {
     expect(root.textContent).toBe("cA");
   });
 
-  test("what the compiler cannot follow to a store is written once: a local of a member, a store in an object, a function's result, a prop", () => {
+  test("a store read through a local of its member, an object, a function's result or a prop follows it", () => {
     const root = box();
     const api = run<{ set: store.StoreSetter<{ n: number; todos: Todo[] }> }>(
       `
@@ -1011,9 +1011,9 @@ describe("in compiled TSX", () => {
       d.todos[0]!.title = "A";
       d.todos.push({ id: 2, title: "b", done: false });
     });
-    // A hole that calls follows what it reads; a hole that reads only a <For>'s item, and a <For>
-    // given the store's own array, do not, unless they call something or spread it.
-    expect(texts().slice(0, 6)).toEqual(["1", "2", "A", "a", "a", "Ab"]);
-    expect(list()).toEqual(["a", "Ab"]);
+    // Each is a store root: its holes are bound, and a <For> over it reads a copy and binds the
+    // holes that read its item. List's one caller passes it the store's array.
+    expect(texts().slice(0, 6)).toEqual(["2", "2", "A", "Ab", "Ab", "Ab"]);
+    expect(list()).toEqual(["Ab", "Ab"]);
   });
 });
