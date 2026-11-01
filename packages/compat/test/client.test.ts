@@ -31,6 +31,11 @@ const ReactServer: Any = await load("react-dom/server.browser");
 const internals = ReactDOM.__DOM_INTERNALS_DO_NOT_USE_OR_WARN_USERS_THEY_CANNOT_UPGRADE;
 const before = internals.d;
 const ReactClient: Any = await load("react-dom/client");
+// The scheduler react-dom's client runs its tasks on (the same module: resolved from react-dom,
+// with the same NODE_ENV), to wait until its queue is empty.
+const Scheduler: Any = await load(
+  Bun.resolveSync("scheduler", Bun.resolveSync("react-dom/client", import.meta.dir).replace(/[^/]*$/, "")),
+);
 // The client installs its handlers once, as the first file that loads it does, which keeps them in
 // a global for the others; each file puts back the ones it found.
 const client = ((globalThis as Any).__reactClientDispatcher ??= internals.d);
@@ -126,9 +131,36 @@ function nodes(n: FakeNode, out: FakeNode[] = []): FakeNode[] {
   return out;
 }
 
-/** Let React's scheduler run (it hydrates Suspense boundaries in tasks of their own). */
+/** A task of the scheduler's last priority: it runs once every task before it has. Gives its id. */
+const idle = (): Promise<number> =>
+  new Promise((r) => {
+    const task = Scheduler.unstable_scheduleCallback(Scheduler.unstable_IdlePriority, () => void r(task.id));
+  });
+
+/**
+ * Lets React's scheduler run until it has nothing left: it hydrates Suspense boundaries in tasks
+ * of their own, and yields after each commit, each time in a new setImmediate. Timers alone raced
+ * it: one of 0 ms is due before the next of those tasks once a millisecond has passed, so on a
+ * loaded machine a few timers let only a few of its tasks run. Here an idle task runs after all
+ * React queued before it, and the next one's id, one more, shows that React queued nothing since.
+ * Compat's tasks (MessageChannel messages) run before either.
+ */
+async function drain(): Promise<void> {
+  let id = await idle();
+  for (let i = 0; i < 10_000; i++) {
+    const next = await idle();
+    if (next === id + 1) return;
+    id = next;
+  }
+}
+
+/** Let React's scheduler run, and the timers of 0 ms either library sets. */
 const tasks = async (): Promise<void> => {
-  for (let i = 0; i < 5; i++) await new Promise((r) => setTimeout(r, 0));
+  for (let i = 0; i < 5; i++) {
+    await drain();
+    await new Promise((r) => setTimeout(r, 0));
+  }
+  await drain();
 };
 
 // #endregion
@@ -1179,7 +1211,11 @@ describe("hydration passes", () => {
   };
   /** Long enough for each library's tasks: React's scheduler and compat's passes. */
   const settle = async (): Promise<void> => {
-    for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 0));
+    for (let i = 0; i < 20; i++) {
+      await drain();
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    await drain();
   };
 
   type Step = (c: Any, log: string[], L: Lib) => unknown;

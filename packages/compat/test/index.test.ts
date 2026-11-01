@@ -803,6 +803,9 @@ describe("suspense", () => {
     await sleep(50);
     expect(html()).toBe("<i>loading</i>");
     await sleep(shown + 320 - performance.now());
+    // The reveal's timer fires first, and posts the render as a task: on a loaded machine both
+    // timers are due at once and this one runs before that task, so a turn lets it run.
+    await new Promise((r) => setImmediate(r));
     expect(html()).toBe("<b>ready</b>");
   });
 

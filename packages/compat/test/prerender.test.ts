@@ -55,6 +55,19 @@ const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
 /** A promise that resolves to `value` after `ms`. */
 const later = <T>(value: T, ms = 1): Promise<T> => new Promise((r) => setTimeout(() => r(value), ms));
 
+/**
+ * `ms`, then the work it let go: a server renders what a timer settled in a task it posts
+ * (setImmediate, or a timer of 0, by build), and on a loaded machine a timer of the test's due at
+ * the same moment runs before that task. Turns of both kinds let it run out.
+ */
+async function after(ms: number): Promise<void> {
+  await later(null, ms);
+  for (let i = 0; i < 10; i++) {
+    await new Promise((r) => setImmediate(r));
+    await tick();
+  }
+}
+
 /** An error's message, as the logs compare them. */
 const message = (e: Any): string => (e instanceof Error ? e.message : String(e));
 
@@ -914,7 +927,7 @@ describe("replaying the prerendered tree", () => {
         const reader = stream.getReader();
         let html = "";
         const decoder = new TextDecoder();
-        const timeout = later(null, 20);
+        const timeout = after(20).then(() => null);
         for (;;) {
           const step = await Promise.race([reader.read(), timeout]);
           if (step === null || step.done) break;
@@ -1304,7 +1317,7 @@ describe("resumeAndPrerender", () => {
           signal: controller.signal,
           onError: (e: Any) => void log.push(message(e)),
         });
-        await later(0, 5);
+        await after(5);
         controller.abort(STOP);
         const { prelude, postponed: next } = await p;
         const html = node ? await readNode(prelude) : await text(prelude);

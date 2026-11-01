@@ -583,7 +583,9 @@ describe("observers", () => {
     io.log.length = 0;
     flushSync(() => setItems(["b"]));
     expect(io.log).toEqual([]);
-    await nextTask(30);
+    // After paint is two frames, each a timer of 0 here: one of 30 ms can come between them on a
+    // loaded machine (the second is made when the first fires), so wait for the unobserve itself.
+    await until(() => io.log.length > 0);
     expect(io.log).toEqual(["unobserve li"]);
     // Hidden and shown again before paint: observed again, and its waiting unobserve dropped
     // (another node's stays).
@@ -591,7 +593,8 @@ describe("observers", () => {
     flushSync(() => setItems([]));
     flushSync(() => set("hidden"));
     flushSync(() => set("visible"));
-    await nextTask(30);
+    // The one unobserve left runs in the same frame as the dropped one would have.
+    await until(() => io.log.length > 1);
     expect(io.log).toEqual(["observe q", "unobserve li"]);
     flushSync(() => setItems(["b"]));
     // unobserveUsing runs the waiting unobserves at once.
