@@ -44,13 +44,16 @@
 // subscribes to `count`. A module's store roots are the names it binds stores to
 // (`const [store, setStore] = createStore(...)`, `const p = createProjection(...)`, `findStores`),
 // and those it imports from a module of the program that exports one, through re-exports and
-// namespace imports (`Program.factsOf` gives them as `PropFacts.stores`). A prop whose value
+// namespace imports (`Program.factsOf` gives them as `PropFacts.stores`). An import the program
+// cannot see into may be a store, and is taken for one, as a component whose callers cannot all
+// be seen takes every prop reactively: one from a package outside the program, and, for a module
+// seen alone (`moduleFacts`), any import. @reactre's own modules and assets export none. A prop whose value
 // mentions a store root (`<Label text={store.title} />`, `<Item todo={store.todos[0]} />`) is passed
 // reactively, as one that calls something; so is one that mentions the item of a `<For>` row whose
 // `each` mentions a store root, since that item is a store too. What holds a store that the scan
-// cannot follow (a local made of a store or of its member, a store kept in an object, a module
-// outside the program, a re-export of `createStore`) is not a root: its reads are written once,
-// as any member read is, unless they call something (`getStore().count`).
+// cannot follow (a local made of a store or of its member, a store kept in an object, a store
+// made by a re-export of `createStore`) is not a root: its reads are written once, as any member
+// read is, unless they call something (`getStore().count`).
 
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
@@ -66,9 +69,10 @@ import { isIdent, skipToken, splitAt, trimAt, until } from "./scan.ts";
  */
 export type PropFacts = ReadonlyMap<string, ReadonlySet<string> | true> & {
   /**
-   * The names the module reads stores by (see `findStores`): its own, and those it imports from
-   * modules of the program (`store`, or `state.store` through a namespace import). Without it, the
-   * module's own alone.
+   * The names the module reads stores by (see `findStores`): its own, those it imports from
+   * modules of the program (`store`, or `state.store` through a namespace import), and those it
+   * imports from where the program cannot see, which may be stores (`state.*` for every member of
+   * a namespace). Without it, the module's own alone.
    */
   readonly stores?: ReadonlySet<string>;
 };
@@ -767,8 +771,7 @@ export function scanModule(src: string): ModuleInfo {
   // a <For> row whose `each` mentions one, so does the row's item, standing for the roots `each`
   // mentions (`under`).
   const roots = new Set(stores);
-  for (const [local, b] of imports)
-    if (!b.spec.startsWith("@reactre/")) roots.add(b.name === "*" ? `${local}.*` : local);
+  for (const [local, b] of imports) if (exportsStores(b.spec)) roots.add(b.name === "*" ? `${local}.*` : local);
   const rows: { readonly name: string; readonly start: number; readonly end: number; readonly under: string[] }[] = [];
   const rowsAt = (at: number) => rows.filter((r) => r.start <= at && at < r.end);
   const rootsAt = (at: number): ReadonlySet<string> => {
@@ -941,13 +944,15 @@ export class Program {
     const mod = this.modules.get(file);
     for (const d of mod?.info.defs ?? []) out.set(d.name, union(out.get(d.name), facts.get(d)!));
     this.given.set(file, out);
-    // The module's store roots: its own, and the stores it imports.
+    // The module's store roots: its own, the stores it imports, and what it imports from where the
+    // program cannot see (`unseen`), which may be one.
     const stores = new Set(mod?.info.stores);
     for (const [local, b] of mod?.info.imports ?? []) {
       const target = mod!.resolved.get(b.spec);
       if (b.name !== "*") {
-        if (this.storeExport(target, b.name)) stores.add(local);
-      } else for (const k of this.exportNames(target)) if (this.storeExport(target, k)) stores.add(`${local}.${k}`);
+        if (unseen(b.spec, target) || this.storeExport(target, b.name)) stores.add(local);
+      } else if (unseen(b.spec, target)) stores.add(`${local}.*`);
+      else for (const k of this.exportNames(target)) if (this.storeExport(target, k)) stores.add(`${local}.${k}`);
     }
     return stores.size === 0 ? out : Object.assign(out, { stores });
   }
@@ -1057,10 +1062,12 @@ export class Program {
   private storeIn(file: string, name: string, seen = new Set<string>()): boolean {
     const mod = this.modules.get(file)!;
     const dot = name.indexOf(".");
+    if (dot < 0 && mod.info.stores.has(name)) return true;
     const b = mod.info.imports.get(dot < 0 ? name : name.slice(0, dot));
-    if (dot >= 0) return b?.name === "*" && this.storeExport(mod.resolved.get(b.spec), name.slice(dot + 1), seen);
-    if (mod.info.stores.has(name)) return true;
-    return b !== undefined && b.name !== "*" && this.storeExport(mod.resolved.get(b.spec), b.name, seen);
+    // `ns.member` is a namespace import's member; a plain name, any other import.
+    if (b === undefined || (b.name === "*") !== dot >= 0) return false;
+    const target = mod.resolved.get(b.spec);
+    return unseen(b.spec, target) || this.storeExport(target, dot < 0 ? b.name : name.slice(dot + 1), seen);
   }
 
   /** Whether export `name` of module `file` is a store, through re-exports. */
@@ -1115,11 +1122,32 @@ function union(a: Set<string> | true | undefined, b: Props): Set<string> | true 
 /**
  * The facts of one module seen alone, as `compileJs` gives them when it is not told: a component
  * the module exports or uses as a value is true, and one that is neither has all its callers here.
+ * What it imports leads where it cannot know (null), so an import that may export a store
+ * (`exportsStores`) is taken for one.
  */
 export function moduleFacts(js: string, info: ModuleInfo = scanModule(js)): PropFacts {
   const p = new Program(["\0module"]);
-  p.add("\0module", js, new Map(info.specs.map((s) => [s, false])), info);
+  p.add("\0module", js, new Map(info.specs.map((s) => [s, null])), info);
   return p.factsOf("\0module");
+}
+
+/**
+ * Whether module `spec` may export a store: any but @reactre's own (whose stores are made by
+ * `createStore`, not exported) and an asset's (styles, data, media), which export none.
+ */
+function exportsStores(spec: string): boolean {
+  return !spec.startsWith("@reactre/") && !ASSET.test(spec.replace(/[?#].*$/, ""));
+}
+
+/**
+ * Whether module `spec`, which leads to `to`, may export a store the program cannot see: one it
+ * cannot place (null: a file seen alone), or a package outside it (false, for a bare specifier),
+ * that may export stores at all. A module of the program is seen, and judged by its code; so is a
+ * relative specifier that leads outside it (an asset, a file the build leaves out).
+ */
+function unseen(spec: string, to: Resolved | undefined): boolean {
+  if (typeof to === "string" || !exportsStores(spec)) return false;
+  return to !== false || !/^[./]/.test(spec);
 }
 
 // #endregion

@@ -175,20 +175,47 @@ describe("compiling store reads", () => {
     expect(shadow).toContain("() => (t.title)");
   });
 
-  test("what the compiler cannot follow stays as before: a local made of a member, a store in an object, an import seen alone", () => {
+  test("what the compiler cannot follow stays as before: a local made of a member, a store in an object", () => {
     const out = compileSource(`
       import { For } from "@reactre/core";
-      import { store } from "./state";
       ${STORE}
       const [s] = createStore({ todos: [] });
       const todos = s.todos, box = { s };
       export const A = () => (
-        <div>{box.s.n}{store.n}<ul><For each={todos} key={(t) => t.id}>{(t) => <li>{t.title}</li>}</For></ul></div>
+        <div>{box.s.n}<ul><For each={todos} key={(t) => t.id}>{(t) => <li>{t.title}</li>}</For></ul></div>
       );
     `);
-    expect(out).toContain('clone([(box.s.n), (store.n), ""])');
+    expect(out).toContain('clone([(box.s.n), ""])');
     expect(out).toContain("each: () => (todos)");
     expect(out).toContain("fill: (t, __v) => { __v[0] = (t.title); }");
+  });
+
+  test("a file seen alone takes an import for a store, as it may be one; not @reactre's, an asset's or a local", () => {
+    const out = compileSource(`
+      import { For } from "@reactre/core";
+      import * as core from "@reactre/core";
+      import { store } from "./state";
+      import * as state from "./state";
+      import styles from "./app.module.css";
+      import data from "./data.json?raw";
+      function Label(props) { return <b>{props.text}</b>; }
+      const local = { n: 1 };
+      export const A = () => (
+        <div class={styles.app} title={data.title}>
+          {store.n}{state.store.n}{local.n}{core.version}
+          <Label text={store.title} />
+          <ul><For each={store.todos} key={(t) => t.id}>{(t) => <li>{t.title}</li>}</For></ul>
+        </div>
+      );
+    `);
+    expect(out).toContain("() => (store.n)");
+    expect(out).toContain("() => (state.store.n)");
+    expect(out).toContain("[...(store.todos)]");
+    expect(out).toContain("dyn: (t, __d) => { __d[0] = (t.title); }");
+    expect(out).toContain("get text() { return store.title; }");
+    // Label is called here only, with a getter: its hole is bound.
+    expect(out).toContain("() => (props.text)");
+    expect(out).toContain(`clone([(styles.app), (data.title), "", "", (local.n), (core.version)`);
   });
 });
 
@@ -220,18 +247,25 @@ describe("stores across a program", () => {
         import { loop } from "./cycle";
         import { outside } from "./missing";
         import { lib } from "some-package";
+        import * as pkg from "other-package";
+        import { asset } from "./style.css";
+        import { signal } from "@reactre/core";
         export const A = () => <p>{store.n}</p>;
       `,
     });
+    // A module of the program is judged by its code (plain, cycle and missing hold none); a
+    // package outside it may export a store, unless it is @reactre's or an asset.
     expect(facts(p, "main").stores).toEqual([
       "bar.fromBarrel",
       "bar.renamed",
       "bar.store",
       "def",
       "fromBarrel",
+      "lib",
       "ns.default",
       "ns.renamed",
       "ns.store",
+      "pkg.*",
       "renamed",
       "starred",
       "store",
@@ -287,10 +321,16 @@ describe("stores across a program", () => {
     expect(out).toContain("() => (props.todo.title)");
   });
 
-  test("a module seen alone knows its own stores only: an imported one's reads are written once", () => {
+  test("with the program's facts, a module of it that exports no store is exact: its reads are written once", () => {
+    const main = `import { plain } from "./state"; import { lib } from "some-package"; export const A = () => <p>{plain.n}{lib.n}</p>;`;
+    const p = program({ state, main });
+    const out = compileJs(js(main), { props: p.factsOf("main") });
+    expect(out).toContain('clone([(plain.n), ""])');
+    expect(out).toContain("() => (lib.n)");
+    // Seen alone, the same file takes both for stores.
+    expect(compileSource(main)).toContain('clone(["", ""])');
     const info = scanModule(js(`${STORE} const [s] = createStore({}); import { t } from "./x";`));
     expect([...info.stores]).toEqual(["s"]);
-    expect(compileSource(`import { t } from "./x"; export const A = () => <p>{t.n}</p>;`)).toContain("clone([(t.n)])");
   });
 });
 
@@ -324,8 +364,10 @@ describe("reactreCompiler's whole program, with stores", () => {
     expect(whole).toContain("() => store.n");
     expect(whole).toContain("get text() {");
     expect(whole).toContain("() => props.text");
-    // Each file alone: the import is not known to be a store, and its read is written once.
-    expect(await build(false)).toContain("clone([store.n");
+    // Each file alone: the import may be a store, so its read is bound all the same.
+    const alone = await build(false);
+    expect(alone).toContain("() => store.n");
+    expect(alone).toContain("() => props.text");
   });
 });
 

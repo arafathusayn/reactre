@@ -11,19 +11,20 @@
 // store (`createStore(fn, seed)`, `createProjection`) can read its own draft in `fn` without
 // depending on itself. A setter's writes are batched.
 //
-// With <For>: `<For each={[...store.todos]} key={(t) => t.id}>` follows the array, and a row's
-// hole that calls something (`{todo.title.trim()}`) follows the properties it reads, as a hole
-// that calls a signal does: the row subscribes through the proxy. Two things do not follow:
-//   - `each={store.todos}`. A <For> renders the array `each` returns untracked, and needs a new
-//     array for each render (it keeps the last one to skip rows whose item has not changed); a
-//     store's array is the same array, changed in place. Spreading it reads its length and every
-//     index, tracked, into a new array. The items stay the same proxies, so only new rows are
-//     built.
-//   - A hole that reads only the row's item (`class={todo.done ? "done" : ""}`). The compiler
-//     treats such a hole as the row's own value, written when the row is built and compared when
-//     the row gets a new item, and a store item never becomes a new item: it changes in place.
-//     Outside a list, a hole that calls nothing (`{store.count}`) is written once, for the same
-//     reason: "calls a function" is the compiler's whole test for a reactive hole.
+// In compiled TSX, a read through a store is reactive: @reactre/compiler takes a name bound by
+// `createStore(...)` or `createProjection(...)` for a store root, and so is an import (a module
+// of the whole program that exports a store, or, with each file compiled alone, any import from
+// outside @reactre, which may be one). A hole that mentions one is bound (`{store.count}`,
+// `<Show when={store.user}>`), and a prop that does is a getter. A <For> renders the array `each`
+// returns untracked, and needs a new array for each render (it keeps the last one to skip rows
+// whose item has not changed), while a store's array is the same array, changed in place: so
+// `<For each={store.todos}>` reads a copy, `[...store.todos]`, whose spread reads the length and
+// every index tracked. The items stay the same proxies, so only new rows are built, and in the
+// row the item is a store root too: a hole that reads only it (`class={todo.done ? "done" : ""}`)
+// follows its in-place writes, where a row over plain values compares such a hole when it gets a
+// new item. What the compiler cannot follow to a store (a local made of a store's member, a store
+// kept in an object, a store's array passed as a prop and listed there) is written once, as any
+// member read is: make such a hole call something, and spread such an `each`.
 //
 // Design decisions:
 //   - A feature module, built from @reactre/core's public API alone (`signal`, `effect`,

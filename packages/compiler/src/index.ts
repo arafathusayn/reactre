@@ -31,8 +31,10 @@
 //     (`{props.n}`) is bound only if some call site may pass that prop reactively: the facts of
 //     ./program.ts, given as an option or found in the file alone.
 //   - A store of @reactre/core/features/store is read by member (`{store.count}`): a hole that
-//     mentions one the file binds (`const [store, setStore] = createStore(...)`) or, with a whole
-//     program's facts, imports, is bound, and a prop that mentions one is a getter.
+//     mentions one the file binds (`const [store, setStore] = createStore(...)`) or imports is
+//     bound, and a prop that mentions one is a getter. With a whole program's facts, the imports
+//     that are stores are known; with the file seen alone, any import from outside @reactre may be
+//     one, and is taken for one, so a dev server renders what a production build does.
 //   - A fragment's children join the parent's template; a fragment that is
 //     not a child of an element is an array of nodes (`__frag`).
 //   - A key on an element outside a list rebuilds the element when the key
@@ -67,7 +69,8 @@
 //     component's props (`props.title`), which may be a getter, is reactive when a call site may
 //     pass that prop reactively, so a component whose callers pass only values costs what it did
 //     before props were reactive. A mention of a store root (`store.count`; see ./program.ts) is
-//     reactive, since a store's reads subscribe; a file that binds and imports no store has none.
+//     reactive, since a store's reads subscribe; a file that binds no store and imports only
+//     from @reactre has none.
 //   - A `<For>` whose `each` mentions a store root reads a copy of it (`[...store.todos]`): a
 //     store's array changes in place, and a list needs a new array to render. Its row's item is a
 //     store root in the row, so a hole that reads only the item (`t.done`) is reactive, where a
@@ -119,7 +122,8 @@ export interface CompileOptions {
    * map is reactive in every prop. Without the option, the file is seen alone: a component it
    * neither exports nor uses as a value has all its call sites in it, and any other is reactive in
    * every prop. The facts' `stores` are the stores the file imports (`Program.factsOf` gives
-   * them); without them, only the stores the file binds itself are known.
+   * them); without them, only the stores the file binds itself are known. Without the option, any
+   * import from outside @reactre (but an asset's) may be a store, and is taken for one.
    */
   readonly props?: PropFacts;
 }
@@ -398,7 +402,8 @@ function compile(js: string, map: boolean, options: CompileOptions = {}): string
     const info = scanModule(js);
     [defs, props, stores] = [[...info.defs], moduleFacts(js, info), new Set(info.stores)];
   }
-  // The stores the file binds, and those the program says it imports.
+  // The stores the file binds, and those it imports: the program's, or seen alone, any import that
+  // may be one (`moduleFacts`).
   for (const s of props.stores ?? []) stores.add(s);
   const c = new Compiler(helpers, fragments, map, flowNames(js), defs, props, stores);
   const body = c.rewrite(js, 0);
@@ -509,8 +514,8 @@ class Compiler {
    * Whether the member reads of `expr` read what may change: a prop that a call site of the
    * component it is written in may pass reactively (`props.title`), or a store's property
    * (`store.count`, a store row's `t.done`; any mention of a store root). Every member read the
-   * compiler judges comes here. A file that binds and imports no store has no store roots, so
-   * only its props are judged, as before stores were.
+   * compiler judges comes here. A file that binds no store and imports only from @reactre has no
+   * store roots, so only its props are judged, as before stores were.
    */
   private readsChanging(expr: string): boolean {
     return (
