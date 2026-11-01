@@ -30,6 +30,34 @@ const fails = (src: string, message: RegExp) => {
   expect(() => server(src)).toThrow(message);
 };
 
+/** A version 3 map's segments, decoded: [line, column, source line, source column], 0-based. */
+function segments(mappings: string): [number, number, number, number][] {
+  const B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  const out: [number, number, number, number][] = [];
+  let sl = 0,
+    sc = 0;
+  mappings.split(";").forEach((line, l) => {
+    let col = 0;
+    for (const seg of line.split(",").filter(Boolean)) {
+      const v: number[] = [];
+      for (let i = 0, n = 0, shift = 0; i < seg.length; i++) {
+        const d = B64.indexOf(seg[i]!);
+        n += (d & 31) << shift;
+        if (d & 32) shift += 5;
+        else {
+          v.push(n & 1 ? -(n >> 1) : n >> 1);
+          n = shift = 0;
+        }
+      }
+      col += v[0]!;
+      sl += v[2]!;
+      sc += v[3]!;
+      out.push([l, col, sl, sc]);
+    }
+  });
+  return out;
+}
+
 // #region Imports
 
 describe("imports", () => {
@@ -138,9 +166,21 @@ describe("imports", () => {
     expect(out).toContain(`import * as A from "@reactre/core/server/actions";`);
     // A read through a store's local is followed as it is in the client's compile.
     expect(out).toContain("__rrsL(() => __rrsT((item.name), 0))");
-    const mapped = compileJsWithMap(transpileSource(src, "tsx"), { server: true });
-    expect(mapped.code).toContain(`from "@reactre/core/server/store";`);
-    expect(mapped.map).not.toBeNull();
+    // The map's columns are the code's: what follows a pointed specifier maps to its own source.
+    const js = transpileSource(
+      `import { createStore } from "@reactre/core/features/store";\n${src.split("\n").slice(2).join("\n")}`,
+      "tsx",
+    );
+    const mapped = compileJsWithMap(js, { server: true });
+    const code = mapped.code.split("\n"),
+      input = js.split("\n");
+    const line = code.findIndex((l) => l.includes(`from "@reactre/core/server/store";`)),
+      inLine = input.findIndex((l) => l.includes(`from "@reactre/core/features/store";`));
+    expect(
+      segments(mapped.map!.mappings)
+        .filter(([l]) => l === line)
+        .at(-1),
+    ).toEqual([line, code[line]!.lastIndexOf(";"), inLine, input[inLine]!.lastIndexOf(";")]);
     // Without JSX, the module is not compiled, and its imports are pointed all the same.
     const plain = `import { deep } from "@reactre/core/features/store";\nexport const d = deep;`;
     expect(compileJsWithMap(plain, { server: true })).toEqual({

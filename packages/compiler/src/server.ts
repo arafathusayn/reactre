@@ -42,6 +42,7 @@ import {
   text,
   VOID,
 } from "./index.ts";
+import { mark } from "./map.ts";
 import { literal, NOT_LITERAL } from "./scan.ts";
 
 // #region Imports
@@ -137,15 +138,28 @@ export function serverImports(js: string, app: boolean = true, late: boolean = t
   });
 }
 
+/** A source map's mark (./map.ts), its characters taken from one. */
+const MARK = mark(0);
+
+/**
+ * An import or export of a module of `LATE`, as `SPECIFIER` matches one, in code that may hold
+ * the marks of a source map (./map.ts): one may stand before the specifier, the token it opens.
+ */
+const LATE_SPECIFIER = new RegExp(
+  `(\\bfrom\\s*|\\bimport\\s*\\(?\\s*)((?:${MARK[0]}\\d+${MARK[MARK.length - 1]})?)(["'])(@reactre\\/core\\/features\\/(?:actions|store))\\3`,
+  "g",
+);
+
 /**
  * A compiled module's imports of the modules of `LATE`, pointed at their server versions: what
- * `serverImports(js, true, false)` left for after the compile.
+ * `serverImports(js, true, false)` left for after the compile. `js` may hold the marks of a
+ * source map, so the map's columns are read off the code as it ends up.
  */
 export function serverLate(js: string): string {
-  return js.replace(SPECIFIER, (whole, head: string, q: string, spec: string) => {
-    const to = LATE[spec];
-    return to === undefined ? whole : `${head}${q}${to}${q}`;
-  });
+  return js.replace(
+    LATE_SPECIFIER,
+    (_, head: string, m: string, q: string, spec: string) => `${head}${m}${q}${LATE[spec]!}${q}`,
+  );
 }
 
 /** A named import of @reactre/core/server, as `serverImports` points a feature module's import of the core. */

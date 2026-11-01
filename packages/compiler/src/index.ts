@@ -516,10 +516,10 @@ export function compileJsWithMap(js: string, options?: CompileOptions): { code: 
   const observed = observedCalls(src);
   const marked = compile(observed?.code ?? src, true, options, flowNames(js), observed !== null);
   if (marked === src) return { code: server ? serverLate(src) : src, map: null };
-  const out = unmark(observed === null ? marked : remark(marked, observed.back), src);
-  // An import of features/actions or /store pointed at the server's is shorter: the columns of
-  // the generated code after it, on its line alone, are off by that.
-  return server ? { code: serverLate(out.code), map: out.map } : out;
+  const back = observed === null ? marked : remark(marked, observed.back);
+  // The imports of features/actions and /store are pointed at the server's with the marks in
+  // place, which hold offsets in `src`: the map reads the generated columns off the code as it is.
+  return unmark(server ? serverLate(back) : back, src);
 }
 
 /**
