@@ -42,6 +42,10 @@ const chrome = findChrome();
 
 let dir: string, server: ViteDevServer, browser: Browser, page: Page;
 const errors: string[] = [];
+// Vite's client opens its socket after the page loads, and the server sends an update only to
+// the clients connected then: an edit saved first would never reach the page. The client logs
+// this line once the server has greeted it.
+let connected: Promise<void>;
 
 beforeAll(async () => {
   if (chrome === null) return;
@@ -63,6 +67,7 @@ beforeAll(async () => {
   browser = await puppeteer.launch({ executablePath: chrome, headless: true, args: ["--no-sandbox"] });
   page = await browser.newPage();
   page.on("pageerror", (e) => void errors.push(String(e)));
+  connected = new Promise((resolve) => page.on("console", (m) => void (m.text() === "[vite] connected." && resolve())));
   // A failed load is reported as a console error without its URL: the response says it.
   page.on(
     "console",
@@ -119,6 +124,7 @@ test.skipIf(chrome === null)(
     // A page that reloads loses this.
     await page.evaluate(() => void ((window as any).__kept = true));
 
+    await connected;
     edit("before: {count}", "after: {count}");
     await reads("after: 3");
     await page.click("#count");
