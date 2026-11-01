@@ -169,6 +169,35 @@ describe("diagnostics", () => {
     expect(String(warns.mock.calls[0]![0])).toContain("{count()}, not {count}");
   });
 
+  test("NODE_AS_TEXT: a node or an array of nodes in a text hole, written once or bound, or in a row; a fragment inserts it", () => {
+    // What the compiler cannot see holds JSX: a function of an object it knows nothing of.
+    const api = run<{ set: (v: unknown) => void }>(`
+      import { For, render, signal } from "@reactre/core";
+      const dom = { node: () => document.createElement("i"), list: () => [[1, document.createElement("u")]] };
+      const [v, set] = signal("text");
+      render(() => <div><p>{dom.node}</p></div>, root);
+      render(() => <div><p>{dom.node()}</p></div>, root);
+      render(() => <div><b>{v()}</b></div>, root);
+      render(() => <ul><For each={[1]} key={(r) => r}>{(r) => <li>{dom.list()}</li>}</For></ul>, root);
+      // An element's child in a fragment is that element's text hole; the fragment's own
+      // expressions are inserted.
+      render(() => <div><><b>{dom.node()}</b></></div>, root);
+      render(() => <div><>{dom.node()}{dom.list()}</></div>, root);
+      return { set };
+    `);
+    expect(codes()).toEqual(["FUNCTION_AS_TEXT", "NODE_AS_TEXT", "NODE_AS_TEXT", "NODE_AS_TEXT"]);
+    expect(String(warns.mock.calls[1]![0])).toContain("wrap the hole in a fragment, <>{value}</>");
+    // Bound: once per template.
+    api.set(document.createElement("s"));
+    api.set([document.createElement("s")]);
+    expect(codes()).toEqual(["FUNCTION_AS_TEXT", ...Array(4).fill("NODE_AS_TEXT")]);
+    // Text, numbers and nothing are not warned about.
+    api.set(1);
+    api.set(null);
+    api.set([1, "a"]);
+    expect(codes().length).toBe(5);
+  });
+
   test("FOR_ROW_LOOP: a row's hole that writes what it reads throws, as an effect that never settles does", () => {
     expect(() =>
       run(`
@@ -362,11 +391,19 @@ const mistakes = `
   const h = () => {};
   const props = { onclick: h };
   const [rows] = signal([1, 1]);
-  render(() => <div><a {...props} /><ul><For each={rows()} key={(r) => r}>{(r) => <li>{r}</li>}</For></ul><p>{h}</p></div>, root);
+  const dom = { node: () => document.createElement("i") };
+  render(() => <div><a {...props} /><ul><For each={rows()} key={(r) => r}>{(r) => <li>{r}</li>}</For></ul><p>{h}</p><b>{dom.node()}</b></div>, root);
 `;
 
 /** Names only the DEV blocks define or say. */
-const DEV_CODE = ["REACTIVE_WRITE_IN_OWNED_SCOPE", "FOR_ROW_LOOP", "function checkKeys", "function checked", "warned"];
+const DEV_CODE = [
+  "REACTIVE_WRITE_IN_OWNED_SCOPE",
+  "FOR_ROW_LOOP",
+  "NODE_AS_TEXT",
+  "function checkKeys",
+  "function checked",
+  "warned",
+];
 
 describe("bundles", () => {
   test("a production bundle has none of the development code, and says nothing", async () => {
@@ -382,7 +419,7 @@ describe("bundles", () => {
     for (const s of DEV_CODE) expect(code).toContain(s);
     (globalThis as { root?: unknown }).root = new FakeElement("DIV");
     new Function(code)();
-    expect(codes().sort()).toEqual(["ATTRIBUTE_HANDLER", "FOR_DUPLICATE_KEY", "FUNCTION_AS_TEXT"]);
+    expect(codes().sort()).toEqual(["ATTRIBUTE_HANDLER", "FOR_DUPLICATE_KEY", "FUNCTION_AS_TEXT", "NODE_AS_TEXT"]);
   });
 });
 

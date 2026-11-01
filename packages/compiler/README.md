@@ -34,6 +34,22 @@ The output imports only the runtime helpers a file uses, so a bundler leaves out
 
 `@reactre/core` has a default build and one with the async runtime that `@reactre/core/features/async` and `/actions` need; its sources, which `Bun.build` resolves for target `"bun"`, hold both. As it reads the whole program (below), `reactreCompiler()` gives a program that imports neither module the core without that code, whichever the build resolved (target `"browser"` outside production resolves the async build): the default build, or the sources' `index.ts` stripped as that build is. A program that imports either gets the async runtime, and so does a build that reads no program (`wholeProgram: false`, or the plugin given to `Bun.plugin` for `bun run` and `bun test`, which run the sources as they are, the async code inert until a module turns it on). The `async` option (true or false) decides it, as [`@reactre/plugin`](https://www.npmjs.com/package/@reactre/plugin)'s does; with the default build, either module fails the build, naming the option.
 
+## Text holes and slots
+
+An element's child `{expr}` compiles to one of two things:
+
+- A text hole: the template's text node, written with `expr`'s value as text (`"" + value`; null and undefined write nothing). One that calls nothing is written by the clone; one that may change is bound (`__bind`), which writes the node's text again when what it reads changes. It is the fast path, for strings and numbers: `{row.label}`, `{count()}`, `{fmt(n())}`.
+- A slot: a marker where `expr`'s value is inserted (`__insert`), as nodes, arrays (flattened), components' views or text; null, undefined and booleans insert nothing. One that may change is followed (`__slot`), which inserts its new value in place of the last.
+
+A child is a slot when the compiler can see it may hold nodes:
+
+- JSX in it: an element, a component, control flow, a fragment, a conditional or a map of JSX.
+- `{props.children}`, and a prop that some call site passes JSX (see Props); every prop of a component whose callers cannot all be seen.
+- A name that holds JSX (`PropFacts.jsx`): a local made of JSX (`const el = <h1>Hi</h1>`, `const items = [<li />]`, an object or a `memo(() => <p />)` holding it), a function whose body holds JSX (`function make() { return <b />; }`, an arrow, an object's method), a local made of one of those, and in a whole program, a value or a function imported from a module of it that is one, through re-exports and namespace imports. A hole that mentions one (`{el}`, `{make()}`, `{on() ? a : b}`, `{o.render()}`) is a slot.
+- A fragment's expression: `<div><>{value}</></div>` inserts `value` whatever the compiler knows of it, as a fragment that stands alone does.
+
+Anything else is a text hole: what the compiler cannot see holds JSX is taken for text, so an app's holes of text cost no more than they did. That is a function a file compiled alone imports (a dev server, `compileSource`), a function of a package, a parameter's method. If such a hole is given nodes, it shows them as `[object HTMLElement]`, and the development build warns `NODE_AS_TEXT`; wrap it in a fragment (`<>{make()}</>`), or render it as a component (`<Make />`).
+
 ## Server mode
 
 `compileJs(js, { server: true })` (and `compileJsWithMap`, and `reactreCompiler({ server: true })` for `Bun.build`) compiles a file for [@reactre/core/server](https://www.npmjs.com/package/@reactre/core#server-rendering). JSX builds HTML: an element tree is one string with its holes escaped in place, a component is called once with its props, `<Show>`, `<Switch>`, `<For>` (keyed, or by index with `keyed={false}`), `<Repeat>` and `<Dynamic>` are evaluated once (a list of `features/for` as its rows' content, or its fallback's, in one pair of hydration markers), and `<Portal>` renders nothing. A hole that may change is a thunk the server runs once, again only if it reads async data that has not come. The file's imports of `@reactre/core` and of `features/async` and `features/dynamic` go to their server versions, and its `effect` and `memo` to ones that do not run and that compute when read. `serverImports(code)` rewrites the imports alone, for a module that is not compiled. Without the option, the output is what it was, byte for byte.

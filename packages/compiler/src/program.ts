@@ -99,6 +99,14 @@ export type PropFacts = ReadonlyMap<string, ReadonlySet<string> | true> & {
    * inserted as `{props.children}` is, not text. True and missing, as for `storeProps`.
    */
   readonly contentProps?: ReadonlyMap<string, ReadonlySet<string> | true>;
+  /**
+   * The names the module reads JSX by (`ModuleInfo.jsx`): its locals that hold JSX (`const el =
+   * <h1 />`, `function make() { return <b />; }`) or are made of what does, and its imports of
+   * such a value from modules of the program (`ui.make` through a namespace import). A hole that
+   * mentions one (`{el}`, `{make()}`, `{on() ? el : null}`) is inserted, not written as text.
+   * Without it, the module's own locals, as it says them alone.
+   */
+  readonly jsx?: ReadonlySet<string>;
 };
 
 /** Reactive props, as a set or true for all; also what an expression reads of a props object. */
@@ -542,10 +550,13 @@ export function findDefs(src: string): Def[] {
 function scanDefs(src: string, tokens: readonly Token[], m = matches(tokens)): { defs: Def[]; names: Set<number> } {
   const defs: Def[] = [],
     names = new Set<number>();
+  // Where each definition's parameters start, so a function is one definition.
+  const found = new Set<number>();
   const add = (name: string, fn: Fn, start: number, open: boolean, at: number) => {
     const param = paramOf(src, fn.params);
     const aliases = param.kind === "name" ? aliasesOf(src, fn.params[1], fn.end, param.name) : [];
     defs.push({ name, param, aliases, start, end: fn.end, open });
+    found.add(fn.params[0]);
     if (at >= 0) names.add(at);
   };
   for (let i = 0; i < tokens.length; i++) {
@@ -586,7 +597,85 @@ function scanDefs(src: string, tokens: readonly Token[], m = matches(tokens)): {
         );
     }
   }
+  unnamed(src, tokens, m, found, (fn, start) => add(UNNAMED, fn, start, true, -1));
+  // Source order, outermost first, as `scopeAt` gives them.
+  defs.sort((a, b) => a.start - b.start);
   return { defs, names };
+}
+
+/** The name of a component the scan finds no name for (see `unnamed`): no local is named so. */
+const UNNAMED = "(unnamed)";
+
+/** The keywords a `(` follows in a block, where a method of an object would have its name. */
+const NOT_METHOD = new Set(["if", "for", "while", "switch", "catch", "with", "function", "get", "set", "async"]);
+
+/**
+ * The components no name tells apart: a function literal that holds JSX and takes props (a name or
+ * a pattern), where it may be rendered as a component, but is not one `scanDefs` names (`found`
+ * holds where those' parameters start). Such a place is an object's property or method of any
+ * name (`{ default: (props) => ... }`, rendered `<parts.default />`), a ternary's branch, a
+ * member it is assigned to (`ui.card = (props) => ...`), and what a function returns (`return
+ * (props) => ...`, `(k) => (props) => ...`: a component a `.map` or a wrapper makes). Their callers
+ * are hidden, so each is open (`Def.open`): every prop may change, as a component's whose callers
+ * cannot all be seen. A function passed to a call (a `.map` callback, a handler) and a jsx call's
+ * own props (a <For> row, a render prop's function) are not such places, nor a local of a lowercase
+ * name, which JSX cannot render as a component.
+ */
+function unnamed(
+  src: string,
+  tokens: readonly Token[],
+  m: Int32Array,
+  found: ReadonlySet<number>,
+  add: (fn: Fn, start: number) => void,
+): void {
+  // The bracket each token is in, and whether a `{` is a jsx call's props object.
+  const parent = new Int32Array(tokens.length).fill(-1),
+    stack: number[] = [];
+  tokens.forEach((_, j) => {
+    parent[j] = stack.at(-1) ?? -1;
+    if (m[j]! > j) stack.push(j);
+    else if (m[j]! >= 0) stack.pop();
+  });
+  const jsxProps = (o: number) => o >= 0 && parent[o]! >= 0 && HELPER.test(tokens[parent[o]! - 1]?.t ?? "");
+  for (let i = 1; i < tokens.length; i++) {
+    const t = tokens[i]!.t,
+      prev = tokens[i - 1]!;
+    let k = -1;
+    // A property's value, or a ternary's branch (`?`, but not `?.` or `??`).
+    if ((t === ":" || (t === "?" && ![".", "?"].includes(tokens[i + 1]?.t ?? ""))) && !jsxProps(parent[i]!)) k = i + 1;
+    else if (t === "return") k = i + 1;
+    // An arrow's body (`=>`), and a member assigned (`a.b =`, `a[k] =`, not `==`, `=>` or `+=`).
+    else if (t === ">" && prev.t === "=" && prev.e === tokens[i]!.s) k = i + 1;
+    else if (
+      t === "=" &&
+      !["=", ">"].includes(tokens[i + 1]?.t ?? "") &&
+      ((isName(prev.t) && tokens[i - 2]?.t === ".") || prev.t === "]")
+    )
+      k = i + 1;
+    else if (
+      t === "(" &&
+      isName(prev.t) &&
+      !NOT_METHOD.has(prev.t) &&
+      ["{", ","].includes(tokens[i - 2]?.t ?? "") &&
+      tokens[m[i]! + 1]?.t === "{"
+    ) {
+      // A method, `render(props) { ... }`.
+      const close = m[i]!;
+      const fn = { name: prev.t, params: [tokens[i]!.e, tokens[close]!.s] as const, end: tokens[m[close + 1]!]!.e };
+      if (holdsJsx(tokens, i, fn) && paramOf(src, fn.params).kind !== "none" && !found.has(fn.params[0]))
+        add(fn, prev.s);
+      continue;
+    }
+    const fn = k < 0 ? null : fnAt(src, tokens, m, k);
+    if (fn === null || found.has(fn.params[0]) || !holdsJsx(tokens, k, fn)) continue;
+    if (paramOf(src, fn.params).kind !== "none") add(fn, tokens[k]!.s);
+  }
+}
+
+/** Whether function `fn`, whose tokens start at token k, holds a jsx call. */
+function holdsJsx(tokens: readonly Token[], k: number, fn: Fn): boolean {
+  for (let j = k; j < tokens.length && tokens[j]!.s < fn.end; j++) if (HELPER.test(tokens[j]!.t)) return true;
+  return false;
 }
 
 /** For `wrap(a, fn, ...)` at token k: the first function literal among the call's arguments, in calls too. */
@@ -665,6 +754,14 @@ export interface ModuleInfo {
    * pattern of props binds (`{ todos }`). The program says which hold one (`Program.factsOf`).
    */
   readonly aliases: ReadonlyMap<string, Alias>;
+  /**
+   * The locals whose value may hold JSX, each with what it is made of: true for a value that holds
+   * a jsx call (`const el = <h1 />`, `const items = [<li />]`, `function make() { return <b />; }`,
+   * `const view = memo(() => <p />)`, `const o = { render() { return <i />; } }`), else the names
+   * it mentions that may hold JSX: other such locals, and imports from outside @reactre (a
+   * namespace import's member). The program says which imports hold JSX (`Program.factsOf`).
+   */
+  readonly jsx: ReadonlyMap<string, readonly string[] | true>;
 }
 
 /** What a local that may hold a store is made of: see `ModuleInfo.aliases`. */
@@ -859,9 +956,14 @@ export function scanModule(src: string): ModuleInfo {
   // locals made of those or of props (`aliases`). Within a <For> row whose `each` mentions one or
   // reads a prop, so does the row's item, standing for what `each` mentions and reads (`under`),
   // and so does the parameter of a <Show> or <Match> child function, for its `when`.
-  const roots = new Set(own);
-  for (const [local, b] of imports) if (exportsStores(b.spec)) roots.add(b.name === "*" ? `${local}.*` : local);
-  const aliases = aliasesIn(src, tokens, m, defs, roots, helpers);
+  const imported = new Set<string>();
+  for (const [local, b] of imports) if (exportsStores(b.spec)) imported.add(b.name === "*" ? `${local}.*` : local);
+  const roots = new Set([...own, ...imported]);
+  const decls = boundIn(tokens, m, defs);
+  const aliases = aliasesIn(src, tokens, m, defs, roots, helpers, decls);
+  // The locals that may hold JSX: made of a jsx call, of such a local, or of an import that may be
+  // one (the program says which are).
+  const jsx = jsxIn(tokens, m, decls, imported, helpers);
   for (const a of aliases.keys()) roots.add(a);
   const stores = ownStores(own, aliases);
   const rows: (Alias & { readonly name: string; readonly start: number; readonly end: number })[] = [];
@@ -965,7 +1067,7 @@ export function scanModule(src: string): ModuleInfo {
       else if (set !== true) nsEscapes.set(tok.t, (set ?? new Set()).add(member));
     } else if (b !== undefined || named.has(tok.t)) escapes.add(tok.t);
   }
-  return { defs, imports, exports, stars, specs, sites, escapes, nsEscapes, whole, opaque, stores, aliases };
+  return { defs, imports, exports, stars, specs, sites, escapes, nsEscapes, whole, opaque, stores, aliases, jsx };
 }
 
 /**
@@ -1008,14 +1110,93 @@ function aliasesIn(
   defs: readonly Def[],
   roots: ReadonlySet<string>,
   helpers: ReadonlySet<string>,
+  decls: readonly Bound[],
 ): Map<string, Alias> {
   const out = new Map<string, Alias>();
   // A component's pattern of props: each name it binds holds its prop.
   for (const d of defs)
     if (d.param.kind === "pattern")
       for (const [local, prop] of d.param.locals) out.set(local, { roots: [], reads: [[d, new Set([prop])]] });
-  // Each binding: the names it binds, its value's tokens [from, to), and the components it is in.
-  const decls: { names: string[]; from: number; to: number; scope: Def[] }[] = [];
+  // What each value reads of props, and then, until no new local is found, what it mentions of the
+  // names known to hold stores so far.
+  const reads = decls.map((d) =>
+    d.scope.length === 0 ? [] : propReads(src.slice(tokens[d.from]!.s, tokens[d.to - 1]!.e), d.scope, helpers),
+  );
+  for (let known = new Set([...roots, ...out.keys()]), base = out; ;) {
+    const next = new Map(base);
+    decls.forEach((d, k) => {
+      const found = known.size === 0 ? [] : mentions(tokens, m, d.from, d.to, known, helpers, false);
+      if (found.length === 0 && reads[k]!.length === 0) return;
+      for (const n of d.names) {
+        const a = next.get(n);
+        next.set(
+          n,
+          a === undefined
+            ? { roots: found, reads: reads[k]! }
+            : { roots: [...new Set([...a.roots, ...found])], reads: a.reads.concat(reads[k]!) },
+        );
+      }
+    });
+    if ([...next.keys()].every((n) => known.has(n))) return next;
+    known = new Set([...known, ...next.keys()]);
+  }
+}
+
+/**
+ * The locals of a module whose value may hold JSX (see `ModuleInfo.jsx`), given its bindings and
+ * the names it imports (`imported`): found until no more are.
+ */
+function jsxIn(
+  tokens: readonly Token[],
+  m: Int32Array,
+  decls: readonly Bound[],
+  imported: ReadonlySet<string>,
+  helpers: ReadonlySet<string>,
+): Map<string, readonly string[] | true> {
+  const out = new Map<string, readonly string[] | true>();
+  // A value that holds a jsx call holds JSX; one that mentions such a local or an import may.
+  const own = decls.map((d) => {
+    for (let j = d.from; j < d.to; j++) if (helpers.has(tokens[j]!.t) && tokens[j + 1]?.t === "(") return true;
+    return false;
+  });
+  decls.forEach((d, k) => {
+    if (own[k]) for (const n of d.names) out.set(n, true);
+  });
+  for (let grew = true; grew;) {
+    grew = false;
+    const known = new Set([...imported, ...out.keys()]);
+    decls.forEach((d, k) => {
+      if (own[k]) return;
+      const found = mentions(tokens, m, d.from, d.to, known, undefined, false);
+      if (found.length === 0) return;
+      for (const n of d.names) {
+        const a = out.get(n);
+        if (a === true) continue;
+        const all = [...new Set([...(a ?? []), ...found])];
+        if (all.length !== (a?.length ?? -1)) (out.set(n, all), (grew = true));
+      }
+    });
+  }
+  return out;
+}
+
+/** What comes before a module's first token: no token at all. */
+const START: Token = { t: ";", s: 0, e: -1 };
+
+/** A value bound to names: the names, its value's tokens [from, to), and the components it is in. */
+interface Bound {
+  readonly names: readonly string[];
+  readonly from: number;
+  readonly to: number;
+  readonly scope: readonly Def[];
+}
+
+/**
+ * Each value a module binds to names: a `=` (a declarator, an assignment, a pattern's), a `for
+ * ... of`'s item, and a function declaration's name, whose value is its parameters and body.
+ */
+function boundIn(tokens: readonly Token[], m: Int32Array, defs: readonly Def[]): Bound[] {
+  const decls: Bound[] = [];
   /** The end of the expression that starts at token k: a `,`, `;` or a closing bracket. */
   const end = (k: number): number => {
     while (k < tokens.length && !ENDS.has(tokens[k]!.t)) k = m[k]! > k ? m[k]! + 1 : k + 1;
@@ -1052,9 +1233,10 @@ function aliasesIn(
     s ??= tokens[at[1]]!.s;
     decls.push({ names: at[0], from, to, scope: defs.filter((d) => d.start < s && s < d.end) });
   };
-  for (let i = 1; i < tokens.length; i++) {
+  // From the first token, which may be a function declaration's `function`.
+  for (let i = 0; i < tokens.length; i++) {
     const tok = tokens[i]!,
-      prev = tokens[i - 1]!,
+      prev = tokens[i - 1] ?? START,
       next = tokens[i + 1];
     if (tok.t === "=") {
       // `=` alone: not `==`, `=>`, `+=` and the like, whose value is not the target's.
@@ -1075,29 +1257,7 @@ function aliasesIn(
       if (tokens[j]?.t === "(" && tokens[m[j]! + 1]?.t === "{") add(i + 1, j, m[m[j]! + 1]! + 1, tok.s);
     }
   }
-  // What each value reads of props, and then, until no new local is found, what it mentions of the
-  // names known to hold stores so far.
-  const reads = decls.map((d) =>
-    d.scope.length === 0 ? [] : propReads(src.slice(tokens[d.from]!.s, tokens[d.to - 1]!.e), d.scope, helpers),
-  );
-  for (let known = new Set([...roots, ...out.keys()]), base = out; ;) {
-    const next = new Map(base);
-    decls.forEach((d, k) => {
-      const found = known.size === 0 ? [] : mentions(tokens, m, d.from, d.to, known, helpers, false);
-      if (found.length === 0 && reads[k]!.length === 0) return;
-      for (const n of d.names) {
-        const a = next.get(n);
-        next.set(
-          n,
-          a === undefined
-            ? { roots: found, reads: reads[k]! }
-            : { roots: [...new Set([...a.roots, ...found])], reads: a.reads.concat(reads[k]!) },
-        );
-      }
-    });
-    if ([...next.keys()].every((n) => known.has(n))) return next;
-    known = new Set([...known, ...next.keys()]);
-  }
+  return decls;
 }
 
 /** A module's own stores, and the locals (`aliases`) those alone make stores. */
@@ -1202,8 +1362,18 @@ export class Program {
       else for (const k of this.exportNames(target)) if (this.storeExport(target, k)) stores.add(`${local}.${k}`);
     }
     for (const n of mod?.info.aliases.keys() ?? []) if (!stores.has(n) && this.storeIn(file, n)) stores.add(n);
+    // What the module reads JSX by: its locals made of JSX, and its imports of JSX from the program.
+    const jsx = new Set<string>();
+    for (const n of mod?.info.jsx.keys() ?? []) if (this.jsxIn(file, n)) jsx.add(n);
+    for (const [local, b] of mod?.info.imports ?? []) {
+      const target = mod!.resolved.get(b.spec);
+      if (b.name !== "*") {
+        if (this.jsxExport(target, b.name)) jsx.add(local);
+      } else for (const k of this.exportNames(target)) if (this.jsxExport(target, k)) jsx.add(`${local}.${k}`);
+    }
     return Object.assign(
       out,
+      { jsx },
       stores.size === 0 ? {} : { stores },
       storeProps.size === 0 ? {} : { storeProps },
       contentProps.size === 0 ? {} : { contentProps },
@@ -1382,6 +1552,38 @@ export class Program {
         ? this.storeIn(file, e.local, seen)
         : this.storeExport(mod.resolved.get(e.spec), e.name, seen);
     return name !== "default" && mod.info.stars.some((s) => this.storeExport(mod.resolved.get(s), name, seen));
+  }
+
+  /**
+   * Whether `name` may hold JSX in module `file`: a local made of a jsx call or of what holds JSX
+   * (`ModuleInfo.jsx`), or an import of such a value from a module of the program (`ns.member`, a
+   * namespace import's). An import the program cannot see is not known to: a hole that calls it
+   * stays text, which the development build checks (`NODE_AS_TEXT`).
+   */
+  private jsxIn(file: string, name: string, seen = new Set<string>()): boolean {
+    const mod = this.modules.get(file)!;
+    const dot = name.indexOf(".");
+    const own = dot < 0 ? mod.info.jsx.get(name) : undefined;
+    if (own === true) return true;
+    if (own !== undefined && !seen.has(`\0${file}\0${name}`)) {
+      seen.add(`\0${file}\0${name}`);
+      if (own.some((n) => this.jsxIn(file, n, seen))) return true;
+    }
+    const b = mod.info.imports.get(dot < 0 ? name : name.slice(0, dot));
+    if (b === undefined || (b.name === "*") !== dot >= 0) return false;
+    return this.jsxExport(mod.resolved.get(b.spec), dot < 0 ? b.name : name.slice(dot + 1), seen);
+  }
+
+  /** Whether export `name` of module `file` may hold JSX, through re-exports. */
+  private jsxExport(file: Resolved | undefined, name: string, seen = new Set<string>()): boolean {
+    if (typeof file !== "string" || seen.has(file + "\0" + name)) return false;
+    seen.add(file + "\0" + name);
+    const mod = this.modules.get(file);
+    if (mod === undefined) return false;
+    const e = mod.info.exports.get(name);
+    if (e !== undefined)
+      return "local" in e ? this.jsxIn(file, e.local, seen) : this.jsxExport(mod.resolved.get(e.spec), e.name, seen);
+    return name !== "default" && mod.info.stars.some((s) => this.jsxExport(mod.resolved.get(s), name, seen));
   }
 
   /** The names module `file` exports, through `export *` (which passes on all but the default). */

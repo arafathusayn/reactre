@@ -904,7 +904,13 @@ describe("development build", () => {
   test("off: every profile ships none of the development code, the async ones included", async () => {
     for (const name of ["plain", "slot", "store", "show", "props", "async", "actions"] as const) {
       const code = await bundle(name, apps[name], false);
-      for (const s of ["REACTIVE_WRITE_IN_OWNED_SCOPE", "FOR_ROW_LOOP", "function checkKeys", "function reading"])
+      for (const s of [
+        "REACTIVE_WRITE_IN_OWNED_SCOPE",
+        "FOR_ROW_LOOP",
+        "NODE_AS_TEXT",
+        "function checkKeys",
+        "function reading",
+      ])
         expect(code).not.toContain(s);
     }
   });

@@ -504,6 +504,63 @@ describe("stores and props given JSX", () => {
   });
 });
 
+describe("JSX held in values", () => {
+  test("what a hole calls, a conditional, a fragment's expression and an unnamed component are the server's nodes, and update", () => {
+    // With the compiler before, the server wrote each as [object Object], and the client as text.
+    // Each is built as its hole runs, in the page's order, so it claims the server's nodes.
+    const p = page<{ App: () => unknown; set: (v: boolean) => void; setN: (v: number) => void }>(`
+      import { signal } from "@reactre/core";
+      const [on, set] = signal(true);
+      const [n, setN] = signal(1);
+      function make() { return <b>{n()}</b>; }
+      const a = () => <i>i</i>;
+      const items = () => [<li>1</li>, <li>2</li>];
+      const box = { get: () => <s>s</s> };
+      const parts = { card: (props) => <em>{props.n}</em> };
+      const App = () => <div>{on() ? a() : null}{make()}<ul>{items()}</ul><><span>{box.get()}</span></><parts.card n={n()} /></div>;
+      return { App, set, setN };
+    `);
+    const { root, before, app } = p;
+    expect(shown(root)).toBe("<div><i>i</i><b>1</b><ul><li>1</li><li>2</li></ul><span><s>s</s></span><em>1</em></div>");
+    expect(kept(root, before)).toBe(true);
+    const b = find(root, "b");
+    app.set(false);
+    expect(shown(root)).toBe("<div><b>1</b><ul><li>1</li><li>2</li></ul><span><s>s</s></span><em>1</em></div>");
+    app.setN(2);
+    expect(shown(root)).toBe("<div><b>2</b><ul><li>1</li><li>2</li></ul><span><s>s</s></span><em>2</em></div>");
+    expect(find(root, "ul")).toBe(before.find((x) => x instanceof FakeElement && x.tagName === "UL") as FakeElement);
+    expect(b.isConnected).toBe(false);
+  });
+
+  test("the server renders a local's, a function's, an array's and a fragment's expression's JSX as markup, not [object Object]", () => {
+    const app = ssr<{ App: () => unknown }>(`
+      const el = <h1>Hi</h1>;
+      function make() { return <b>b</b>; }
+      const items = [<li>1</li>, <li>2</li>];
+      const App = () => <div>{el}{make()}<ul>{items}</ul><>{(() => <i>i</i>)()}</></div>;
+      return { App };
+    `);
+    expect(server.renderToString(app.App)).toBe("<div><h1>Hi</h1><b>b</b><ul><li>1</li><li>2</li></ul><i>i</i></div>");
+  });
+
+  test("JSX built before its place in the page is claimed (a module's local, a memo) takes the place of the server's nodes", () => {
+    const p = page<{ App: () => unknown; set: (v: boolean) => void }>(`
+      import { memo, signal } from "@reactre/core";
+      const [on, set] = signal(true);
+      const el = <h1>Hi</h1>;
+      const items = [<li>1</li>, <li>2</li>];
+      const view = memo(() => <p>{on() ? "on" : "off"}</p>);
+      const App = () => <div>{el}<ul>{items}</ul>{view()}<em>after</em></div>;
+      return { App, set };
+    `);
+    expect(shown(p.root)).toBe("<div><h1>Hi</h1><ul><li>1</li><li>2</li></ul><p>on</p><em>after</em></div>");
+    const em = (n: FakeNode) => n instanceof FakeElement && n.tagName === "EM";
+    expect(find(p.root, "em")).toBe(p.before.find(em) as FakeElement);
+    p.app.set(false);
+    expect(shown(p.root)).toBe("<div><h1>Hi</h1><ul><li>1</li><li>2</li></ul><p>off</p><em>after</em></div>");
+  });
+});
+
 describe("mismatches", () => {
   let warn: ReturnType<typeof spyOn>;
   beforeEach(() => {

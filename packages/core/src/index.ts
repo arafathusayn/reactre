@@ -1684,8 +1684,10 @@ export function __template(strings: readonly string[], holes: readonly number[],
 
 /**
  * Template `t`, checking the values its clones and writes give its text holes, where a function
- * is a mistake: `{count}` for `{count()}`. (An `on...` attribute hole of a template is set as the
- * element's property, so `onclick={fn}` listens; spread props are checked in `prop`.)
+ * is a mistake (`{count}` for `{count()}`), and so is a node or an array of nodes, which the
+ * compiler could not tell the hole would hold (`{make()}` of a function it cannot see). (An
+ * `on...` attribute hole of a template is set as the element's property, so `onclick={fn}`
+ * listens; spread props are checked in `prop`.)
  */
 function checked(t: Prototype): Prototype {
   // @reactre/dom's kind code (`Prototype.kinds`) of a text hole.
@@ -1696,14 +1698,31 @@ function checked(t: Prototype): Prototype {
   const clone = t.clone.bind(t),
     write = t.write.bind(t);
   t.clone = (values) => {
-    for (let j = 0; j < text.length; j++) if (typeof values[text[j]!] === "function") functionAsText(t);
+    for (let j = 0; j < text.length; j++) asText(t, values[text[j]!]);
     return clone(values);
   };
   t.write = (i, node, v) => {
-    if (typeof v === "function" && t.kinds[i] === TEXT) functionAsText(t);
+    if (t.kinds[i] === TEXT) asText(t, v);
     write(i, node, v);
   };
   return t;
+}
+
+/** Check `v`, which template `at` writes as text: a function, or nodes, is a mistake. */
+function asText(at: object, v: unknown): void {
+  if (typeof v === "function") functionAsText(at);
+  else if (holdsNode(v))
+    warn(
+      "NODE_AS_TEXT",
+      at,
+      "a node (or an array of nodes) was rendered where text goes, as the compiler could not see it holds JSX, so it shows as [object ...]",
+      "wrap the hole in a fragment, <>{value}</>, which inserts nodes, or render a component as an element (<Item />)",
+    );
+}
+
+/** Whether `v` is a node, or an array that holds one. */
+function holdsNode(v: unknown): boolean {
+  return typeof v === "object" && v !== null && ("nodeType" in v || (Array.isArray(v) && v.some(holdsNode)));
 }
 
 /** Warn that a function is rendered as text, found in `at`. */

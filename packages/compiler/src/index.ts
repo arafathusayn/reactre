@@ -554,6 +554,8 @@ function compile(
   // may be one (`moduleFacts`).
   for (const s of props.stores ?? []) stores.add(s);
   const c = new Compiler(helpers, fragments, map, flow, defs, props, stores);
+  // The names that may hold JSX: the program's, or the file's own locals, as it says them alone.
+  c.jsx = props.jsx ?? moduleFacts(js).jsx!;
   if (options.server === true) c.server = new ServerEmit(c);
   c.hydrate = hydrate;
   const body = c.rewrite(js, 0);
@@ -761,6 +763,19 @@ export class Compiler {
       }
     }
     return propReads(expr, this.scope).some(([d, r]) => content(d, r));
+  }
+
+  /** The names that may hold JSX where the file is compiled (`PropFacts.jsx`). */
+  jsx: ReadonlySet<string> = NO_STORES;
+
+  /**
+   * Whether an element's child mentions what may hold JSX (`PropFacts.jsx`): a local made of JSX
+   * (`{el}`, `{items}`, `{on() ? a : b}`), a function that returns it (`{make()}`, `{view()}`,
+   * `{o.render()}`), or an import of such a value from the program. Its value may be nodes, so it
+   * is inserted, not written as text.
+   */
+  holdsJsx(expr: string): boolean {
+    return rootsIn(expr, this.jsx, this.helpers).length > 0;
   }
 
   /** The mark for input offset `at`, when the output carries marks and `at` is known; else "". */
@@ -1201,8 +1216,12 @@ export class Compiler {
     return true;
   }
 
-  /** Append an element's children to template t; a fragment's children join it in place. */
-  private children(children: readonly [string, number][], t: Tree, svg: boolean): void {
+  /**
+   * Append an element's children to template t; a fragment's children join it in place, and its
+   * expressions (`content`) are content, inserted as a fragment's are where it stands alone: so
+   * `<div><>{node}</></div>` inserts what `{node}` holds, whatever the compiler knows of it.
+   */
+  private children(children: readonly [string, number][], t: Tree, svg: boolean, content = false): void {
     // Literal null, undefined and booleans render nothing. They are dropped first, so a list
     // beside them still counts as its element's only child.
     const kept = children.filter(([x]) => {
@@ -1218,7 +1237,7 @@ export class Compiler {
       const inner = this.only(child, at);
       const only = kept.length === 1;
       if (inner !== null && this.fragments.has(inner.type)) {
-        this.children(this.childrenOf(inner.props, inner.propsAt), t, svg);
+        this.children(this.childrenOf(inner.props, inner.propsAt), t, svg, true);
         continue;
       }
       // A slot's expression below is compiled already (at -1), and starts with the child's mark.
@@ -1251,8 +1270,9 @@ export class Compiler {
         else this.hole(t, { kind: "slot", slot: "comp", expr: this.m(at) + flow.expr, only, at: -1 });
       } else if (inner !== null)
         this.hole(t, { kind: "slot", slot: "comp", expr: this.m(at) + this.component(inner), only, at: -1 });
-      // A component's children may be nodes: inserted, and followed when they may change.
-      else if (this.readsChildren(child)) {
+      // A component's children may be nodes, and so may what holds JSX and a fragment's
+      // expression: inserted, and followed when they may change.
+      else if (this.readsChildren(child) || (!this.hasJsx(child) && (content || this.holdsJsx(child)))) {
         const expr = this.rewrite(child, at);
         this.hole(t, { kind: "slot", slot: this.changes(child) ? "expr" : "comp", expr, only, at: -1 });
       }

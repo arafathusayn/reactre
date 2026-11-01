@@ -356,8 +356,11 @@ export class ServerEmit {
     );
   }
 
-  /** Append an element's children; a fragment's children join it in place. */
-  private children(children: readonly [string, number][], t: Markup, svg: boolean): void {
+  /**
+   * Append an element's children; a fragment's children join it in place, its expressions content
+   * (`content`), as on the client.
+   */
+  private children(children: readonly [string, number][], t: Markup, svg: boolean, content = false): void {
     const c = this.c;
     for (const [child, at] of children.filter(([x]) => !isNothing(x))) {
       const lit = literal(child);
@@ -367,7 +370,7 @@ export class ServerEmit {
       }
       const inner = c.only(child, at);
       if (inner !== null && c.fragments.has(inner.type)) {
-        this.children(c.childrenOf(inner.props, inner.propsAt), t, svg);
+        this.children(c.childrenOf(inner.props, inner.propsAt), t, svg, true);
         continue;
       }
       if (inner !== null && inner.type.startsWith('"')) {
@@ -386,7 +389,9 @@ export class ServerEmit {
         if ("host" in flow) this.element(flow.host, t, svg);
         else this.hole(t, flow.code, false);
       } else if (inner !== null) this.slot(t, c.component(inner), false);
-      else if (c.readsChildren(child)) this.slot(t, c.rewrite(child, at), c.changes(child));
+      // As on the client: what holds JSX, and a fragment's expression, is content too.
+      else if (c.readsChildren(child) || (!c.hasJsx(child) && (content || c.holdsJsx(child))))
+        this.slot(t, c.rewrite(child, at), c.changes(child));
       else if (c.hasJsx(child)) this.slot(t, c.rewrite(child, at), true);
       else this.textHole(t, child, at);
     }
