@@ -44,16 +44,20 @@ g.__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
   onCommitFiberUnmount() {},
 };
 // The runtime registers a callback on `window` when it loads.
+const hadWindow = "window" in g;
 g.window ??= globalThis;
 const Refresh: Any = await import(
   join(dirname(Bun.resolveSync("@vitejs/plugin-react", import.meta.dir)), "refresh-runtime.js")
 );
 Refresh.injectIntoGlobalHook(globalThis);
 
-// The other test files run on without the hook, or a refresh handler.
+// The other test files run on without the hook, a refresh handler, or a `window`: react-dom,
+// loaded by a later file in the same process, takes a `window` as a browser and fails on the
+// fake document's elements.
 afterAll(() => {
   renderer?.setRefreshHandler(null);
   delete g.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+  if (!hadWindow) delete g.window;
 });
 
 let container: FakeElement;
