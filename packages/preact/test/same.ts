@@ -37,7 +37,7 @@ export interface Ctx {
   container(): El;
   /** Wait for the render queue. */
   tick(): Promise<void>;
-  /** Wait for passive effects (35 ms without a frame). */
+  /** Wait for passive effects: the frame they asked for comes. */
   paint(): Promise<void>;
 }
 
@@ -63,6 +63,13 @@ export async function transcript(
   const saved = { ...opts };
   // compat installs its vnode and event hooks when loaded: a core scenario runs without them.
   if (!withCompat) opts.vnode = opts.event = undefined;
+  // Passive effects wait for a frame, which each runtime asks for through
+  // options.requestAnimationFrame: here it comes when the scenario paints, and at no other time.
+  // With the default (a timer of 35 ms, then one of 0) effects ran whenever 35 ms had passed: on
+  // a loaded machine, during a scenario's ticks, or after the timer its paint waited on.
+  const frames: (() => void)[] = [];
+  const frame = (f: () => void): void => void frames.push(f);
+  opts.requestAnimationFrame = frame;
   const out: string[] = [];
   const show = (p: unknown): string =>
     typeof p === "string"
@@ -87,18 +94,33 @@ export async function transcript(
     },
     container,
     tick,
-    paint: () => new Promise((r) => setTimeout(r, 45)),
+    paint: async () => {
+      await tick();
+      for (const f of frames.splice(0)) f();
+      // A scenario that put the default back waits for its timers: 35 ms, then one of 0, which
+      // come before these two as they were set first.
+      if (opts.requestAnimationFrame !== frame) await new Promise((r) => setTimeout(r, 45));
+      await tick();
+    },
   };
   try {
     await scenario(t);
     await tick();
   } catch (e) {
     out.push("threw " + show(e));
+  }
+  const transcript = out.slice();
+  try {
+    // Effects still waiting for a frame run now, so none waits in the runtime's queue for a later
+    // scenario; what they log is after the transcript.
+    for (const f of frames.splice(0)) f();
+  } catch {
+    // An effect's error with no boundary to take it: the scenario is over.
   } finally {
     for (const k of Object.keys(opts)) if (!(k in saved)) delete opts[k];
     Object.assign(opts, saved);
   }
-  return out;
+  return transcript;
 }
 
 /** A test that the scenario's transcript is the same on both runtimes; `withCompat` keeps compat's hooks on. */
