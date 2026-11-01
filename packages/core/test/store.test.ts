@@ -3,7 +3,7 @@
 // how stores behave in compiled TSX, outside lists and in <For> rows. TSX sources here are
 // compiled as the plugin compiles them.
 
-import { beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 
 import { compileSource } from "@reactre/compiler";
 import { FakeElement, installFakeDocument } from "@reactre/testdom";
@@ -21,9 +21,8 @@ beforeEach(installFakeDocument);
 
 /** Compile a TSX module body ending in `return { ... }` and run it, `root` in scope. */
 function run<T>(src: string, root: FakeElement): T {
-  const js = compileSource(src).replace(
-    /^import \{([^}]*)\} from "@reactre\/core(?:\/features\/store)?";$/gm,
-    (_, names: string) =>
+  const js = compileSource(src)
+    .replace(/^import \{([^}]*)\} from "@reactre\/core(?:\/features\/store)?";$/gm, (_, names: string) =>
       names
         .split(",")
         .map((n) => {
@@ -31,7 +30,8 @@ function run<T>(src: string, root: FakeElement): T {
           return `const ${b ?? a} = rr.${a};`;
         })
         .join("\n"),
-  );
+    )
+    .replace(/^import \* as (\w+) from "@reactre\/core(?:\/features\/store)?";$/gm, "const $1 = rr;");
   return new Function("rr", "root", js)(runtime, root) as T;
 }
 
@@ -510,26 +510,176 @@ describe("merge and omit", () => {
 });
 
 describe("in compiled TSX", () => {
-  test("a hole that calls something follows the store; one that calls nothing is written once", () => {
+  type App = { count: number; ui: { dark: boolean }; user: { name: string } | null };
+
+  // classList's toggle, over the class attribute, as the DOM's (the fake document has none).
+  beforeAll(() => {
+    Object.defineProperty(FakeElement.prototype, "classList", {
+      configurable: true,
+      get(this: FakeElement) {
+        return {
+          toggle: (c: string, on: boolean) => {
+            const cs = (this.getAttribute("class") ?? "").split(" ").filter((x) => x && x !== c);
+            this.setAttribute("class", (on ? [...cs, c] : cs).join(" "));
+          },
+        };
+      },
+    });
+  });
+  afterAll(() => void delete (FakeElement.prototype as unknown as Record<string, unknown>)["classList"]);
+
+  test("a read of a store's member is reactive: a text hole, an attribute, a class toggle, <Show>", () => {
     const root = box();
-    const api = run<{ set: store.StoreSetter<{ count: number }> }>(
+    const api = run<{ set: store.StoreSetter<App> }>(
       `
-      import { render } from "@reactre/core";
+      import { Show, render } from "@reactre/core";
       import { createStore } from "@reactre/core/features/store";
-      const [s, set] = createStore({ count: 1 });
-      render(() => <p><b>{s.count.toString()}</b><i>{s.count}</i></p>, root);
+      const [s, set] = createStore({ count: 1, ui: { dark: false }, user: null });
+      render(() => (
+        <main class={s.ui.dark ? "dark" : "light"}>
+          <b>{s.count.toString()}</b><i class={{ on: s.ui.dark }}>{s.count}</i>
+          <Show when={s.user} fallback={<u>out</u>}>{(u) => <u>{u().name}</u>}</Show>
+          <Show when={s.user}><em>in</em></Show>
+        </main>
+      ), root);
       return { set };
       `,
       root,
     );
-    expect(root.textContent).toBe("11");
+    const main = root.firstChild as FakeElement,
+      i = main.childNodes[1] as FakeElement;
+    expect([root.textContent, main.getAttribute("class"), i.getAttribute("class")]).toEqual(["11out", "light", null]);
     api.set((d) => {
       d.count = 2;
+      d.ui.dark = true;
     });
-    expect(root.textContent).toBe("21");
+    expect([root.textContent, main.getAttribute("class"), i.getAttribute("class")]).toEqual(["22out", "dark", "on"]);
+    api.set((d) => {
+      d.user = { name: "a" };
+    });
+    expect(root.textContent).toBe("22ain");
+    api.set((d) => {
+      d.user!.name = "b";
+    });
+    expect(root.textContent).toBe("22bin");
+    api.set((d) => {
+      d.user = null;
+    });
+    expect(root.textContent).toBe("22out");
   });
 
-  test("<For each={[...store.todos]}>: rows follow the array, and holes that call follow their item", () => {
+  test("a store is a root under any local name, through a namespace import, and as a projection", () => {
+    const root = box();
+    const api = run<{
+      setA: store.StoreSetter<{ n: number }>;
+      setB: store.StoreSetter<{ n: number }>;
+      select(k: number): void;
+    }>(
+      `
+      import { render, signal } from "@reactre/core";
+      import { createStore as make, createProjection } from "@reactre/core/features/store";
+      import * as S from "@reactre/core/features/store";
+      const [a, setA] = make({ n: 1 });
+      const [b, setB] = S.createStore({ n: 1 });
+      const [sel, select] = signal(1);
+      const flags = createProjection((d) => { for (const k of Object.keys(d)) delete d[k]; d[sel()] = true; }, {});
+      const other = S.createProjection((d) => { d.n = a.n * 10; }, { n: 0 });
+      render(() => <p>{a.n}:{b.n}:{flags[1] ? "y" : "n"}:{other.n}</p>, root);
+      return { setA, setB, select };
+      `,
+      root,
+    );
+    expect(root.textContent).toBe("1:1:y:10");
+    api.setA((d) => {
+      d.n = 2;
+    });
+    api.setB((d) => {
+      d.n = 3;
+    });
+    api.select(2);
+    expect(root.textContent).toBe("2:3:n:20");
+  });
+
+  test("a prop passed a store's member, or the store, is reactive in the component", () => {
+    const root = box();
+    const api = run<{ set: store.StoreSetter<{ title: string }> }>(
+      `
+      import { render } from "@reactre/core";
+      import { createStore } from "@reactre/core/features/store";
+      const [s, set] = createStore({ title: "a" });
+      function Label(props) { return <b>{props.text}</b>; }
+      function Card(props) { return <i>{props.s.title}</i>; }
+      render(() => <p><Label text={s.title} /><Card s={s} /></p>, root);
+      return { set };
+      `,
+      root,
+    );
+    expect(root.textContent).toBe("aa");
+    api.set((d) => {
+      d.title = "b";
+    });
+    expect(root.textContent).toBe("bb");
+  });
+
+  test("<For each={store.todos}>: rows follow pushes, removals and moves, and holes follow their item", () => {
+    const root = box();
+    const api = run<{ set: store.StoreSetter<{ todos: (Todo & { tags: string[] })[] }> }>(
+      `
+      import { For, Show, render } from "@reactre/core";
+      import { createStore } from "@reactre/core/features/store";
+      const [s, set] = createStore({ todos: [{ id: 1, title: "a", done: false, tags: ["x"] }, { id: 2, title: "b", done: false, tags: [] }] });
+      function Done(props) { return <i>{props.todo.done ? "!" : ""}</i>; }
+      render(() => (
+        <ul>
+          <For each={s.todos} key={(t) => t.id} fallback={<li>none</li>}>
+            {(t) => (
+              <li class={t.done ? "done" : "open"}>
+                {t.title}
+                <b><Show when={t.done}>+</Show></b>
+                <q><Done todo={t} /></q>
+                <span><For each={t.tags} key={(g) => g}>{(g) => <em>{g}</em>}</For></span>
+              </li>
+            )}
+          </For>
+        </ul>
+      ), root);
+      return { set };
+      `,
+      root,
+    );
+    const ul = root.firstChild as FakeElement;
+    const lis = () => ul.childNodes as FakeElement[];
+    const first = lis()[0]!;
+    expect(root.textContent).toBe("axb");
+    api.set((d) => {
+      d.todos.push({ id: 3, title: "c", done: false, tags: [] });
+    });
+    expect(root.textContent).toBe("axbc");
+    expect(lis()[0]).toBe(first);
+    // In-place writes to an item: every hole that reads it follows, a nested list too.
+    api.set((d) => {
+      d.todos[0]!.title = "A";
+      d.todos[0]!.done = true;
+      d.todos[0]!.tags.push("y");
+    });
+    expect(root.textContent).toBe("A+!xybc");
+    expect(first.getAttribute("class")).toBe("done");
+    api.set((d) => {
+      d.todos.splice(1, 1);
+    });
+    expect(root.textContent).toBe("A+!xyc");
+    api.set((d) => {
+      d.todos.reverse();
+    });
+    expect(root.textContent).toBe("cA+!xy");
+    expect(lis()[1]).toBe(first);
+    api.set((d) => {
+      d.todos.length = 0;
+    });
+    expect(root.textContent).toBe("none");
+  });
+
+  test("<For each={[...store.todos]}>: rows follow the array, and holes follow their item", () => {
     const root = box();
     const api = run<{ set: store.StoreSetter<{ todos: Todo[] }> }>(
       `
@@ -556,13 +706,13 @@ describe("in compiled TSX", () => {
     });
     expect(root.textContent).toBe("abc");
     expect(lis()[0]).toBe(first!);
-    // An item's property: the holes that call follow it; the one that reads only the item does not.
+    // An item's property: the holes that call follow it, and so does the one that reads only the item.
     api.set((d) => {
       d.todos[0]!.title = "A";
       d.todos[0]!.done = true;
     });
     expect(root.textContent).toBe("Abc");
-    expect([first!.getAttribute("title"), first!.getAttribute("class")]).toEqual(["true", "open"]);
+    expect([first!.getAttribute("title"), first!.getAttribute("class")]).toEqual(["true", "done"]);
     // A removal takes out the removed item's row.
     api.set((d) => {
       d.todos.splice(1, 1);
@@ -577,31 +727,51 @@ describe("in compiled TSX", () => {
     expect(root.textContent).toBe("cA");
   });
 
-  test("<For each={store.todos}>: rows follow their items' properties, but not the array", () => {
+  test("what the compiler cannot follow to a store is written once: a local of a member, a store in an object, a function's result, a prop", () => {
     const root = box();
-    const api = run<{ set: store.StoreSetter<{ todos: Todo[] }> }>(
+    const api = run<{ set: store.StoreSetter<{ n: number; todos: Todo[] }> }>(
       `
       import { For, render } from "@reactre/core";
       import { createStore } from "@reactre/core/features/store";
-      const [s, set] = createStore({ todos: [{ id: 1, title: "a", done: false }] });
-      render(() => <ul><For each={s.todos} key={(t) => t.id}>{(t) => <li>{t.title.trim()}</li>}</For></ul>, root);
+      const [s, set] = createStore({ n: 1, todos: [{ id: 1, title: "a", done: false }] });
+      const todos = s.todos, holder = { s }, get = () => s.todos;
+      function List(props) {
+        return (
+          <section>
+            <ul><For each={props.todos} key={(t) => t.id}>{(t) => <li>{t.title}</li>}</For></ul>
+            <ol><For each={[...props.todos]} key={(t) => t.id}>{(t) => <li>{String(t.title)}</li>}</For></ol>
+          </section>
+        );
+      }
+      render(() => (
+        <div>
+          <p>{holder.s.n}</p><p>{holder.s.n.toString()}</p><p>{get()[0].title}</p>
+          <ul><For each={todos} key={(t) => t.id}>{(t) => <li>{t.title}</li>}</For></ul>
+          <ol><For each={get()} key={(t) => t.id}>{(t) => <li>{t.title}</li>}</For></ol>
+          <menu><For each={[...get()]} key={(t) => t.id}>{(t) => <li>{t.title.toString()}</li>}</For></menu>
+          <List todos={s.todos} />
+        </div>
+      ), root);
       return { set };
       `,
       root,
     );
+    const div = root.firstChild as FakeElement;
+    const texts = () => (div.childNodes as FakeElement[]).filter((n) => n.tagName).map((n) => n.textContent);
+    const section = () => (div.childNodes as FakeElement[]).find((n) => n.tagName === "SECTION")!;
+    const list = () => (section().childNodes as FakeElement[]).map((n) => n.textContent);
+    expect([texts(), list()]).toEqual([
+      ["1", "1", "a", "a", "a", "a", "aa"],
+      ["a", "a"],
+    ]);
     api.set((d) => {
+      d.n = 2;
       d.todos[0]!.title = "A";
-    });
-    expect(root.textContent).toBe("A");
-    // `each` read the property, not the array's contents: a push is not seen.
-    api.set((d) => {
       d.todos.push({ id: 2, title: "b", done: false });
     });
-    expect(root.textContent).toBe("A");
-    // A new array for the property is.
-    api.set((d) => {
-      d.todos = [...d.todos];
-    });
-    expect(root.textContent).toBe("Ab");
+    // A hole that calls follows what it reads; a hole that reads only a <For>'s item, and a <For>
+    // given the store's own array, do not, unless they call something or spread it.
+    expect(texts().slice(0, 6)).toEqual(["1", "2", "A", "a", "a", "Ab"]);
+    expect(list()).toEqual(["a", "Ab"]);
   });
 });

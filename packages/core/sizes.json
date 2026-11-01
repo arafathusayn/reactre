@@ -39,6 +39,10 @@
     "min": 16176,
     "gzip": 6735
   },
+  "storeEach": {
+    "min": 16176,
+    "gzip": 6738
+  },
   "memo": {
     "min": 6555,
     "gzip": 2954

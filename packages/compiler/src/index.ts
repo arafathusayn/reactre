@@ -30,6 +30,9 @@
 //     children are built when it reads them. In a component, a hole that reads a prop
 //     (`{props.n}`) is bound only if some call site may pass that prop reactively: the facts of
 //     ./program.ts, given as an option or found in the file alone.
+//   - A store of @reactre/core/features/store is read by member (`{store.count}`): a hole that
+//     mentions one the file binds (`const [store, setStore] = createStore(...)`) or, with a whole
+//     program's facts, imports, is bound, and a prop that mentions one is a getter.
 //   - A fragment's children join the parent's template; a fragment that is
 //     not a child of an element is an array of nodes (`__frag`).
 //   - A key on an element outside a list rebuilds the element when the key
@@ -60,10 +63,15 @@
 //     calls are all that is left to find, and everything else is copied through unchanged.
 //   - "Calls a function" is the whole test for a reactive hole: in reactre a signal is read by
 //     calling it. The test is conservative: a call that reads no signal only costs an effect.
-//     The one exception is a member read of a component's props (`props.title`), which may be a
-//     getter: it is reactive when a call site may pass that prop reactively, so a component
-//     whose callers pass only values costs what it did before props were reactive. Every member
-//     read is judged in one place (`readsChanging`), where more roots could join (a store's).
+//     Member reads are the exceptions, judged in one place (`readsChanging`). A read of a
+//     component's props (`props.title`), which may be a getter, is reactive when a call site may
+//     pass that prop reactively, so a component whose callers pass only values costs what it did
+//     before props were reactive. A mention of a store root (`store.count`; see ./program.ts) is
+//     reactive, since a store's reads subscribe; a file that binds and imports no store has none.
+//   - A `<For>` whose `each` mentions a store root reads a copy of it (`[...store.todos]`): a
+//     store's array changes in place, and a list needs a new array to render. Its row's item is a
+//     store root in the row, so a hole that reads only the item (`t.done`) is reactive, where a
+//     list over plain values compares it when the row gets a new item. Other lists compile as before.
 //   - Every name the output adds starts with `__rr`, so it cannot collide with the app's names.
 //   - Control flow is recognized by import, not by name: `Show`, `Switch` and `Dynamic` are names
 //     apps give components of their own (a toggle switch, a dynamic form), and those must stay
@@ -83,6 +91,7 @@ import {
   analyze,
   type Def,
   findDefs,
+  findStores,
   type Host,
   isExternal,
   isFunction,
@@ -90,9 +99,9 @@ import {
   type Program,
   type PropFacts,
   propReads,
-  type PropUse,
   propUse,
   readsOf,
+  rootsIn,
   scanModule,
   scopeAt,
   touches,
@@ -109,7 +118,8 @@ export interface CompileOptions {
    * (`@reactre/compiler/program` finds them for a whole program). A component missing from the
    * map is reactive in every prop. Without the option, the file is seen alone: a component it
    * neither exports nor uses as a value has all its call sites in it, and any other is reactive in
-   * every prop.
+   * every prop. The facts' `stores` are the stores the file imports (`Program.factsOf` gives
+   * them); without them, only the stores the file binds itself are known.
    */
   readonly props?: PropFacts;
 }
@@ -382,13 +392,15 @@ function compile(js: string, map: boolean, options: CompileOptions = {}): string
   const fragments = new Set<string>();
   for (const m of js.matchAll(/\bFragment_[a-z0-9]{8}\b/g)) fragments.add(m[0]);
   // The components the file defines, and which of their props may be passed reactively.
-  let defs: Def[], props: PropFacts;
-  if (options.props !== undefined) [defs, props] = [findDefs(js), options.props];
+  let defs: Def[], props: PropFacts, stores: Set<string>;
+  if (options.props !== undefined) [defs, props, stores] = [findDefs(js), options.props, findStores(js)];
   else {
     const info = scanModule(js);
-    [defs, props] = [[...info.defs], moduleFacts(js, info)];
+    [defs, props, stores] = [[...info.defs], moduleFacts(js, info), new Set(info.stores)];
   }
-  const c = new Compiler(helpers, fragments, map, flowNames(js), defs, props);
+  // The stores the file binds, and those the program says it imports.
+  for (const s of props.stores ?? []) stores.add(s);
+  const c = new Compiler(helpers, fragments, map, flowNames(js), defs, props, stores);
   const body = c.rewrite(js, 0);
   // Nothing may fall back to a JSX runtime, since reactre has none.
   for (const m of body.matchAll(/\b(jsxs|jsx|jsxDEV|Fragment)_[a-z0-9]{8}\b/g)) {
@@ -462,6 +474,11 @@ class Compiler {
   private readonly props: PropFacts;
   /** The components the jsx call being compiled is written in, outermost first. */
   private scope: readonly Def[] = [];
+  /**
+   * The names that hold stores where the jsx call being compiled is: the file's (see
+   * `compile`), and the item of each <For> row over a store around it.
+   */
+  private readonly stores: Set<string>;
   constructor(
     helpers: Set<string>,
     fragments: Set<string>,
@@ -469,6 +486,7 @@ class Compiler {
     flow: ReadonlyMap<string, Flow>,
     defs: readonly Def[],
     props: PropFacts,
+    stores: Set<string>,
   ) {
     this.helpers = helpers;
     this.fragments = fragments;
@@ -476,22 +494,33 @@ class Compiler {
     this.flow = flow;
     this.defs = defs;
     this.props = props;
+    this.stores = stores;
   }
 
   /**
-   * Whether an expression may change: it calls something (a signal read), or reads a prop that a
-   * call site of the component it is written in may pass reactively.
+   * Whether an expression may change: it calls something (a signal read), or its member reads
+   * read what may change (`readsChanging`).
    */
   private changes(expr: string): boolean {
-    return reactive(expr) || this.readsChanging(propReads(expr, this.scope));
+    return reactive(expr) || this.readsChanging(expr);
   }
 
   /**
-   * Whether member reads (`props.title`) read what may change: a prop some call site passes
-   * reactively. Every member read the compiler judges comes here, at call sites and in holes.
+   * Whether the member reads of `expr` read what may change: a prop that a call site of the
+   * component it is written in may pass reactively (`props.title`), or a store's property
+   * (`store.count`, a store row's `t.done`; any mention of a store root). Every member read the
+   * compiler judges comes here. A file that binds and imports no store has no store roots, so
+   * only its props are judged, as before stores were.
    */
-  private readsChanging(reads: PropUse["reads"]): boolean {
-    return reads.some(([d, r]) => touches(this.props.get(d.name) ?? true, r));
+  private readsChanging(expr: string): boolean {
+    return (
+      propReads(expr, this.scope).some(([d, r]) => touches(this.props.get(d.name) ?? true, r)) || this.readsStore(expr)
+    );
+  }
+
+  /** Whether `expr` mentions a store root (see `rootsIn`). */
+  private readsStore(expr: string): boolean {
+    return rootsIn(expr, this.stores).length > 0;
   }
 
   /**
@@ -707,16 +736,17 @@ class Compiler {
    * it, after the component's own code before that. So is one that reads a prop of the component
    * around the call (`<Theme value="dark">{props.children}</Theme>`), which may be either: read
    * where it is passed, it would build children before the component they are passed to runs, a
-   * provider's children outside the provider. Spread props are merged by `__props`, which keeps
-   * their getters. Null when every prop is a value and there is no spread: the props are written as
-   * they are.
+   * provider's children outside the provider. So is one that mentions a store root
+   * (`text={store.title}`, `todo={t}` in a store's row), whose reads are reactive. Spread props are
+   * merged by `__props`, which keeps their getters. Null when every prop is a value and there is
+   * no spread: the props are written as they are.
    */
   private passProps(entries: readonly [string, string, number][]): string | null {
     const kinds = entries.map(([k, v]) => {
       if (k === "...") return "spread";
-      const use = propUse(v, this.helpers, this.scope);
+      const use = propUse(v, this.helpers, this.scope, this.stores);
       if (use.fn) return "value";
-      return use.lazy || use.calls || use.reads.length > 0 ? "getter" : "value";
+      return use.lazy || use.calls || use.reads.length > 0 || use.stores !== undefined ? "getter" : "value";
     });
     if (kinds.every((k) => k === "value")) return null;
     const groups: string[] = [];
@@ -1115,6 +1145,9 @@ class Compiler {
     const [children, childrenAt] = p.get("children") ?? [];
     // The list's each and key, compiled where the spec is written (after the row's template).
     let each: () => string, key: () => string;
+    // Whether `each` mentions a store root: its items are stores, so the row follows what it reads
+    // of its item (see below).
+    let store = false;
     if (repeat) {
       const [count, countAt] = p.get("count") ?? [];
       const other = [...p.keys()].find((k) => !["count", "from", "fallback", "children"].includes(k));
@@ -1137,7 +1170,12 @@ class Compiler {
       if (e === undefined || k === undefined || children === undefined) {
         throw new ReactreCompileError("reactre: <For> needs each, key and a row function as its child");
       }
-      each = () => this.rewrite(e, eAt ?? -1);
+      // A store's array is changed in place, and the list needs a new array for each render: it is
+      // read through a copy (`[...store.todos]`), which reads its length and every index tracked,
+      // so pushes, removals and moves render. An array literal is a new array already.
+      store = this.readsStore(e);
+      const copy = store && !isLiteral(e, "[");
+      each = () => (copy ? `[...(${this.rewrite(e, eAt ?? -1)})]` : this.rewrite(e, eAt ?? -1));
       key = () => this.rewrite(k, kAt ?? -1);
     }
     // One plain parameter, so it can name the row in every hole's own function below.
@@ -1155,6 +1193,11 @@ class Compiler {
     const row = this.only(body, bodyAt);
     if (row === null || !row.type.startsWith('"'))
       throw new ReactreCompileError(`reactre: a <${name}> row must be one element: ${body}`);
+    // In a row over a store, the item is a store root: a hole that reads it (`t.done`) is reactive,
+    // since a store's item changes in place and the row never gets a new item for it. Only the
+    // row's own code sees it so; `each`, `key` and `fallback` are compiled after.
+    const item = store && !this.stores.has(param);
+    if (item) this.stores.add(param);
     const t = this.tree(row);
     const id = this.template(t);
     // fill/holes: values that depend on the row only, written at creation. dyn/dynHoles: values
@@ -1201,6 +1244,7 @@ class Compiler {
         holes.push(i);
       }
     });
+    if (item) this.stores.delete(param);
     const fallback = p.get("fallback");
     const n = fallback === undefined ? -1 : this.uid++;
     // dyn, events and mounts are left out when empty, so the runtime does no work for them per row.

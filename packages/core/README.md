@@ -266,17 +266,35 @@ import { Errored } from "@reactre/core/features/errors";
 
 `onSettled`, `flush`, `createRoot`, `getOwner` and `runWithOwner` are Solid 2.0's, and `reaction` is its `createEffect(compute, apply)`, under MobX's name. `<Dynamic>` stays in `@reactre/core`, since it is compiled away; `dynamic()` is the runtime function beside it. Rows with several selector keys are a feature module too (see [What an app ships](#what-an-app-ships)).
 
-The store APIs are Solid 2.0's, under its names: setters are draft-first (`setStore((s) => { s.todos.push(todo) })`, with a block body, since an object the setter returns replaces the store's contents). `memo` and `signal` from `@reactre/core/features/memo` take core's arguments as core's do, plus Solid 2.0's options; its `lazy` and `unobserved` are left out, since core's signals do not count their readers. In TSX, a store read is reactive where the compiler sees a call, as a signal read is:
+The store APIs are Solid 2.0's, under its names: setters are draft-first (`setStore((s) => { s.todos.push(todo) })`, with a block body, since an object the setter returns replaces the store's contents). `memo` and `signal` from `@reactre/core/features/memo` take core's arguments as core's do, plus Solid 2.0's options; its `lazy` and `unobserved` are left out, since core's signals do not count their readers. In TSX, the compiler knows a store by where it is made: a name bound by `const [store, setStore] = createStore(...)` or `const p = createProjection(...)`, with the functions imported from `@reactre/core/features/store` under any local name or through `import * as`. In a production build that reads the whole program (`@reactre/plugin`, or the compiler's own Bun plugin), a store a module imports from another is one there too, through re-exports and namespace imports. A read through it is reactive, as a signal's call is:
 
 ```tsx
-<p>{store.count}</p>              // written once: the hole calls nothing
-<p>{store.count.toString()}</p>   // follows store.count
-<For each={[...store.todos]} key={(t) => t.id}>   {/* a new array, read tracked: follows pushes and removals */}
-  {(t) => <li class={t.done ? "done" : ""}>{t.title.trim()}</li>}   {/* the title follows t.title; the class is written once */}
+<p>{store.count}</p>                            // follows store.count
+<p class={store.ui.dark ? "dark" : ""} />       // follows store.ui.dark
+<Show when={store.user}>...</Show>              // follows store.user
+<Label text={store.title} />                    // a getter: Label's {props.text} follows it
+<For each={store.todos} key={(t) => t.id}>      {/* follows pushes, removals and moves */}
+  {(t) => <li class={t.done ? "done" : ""}>{t.title}</li>}   {/* both follow their item */}
 </For>
 ```
 
-`each={store.todos}` renders the array once and then only when `store.todos` is given a new array, since a `<For>` reads the array it is given untracked and needs a new one for each render; spread it. A row's hole that reads only its item is compared when the row gets a new item, and a store's items change in place, keeping their proxies, so such a hole is written once: make it call something. A store read passed as a prop follows the same rule, since it is a member read and not a prop of the component around it: `<Label text={store.title} />` passes the value it had, and `text={store.title.trim()}` a getter that follows it.
+A `<For>` over a store's array reads a copy of it, which reads its length and every index tracked, since a list needs a new array for each render and a store's array changes in place; the items stay the same proxies, so only new rows are built. In its rows, a hole that reads only the item follows the item's in-place writes, and so do a nested `<For each={t.tags}>` and a component passed the item (`<Item todo={t} />`). An app whose files bind and import no store compiles as before, and so does each list over anything else.
+
+What the compiler cannot follow to a store is written once, as any member read is. Which reads update:
+
+| Pattern                                                                                               | Updates?                                                    |
+| ----------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| `{store.count}`, `{ns.store.count}`, `{t.title}` in a store's row                                     | yes                                                         |
+| `<For each={store.todos}>`, `<For each={[...store.todos]}>`                                           | yes                                                         |
+| `<Label text={store.title} />`, `<Card s={store} />`, `<Item todo={t} />`                             | yes                                                         |
+| `{getStore().count}`, `<For each={[...getTodos()]}>`                                                  | yes: it calls something                                     |
+| `const todos = store.todos` then `{todos.length}`, `<For each={todos}>`                               | no: use `{todos.length.toString()}`, `each={[...todos]}`    |
+| `const box = { store }` then `{box.store.count}`                                                      | no: read `store.count`, or call something                   |
+| `<For each={getTodos()}>` and its rows' `{t.title}`                                                   | no: spread it, and make the hole call (`{String(t.title)}`) |
+| `<For each={props.todos}>`, a caller passing `todos={store.todos}`, and its rows' `{t.title}`         | no: the same, `each={[...props.todos]}` and a call          |
+| a store imported with each file compiled alone (`compileSource`, a dev server, `wholeProgram: false`) | no, until the build reads the whole program                 |
+
+The store itself is always current: a hole the compiler cannot follow keeps the value it was written with until the content around it is built again.
 
 ### Context and error boundaries
 

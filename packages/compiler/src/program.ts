@@ -39,11 +39,23 @@
 //     what lands among the app's files; node_modules and assets are leaves. A late module (one
 //     a bundler transforms that the walk did not reach) joins with `walk`, and `check` says
 //     whether the facts given to modules compiled before it still hold.
+//
+// Stores (@reactre/core/features/store) are read by member, not by a call: `{store.count}`
+// subscribes to `count`. A module's store roots are the names it binds stores to
+// (`const [store, setStore] = createStore(...)`, `const p = createProjection(...)`, `findStores`),
+// and those it imports from a module of the program that exports one, through re-exports and
+// namespace imports (`Program.factsOf` gives them as `PropFacts.stores`). A prop whose value
+// mentions a store root (`<Label text={store.title} />`, `<Item todo={store.todos[0]} />`) is passed
+// reactively, as one that calls something; so is one that mentions the item of a `<For>` row whose
+// `each` mentions a store root, since that item is a store too. What holds a store that the scan
+// cannot follow (a local made of a store or of its member, a store kept in an object, a module
+// outside the program, a re-export of `createStore`) is not a root: its reads are written once,
+// as any member read is, unless they call something (`getStore().count`).
 
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 
-import { isIdent, skipToken, splitAt, until } from "./scan.ts";
+import { isIdent, skipToken, splitAt, trimAt, until } from "./scan.ts";
 
 // #region Facts
 
@@ -52,7 +64,14 @@ import { isIdent, skipToken, splitAt, until } from "./scan.ts";
  * of prop names, or true for every prop (a component whose callers cannot all be seen). A
  * component that is not in the map is treated as true.
  */
-export type PropFacts = ReadonlyMap<string, ReadonlySet<string> | true>;
+export type PropFacts = ReadonlyMap<string, ReadonlySet<string> | true> & {
+  /**
+   * The names the module reads stores by (see `findStores`): its own, and those it imports from
+   * modules of the program (`store`, or `state.store` through a namespace import). Without it, the
+   * module's own alone.
+   */
+  readonly stores?: ReadonlySet<string>;
+};
 
 /** Reactive props, as a set or true for all; also what an expression reads of a props object. */
 type Props = Set<string> | true;
@@ -263,23 +282,69 @@ export function isFunction(expr: string): boolean {
 /**
  * How a component call passes a prop of value `expr`, `scope` being the components it is written
  * in (outermost first). A function literal is passed as it is (`fn`), so is anything else that
- * calls nothing and reads no props. Otherwise it is a getter: `lazy` when it holds JSX (built when
- * the component reads it), `calls` when it calls something, and `reads` the props it reads of
- * each component around it, by the component's index in `scope`.
+ * calls nothing, reads no props and mentions no store root. Otherwise it is a getter: `lazy` when
+ * it holds JSX (built when the component reads it), `calls` when it calls something, `reads` the
+ * props it reads of each component around it, and `stores` the store roots it mentions (only
+ * when it mentions one).
  */
 export interface PropUse {
   readonly fn: boolean;
   readonly lazy: boolean;
   readonly calls: boolean;
   readonly reads: readonly (readonly [Def, Props])[];
+  readonly stores?: readonly string[];
 }
 
-/** A prop's use (see `PropUse`), for value `expr` written inside the components `scope`. */
-export function propUse(expr: string, helpers: ReadonlySet<string>, scope: readonly Def[]): PropUse {
+/**
+ * A prop's use (see `PropUse`), for value `expr` written inside the components `scope`, where
+ * `roots` are the names that may hold stores (see `rootsIn`).
+ */
+export function propUse(
+  expr: string,
+  helpers: ReadonlySet<string>,
+  scope: readonly Def[],
+  roots: ReadonlySet<string> = NONE,
+): PropUse {
   if (isFunction(expr)) return { fn: true, lazy: false, calls: false, reads: [] };
   let lazy = false;
   for (const h of helpers) if (expr.includes(h + "(")) lazy = true;
-  return { fn: false, lazy, calls: callsOutsideJsx(expr, helpers), reads: propReads(expr, scope, helpers) };
+  const use = { fn: false, lazy, calls: callsOutsideJsx(expr, helpers), reads: propReads(expr, scope, helpers) };
+  const stores = rootsIn(expr, roots, helpers);
+  return stores.length === 0 ? use : { ...use, stores };
+}
+
+/** No names. */
+const NONE: ReadonlySet<string> = new Set();
+
+/**
+ * The names of `roots` that `expr` mentions, other than as a member of something else (`x.store`)
+ * or an object's key (`{ store: 1 }`): reading through one (`store.count`, `store[i]`) or passing
+ * it on (`f(store)`, `{ ...store }`). A root may be a namespace import's member (`state.store`),
+ * and `state.*` stands for every member of `state`. A function literal's body is skipped, as it
+ * reads only when called; with `helpers`, so are jsx calls, as in `callsOutsideJsx`.
+ */
+export function rootsIn(expr: string, roots: ReadonlySet<string>, helpers?: ReadonlySet<string>): string[] {
+  const out: string[] = [];
+  if (roots.size === 0) return out;
+  const tokens = tokenize(expr),
+    m = matches(tokens);
+  for (let i = 0; i < tokens.length; i++) {
+    const skip = skipped(tokens, m, i, helpers);
+    if (skip >= 0) {
+      i = skip;
+      continue;
+    }
+    const t = tokens[i]!.t,
+      prev = tokens[i - 1]?.t;
+    if ((prev === "." && tokens[i - 2]?.t !== ".") || (tokens[i + 1]?.t === ":" && (prev === "{" || prev === ",")))
+      continue;
+    let root = roots.has(t) ? t : null;
+    const member = tokens[i + 1]?.t === "." ? tokens[i + 2]?.t : undefined;
+    if (root === null && isName(member) && (roots.has(`${t}.${member}`) || roots.has(`${t}.*`)))
+      root = `${t}.${member}`;
+    if (root !== null && !out.includes(root)) out.push(root);
+  }
+  return out;
 }
 
 /**
@@ -525,6 +590,8 @@ export interface ModuleInfo {
   readonly whole: readonly string[];
   /** Whether it imports what cannot be known while compiling: `import(expr)`, a glob, a context. */
   readonly opaque: boolean;
+  /** The names it binds stores to (see `findStores`). */
+  readonly stores: ReadonlySet<string>;
 }
 
 /** The names Bun and the plugin give jsx, jsxs and jsxDEV, and Fragment. */
@@ -536,6 +603,49 @@ const FLOW = new Set(["For", "Show", "Switch", "Match", "Repeat", "Portal", "Dyn
 
 /** A string literal's value: a specifier. */
 const unquote = (lit: string): string => lit.slice(1, -1);
+
+/** The module whose `createStore` and `createProjection` make the stores the compiler follows. */
+const STORE = "@reactre/core/features/store";
+
+/**
+ * The names a module binds stores to: the first name of the array pattern a `createStore(...)`
+ * call is destructured into (`const [store, setStore] = createStore(...)`), and the name a
+ * `createProjection(...)` call is assigned to. The functions are those @reactre/core/features/store
+ * exports, imported under any local name or through a namespace import (`S.createStore`).
+ */
+export function findStores(src: string): Set<string> {
+  return src.includes(STORE) ? new Set(scanModule(src).stores) : new Set();
+}
+
+/** `findStores`, from the module's tokens and its import bindings. */
+function storesOf(tokens: readonly Token[], m: Int32Array, imports: ReadonlyMap<string, Binding>): Set<string> {
+  const out = new Set<string>(),
+    fns = new Map<string, string>(),
+    namespaces = new Set<string>();
+  const maker = (name: string | undefined): name is string => name === "createStore" || name === "createProjection";
+  for (const [local, b] of imports) {
+    if (b.spec !== STORE) continue;
+    if (b.name === "*") namespaces.add(local);
+    else if (maker(b.name)) fns.set(local, b.name);
+  }
+  for (let i = 0; i < tokens.length; i++) {
+    const at = i,
+      t = tokens[i]!.t;
+    if (tokens[i - 1]?.t === ".") continue;
+    let fn = fns.get(t);
+    if (namespaces.has(t) && tokens[i + 1]?.t === "." && maker(tokens[i + 2]?.t)) fn = tokens[(i += 2)]!.t;
+    // `name = fn(...)`, or `[name, ...] = fn(...)`: not `==`, `+=` and the like.
+    const before = tokens[at - 2];
+    if (fn === undefined || tokens[i + 1]?.t !== "(" || tokens[at - 1]?.t !== "=" || before === undefined) continue;
+    if (fn === "createProjection") {
+      if (isName(before.t)) out.add(before.t);
+    } else if (before.t === "]") {
+      const first = tokens[m[at - 2]! + 1]!;
+      if (isName(first.t) && [",", "]", "="].includes(tokens[m[at - 2]! + 2]!.t)) out.add(first.t);
+    }
+  }
+  return out;
+}
 
 /** Scan one module's JavaScript (as `compileJs` reads it) for its components and their uses. */
 export function scanModule(src: string): ModuleInfo {
@@ -651,6 +761,27 @@ export function scanModule(src: string): ModuleInfo {
       }
     }
   }
+  const stores = storesOf(tokens, m, imports);
+  // The names that may hold a store, known once the program links the modules: the module's own
+  // stores, and what it imports from outside @reactre (a namespace import's every member). Within
+  // a <For> row whose `each` mentions one, so does the row's item, standing for the roots `each`
+  // mentions (`under`).
+  const roots = new Set(stores);
+  for (const [local, b] of imports)
+    if (!b.spec.startsWith("@reactre/")) roots.add(b.name === "*" ? `${local}.*` : local);
+  const rows: { readonly name: string; readonly start: number; readonly end: number; readonly under: string[] }[] = [];
+  const rowsAt = (at: number) => rows.filter((r) => r.start <= at && at < r.end);
+  const rootsAt = (at: number): ReadonlySet<string> => {
+    const here = rowsAt(at);
+    return here.length === 0 ? roots : new Set([...roots, ...here.map((r) => r.name)]);
+  };
+  /** The roots names found at `at` stand for: a row's item, the roots its `each` mentions. */
+  const under = (names: readonly string[], at: number): string[] =>
+    names.flatMap((n) => rowsAt(at).findLast((r) => r.name === n)?.under ?? [n]);
+  const fors = new Set(["For"]);
+  for (const [local, b] of imports)
+    if (b.spec === "@reactre/core" && (b.name === "For" || b.name === "*"))
+      fors.add(b.name === "*" ? `${local}.For` : local);
   // The jsx calls whose type is a component.
   for (let i = 0; i < tokens.length; i++) {
     const tok = tokens[i]!;
@@ -664,9 +795,14 @@ export function scanModule(src: string): ModuleInfo {
     // The type's name is a use as a component, not as a value.
     skip.add(i + 2);
 
+    if (roots.size > 0 && fors.has(t) && props !== undefined) {
+      const row = rowOf(src, props, (each, at) => under(rootsIn(each, rootsAt(at), helpers), at));
+      if (row !== null) rows.push(row);
+    }
     if (FRAGMENT.test(t) || flow.has(t) || (dot !== null && flow.has(dot[1] + ".*") && FLOW.has(dot[2]!))) continue;
     const target: Target = /^[\w$]+$/.test(t) ? { local: t } : dot !== null ? { ns: dot[1]!, member: dot[2]! } : null;
-    const scope = scopeAt(defs, tok.s);
+    const scope = scopeAt(defs, tok.s),
+      here = rootsAt(tok.s);
     const used: [string, PropUse][] = [];
     let spread = false;
     const p = props?.[0] ?? "";
@@ -680,11 +816,13 @@ export function scanModule(src: string): ModuleInfo {
         const colon = until(part, 0, ":");
         const key = part.slice(0, colon).trim();
         if (key.startsWith("[")) spread = true;
-        else
+        else {
+          const use = propUse(colon < part.length ? part.slice(colon + 1).trim() : part, helpers, scope, here);
           used.push([
             /^["']/.test(key) ? unquote(key) : key,
-            propUse(colon < part.length ? part.slice(colon + 1).trim() : part, helpers, scope),
+            use.stores === undefined ? use : { ...use, stores: under(use.stores, tok.s) },
           ]);
+        }
       }
     sites.push({ target, props: used, spread });
   }
@@ -706,7 +844,34 @@ export function scanModule(src: string): ModuleInfo {
       else if (set !== true) nsEscapes.set(tok.t, (set ?? new Set()).add(member));
     } else if (b !== undefined || named.has(tok.t)) escapes.add(tok.t);
   }
-  return { defs, imports, exports, stars, specs, sites, escapes, nsEscapes, whole, opaque };
+  return { defs, imports, exports, stars, specs, sites, escapes, nsEscapes, whole, opaque, stores };
+}
+
+/**
+ * A <For>'s row over what may be a store: its item's name, where the row function is in `src`, and
+ * the roots its `each` stands for (`found`, given `each` and where it starts). Null when `each`
+ * mentions none, or the row function's parameter is not a plain name.
+ */
+function rowOf(
+  src: string,
+  [props, at]: readonly [string, number],
+  found: (each: string, at: number) => string[],
+): { name: string; start: number; end: number; under: string[] } | null {
+  let each: readonly [string, number] | undefined, children: readonly [string, number] | undefined;
+  // A <For>'s props are an object literal: JSX writes spread props as one too.
+  for (const [part, pAt] of splitAt(src, at + 1, at + props.length - 1)) {
+    const colon = until(part, 0, ":");
+    const entry = colon < part.length ? trimAt(part.slice(colon + 1), pAt + colon + 1) : ([part, pAt] as const);
+    const key = part.slice(0, colon).trim();
+    if (key === "each") each = entry;
+    else if (key === "children") children = entry;
+  }
+  const param = children === undefined ? null : /^\(?\s*([A-Za-z_$][\w$]*)\s*\)?\s*=>/.exec(children[0]);
+  if (each === undefined || param === null) return null;
+  const under = found(each[0], each[1]);
+  return under.length === 0
+    ? null
+    : { name: param[1]!, start: children![1], end: children![1] + children![0].length, under };
 }
 
 // #endregion
@@ -773,9 +938,18 @@ export class Program {
   factsOf(file: string): PropFacts {
     const facts = this.solve(),
       out = new Map<string, Set<string> | true>();
-    for (const d of this.modules.get(file)?.info.defs ?? []) out.set(d.name, union(out.get(d.name), facts.get(d)!));
+    const mod = this.modules.get(file);
+    for (const d of mod?.info.defs ?? []) out.set(d.name, union(out.get(d.name), facts.get(d)!));
     this.given.set(file, out);
-    return out;
+    // The module's store roots: its own, and the stores it imports.
+    const stores = new Set(mod?.info.stores);
+    for (const [local, b] of mod?.info.imports ?? []) {
+      const target = mod!.resolved.get(b.spec);
+      if (b.name !== "*") {
+        if (this.storeExport(target, b.name)) stores.add(local);
+      } else for (const k of this.exportNames(target)) if (this.storeExport(target, k)) stores.add(`${local}.${k}`);
+    }
+    return stores.size === 0 ? out : Object.assign(out, { stores });
   }
 
   /**
@@ -840,7 +1014,11 @@ export class Program {
               continue;
             }
             for (const [k, use] of site.props) {
-              if (f.has(k) || !(use.calls || use.reads.some(([o, r]) => touches(facts.get(o)!, r)))) continue;
+              const changes =
+                use.calls ||
+                use.reads.some(([o, r]) => touches(facts.get(o)!, r)) ||
+                (use.stores?.some((n) => this.storeIn(file, n)) ?? false);
+              if (f.has(k) || !changes) continue;
               f.add(k);
               changed = true;
             }
@@ -870,6 +1048,44 @@ export class Program {
       return "local" in e ? this.local(file, e.local) : this.export(mod.resolved.get(e.spec), e.name, seen);
     if (name === "default") return [];
     return mod.info.stars.flatMap((s) => this.export(mod.resolved.get(s), name, seen));
+  }
+
+  /**
+   * Whether `name` holds a store in module `file`: one of its own roots, an import of a store, or
+   * (`ns.member`) a namespace import's member that is one.
+   */
+  private storeIn(file: string, name: string, seen = new Set<string>()): boolean {
+    const mod = this.modules.get(file)!;
+    const dot = name.indexOf(".");
+    const b = mod.info.imports.get(dot < 0 ? name : name.slice(0, dot));
+    if (dot >= 0) return b?.name === "*" && this.storeExport(mod.resolved.get(b.spec), name.slice(dot + 1), seen);
+    if (mod.info.stores.has(name)) return true;
+    return b !== undefined && b.name !== "*" && this.storeExport(mod.resolved.get(b.spec), b.name, seen);
+  }
+
+  /** Whether export `name` of module `file` is a store, through re-exports. */
+  private storeExport(file: Resolved | undefined, name: string, seen = new Set<string>()): boolean {
+    if (typeof file !== "string" || seen.has(file + "\0" + name)) return false;
+    seen.add(file + "\0" + name);
+    const mod = this.modules.get(file);
+    if (mod === undefined) return false;
+    const e = mod.info.exports.get(name);
+    if (e !== undefined)
+      return "local" in e
+        ? this.storeIn(file, e.local, seen)
+        : this.storeExport(mod.resolved.get(e.spec), e.name, seen);
+    return name !== "default" && mod.info.stars.some((s) => this.storeExport(mod.resolved.get(s), name, seen));
+  }
+
+  /** The names module `file` exports, through `export *` (which passes on all but the default). */
+  private exportNames(file: Resolved | undefined, seen = new Set<string>(), star = false): string[] {
+    if (typeof file !== "string" || seen.has(file)) return [];
+    seen.add(file);
+    const mod = this.modules.get(file);
+    if (mod === undefined) return [];
+    return [...mod.info.exports.keys()]
+      .filter((k) => !star || k !== "default")
+      .concat(mod.info.stars.flatMap((s) => this.exportNames(mod.resolved.get(s), seen, true)));
   }
 
   /**

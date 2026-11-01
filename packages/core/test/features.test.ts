@@ -48,6 +48,8 @@
 //   reaction  `reaction` beside a `render`.
 //   show      a <Show> whose child reads an accessor, a <For> with a fallback, a class list.
 //   store     a store's array in a <For>, written through its setter and `reconcile`.
+//   storeEach the store app with `each={s.todos}` and holes that read only the row's item: the
+//             compiler copies the array and binds the holes, as `store` writes them by hand.
 //   memo      a memo with `equals`, and a writable derived signal of it.
 //   context   a provider, and lookups in its children and in a slot's content made later.
 //   errors    an <Errored> whose child's hole throws on an update, and its reset.
@@ -272,6 +274,27 @@ const apps = {
       load: (todos) => set((d) => { reconcile(todos)(d.todos); }),
     };
   `,
+  /** The store app written without calls: `each={s.todos}`, and holes that read only the row's item. */
+  storeEach: `
+    import { For, render } from "@reactre/core";
+    import { createStore, reconcile } from "@reactre/core/features/store";
+    const [s, set] = createStore({ todos: [{ id: 1, title: "a", done: false }] });
+    function App() {
+      return (
+        <ul>
+          <For each={s.todos} key={(t) => t.id}>
+            {(t) => <li class={t.done ? "true" : "false"}>{t.title}</li>}
+          </For>
+        </ul>
+      );
+    }
+    render(App, root);
+    globalThis.api = {
+      add: (id, title) => set((d) => { d.todos.push({ id, title, done: false }); }),
+      toggle: (i) => set((d) => { d.todos[i].done = !d.todos[i].done; }),
+      load: (todos) => set((d) => { reconcile(todos)(d.todos); }),
+    };
+  `,
   /** A memo with a custom equality, and a writable signal derived from it. */
   memo: `
     import { render, signal as base } from "@reactre/core";
@@ -469,21 +492,22 @@ describe("stores and memo options", () => {
     }
   });
 
-  test("store: <For> rows follow pushes, in-place writes to their items, and reconcile", async () => {
-    const { root, api } = run(await bundle("store", apps.store));
-    const lis = () => (root.firstChild as FakeElement).childNodes as FakeElement[];
-    api.add!(2, "b");
-    expect(text(root)).toBe("ab");
-    const first = lis()[0];
-    api.toggle!(0);
-    expect(lis().map((li) => li.getAttribute("class"))).toEqual(["true", "false"]);
-    api.load!([
-      { id: 1, title: "A", done: true },
-      { id: 3, title: "c", done: false },
-    ]);
-    expect(text(root)).toBe("Ac");
-    expect(lis()[0]).toBe(first!);
-  });
+  for (const name of ["store", "storeEach"] as const)
+    test(`${name}: <For> rows follow pushes, in-place writes to their items, and reconcile`, async () => {
+      const { root, api } = run(await bundle(name, apps[name]));
+      const lis = () => (root.firstChild as FakeElement).childNodes as FakeElement[];
+      api.add!(2, "b");
+      expect(text(root)).toBe("ab");
+      const first = lis()[0];
+      api.toggle!(0);
+      expect(lis().map((li) => li.getAttribute("class"))).toEqual(["true", "false"]);
+      api.load!([
+        { id: 1, title: "A", done: true },
+        { id: 3, title: "c", done: false },
+      ]);
+      expect(text(root)).toBe("Ac");
+      expect(lis()[0]).toBe(first!);
+    });
 
   test("memo: equals keeps readers from re-running, and the derived signal holds a write until its source changes", async () => {
     const { root, api } = run(await bundle("memo", apps.memo));
@@ -559,6 +583,7 @@ describe("sizes", () => {
       "reaction",
       "show",
       "store",
+      "storeEach",
       "memo",
       "context",
       "errors",

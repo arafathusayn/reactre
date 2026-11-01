@@ -407,7 +407,7 @@ describe("reactive props with the store's props helpers", () => {
     expect((api.span!() as FakeElement).getAttribute("title")).toBe("t2");
   });
 
-  test("a store's reads passed as props: a member read is a value, a call a getter", () => {
+  test("a store's reads passed as props: a member read and a call are both getters", () => {
     const root = box();
     const api = run<Api>(
       `
@@ -422,7 +422,7 @@ describe("reactive props with the store's props helpers", () => {
     );
     expect(text(root)).toBe("aa");
     api.rename!("b" as never);
-    expect(text(root)).toBe("ab");
+    expect(text(root)).toBe("bb");
   });
 });
 
