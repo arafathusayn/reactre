@@ -430,7 +430,8 @@ describe("stores across a program", () => {
     const out = compileJs(js(main), { props: p.factsOf("main") });
     expect(out).toContain("() => (store.n)");
     expect(out).toContain("() => (ns.store.title)");
-    expect(out).toContain("(ns.plain.n)");
+    // Not a store: inserted once (a value of the app's own files may hold JSX), not followed.
+    expect(out).toContain("__rrInsert(__n[2], ns.plain.n, null);");
     expect(out).toContain("[...(ns.store.todos)]");
     expect(out).toContain("dyn: (t, __d) => { __d[0] = (t.title); }");
   });
@@ -491,8 +492,9 @@ describe("stores across a program", () => {
     expect(out).toContain("() => (fromLib.y)");
     expect(out).toContain("[...(useStore().todos)]");
     expect(out).toContain("dyn: (t, __d) => { __d[0] = (t.title); }");
-    // `n` and `getPlain` hold no store: written once, and a list over them is not copied.
-    expect(out).toContain('clone(["", "", (n), "", "", "", ""])');
+    // `n` and `getPlain` hold no store: `n` is inserted once (a value of the app's own files may
+    // hold JSX), not followed, and a list over them is not copied.
+    expect(out).toContain("__rrInsert(__n[2], n, null);");
     expect(out).toContain("each: () => (getPlain().list)");
   });
 
@@ -542,7 +544,8 @@ describe("stores across a program", () => {
     const main = `import { plain } from "./state"; import { lib } from "some-package"; export const A = () => <p>{plain.n}{lib.n}</p>;`;
     const p = program({ state, main });
     const out = compileJs(js(main), { props: p.factsOf("main") });
-    expect(out).toContain('clone([(plain.n), ""])');
+    // Inserted once, as a value of the app's own files may hold JSX.
+    expect(out).toContain("__rrInsert(__n[0], plain.n, null);");
     expect(out).toContain("() => (lib.n)");
     // Seen alone, the same file takes both for stores.
     expect(compileSource(main)).toContain('clone(["", ""])');

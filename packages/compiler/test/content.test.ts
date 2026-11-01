@@ -1,5 +1,6 @@
 // Tests of JSX held in values, in @reactre/compiler: a hole that mentions a local made of JSX, a
-// function that returns it or a value imported from such a module of the program is inserted
+// function that returns it, an import from the app's own files (a path or an alias, which a file
+// alone cannot see into) or a value a package of the program exports that holds JSX is inserted
 // (`__insert`, or a slot when it may change), not written as text (`__bind`, or the clone's
 // text), in client, hydrate and server builds, for a file alone and in a whole program; a
 // fragment's expression in an element is inserted whatever the compiler knows of it; and a
@@ -13,7 +14,7 @@ import { FakeElement, installFakeDocument } from "@reactre/testdom";
 
 import * as runtime from "../../core/src/index.ts";
 import { compileJs, type CompileOptions, transpileSource } from "../src/index.ts";
-import { findDefs, Program, type Resolved, scanModule } from "../src/program.ts";
+import { findDefs, moduleFacts, Program, type Resolved, scanModule } from "../src/program.ts";
 
 /** The name the scan gives a component it finds no name for. */
 const UNNAMED = "(unnamed)";
@@ -25,13 +26,16 @@ beforeEach(installFakeDocument);
 /** A TSX source as the compiler reads it. */
 const js = (src: string): string => transpileSource(src);
 
-/** A program of in-memory modules, resolved by their specifiers' names (`./a` is module `a`). */
+/**
+ * A program of in-memory modules, resolved by their specifiers' names (`./a` is module `a`); a
+ * package's specifier leads to the module of that name (`@app/ui`, a workspace's package), if any.
+ */
 function program(files: Record<string, string>, entries: string[] = ["main"]): Program {
   const p = new Program(entries);
   for (const [file, src] of Object.entries(files)) {
     const code = js(src);
     const resolved = new Map<string, Resolved>(
-      scanModule(code).specs.map((s) => [s, s.startsWith("./") ? s.slice(2) : false]),
+      scanModule(code).specs.map((s) => [s, s.startsWith("./") ? s.slice(2) : s in files ? s : false]),
     );
     p.add(file, code, resolved);
   }
@@ -142,50 +146,57 @@ describe("a hole that holds JSX", () => {
     for (const out of both(src)) expect(out).not.toMatch(/__rrInsert\(|__rrSlot\(/);
   });
 
-  test("a function imported from a module of the program that returns JSX is inserted in a whole program", () => {
+  test("a value or a function a package of the program exports that holds JSX is inserted in a whole program", () => {
+    // `@app/ui` is a package the program resolves into its own modules (a workspace's): it sees
+    // what each export holds, through re-exports, its own imports and namespace imports.
     const ui = `
+      import { view, label } from "./inner";
       export function make() { return <b>b</b>; }
       export const el = <i>i</i>;
       export const text = () => "t";
       const own = () => <u>u</u>;
       export { own as renamed };
+      export const viaView = view, viaLabel = label;
+      export { view as viewed, label as labelled } from "./inner";
       export * from "./more";
     `;
     const more = `export const deep = () => <s>s</s>; export default function () { return <p />; }`;
+    const inner = `export const view = () => <em />, label = "x";`;
     const src = `
-      import { make, el, text, renamed, deep } from "./ui";
-      import * as UI from "./ui";
+      import { make, el, text, renamed, deep, viaView, viaLabel, viewed, labelled } from "@app/ui";
+      import * as UI from "@app/ui";
       import pkg from "pkg";
       const mine = make;
-      export const App = () => <div>{make()}{el}{text()}{renamed()}{deep()}{UI.make()}{UI.text()}{mine()}{pkg()}</div>;
+      export const App = () => <div>{make()}{el}{text()}{renamed()}{deep()}{UI.make()}{UI.text()}{mine()}{pkg()}{viaView()}{viaLabel}{viewed()}{labelled}</div>;
     `;
-    const p = program({ main: src, ui, more });
+    const p = program({ main: src, "@app/ui": ui, more, inner });
     expect([...p.factsOf("main").jsx!].sort()).toEqual([
       "App",
       "UI.deep",
       "UI.el",
       "UI.make",
       "UI.renamed",
+      "UI.viaView",
+      "UI.viewed",
       "deep",
       "el",
       "make",
       "mine",
       "renamed",
+      "viaView",
+      "viewed",
     ]);
     const whole = compileJs(js(src), { props: p.factsOf("main") });
     for (const h of ["make()", "renamed()", "deep()", "UI.make()", "mine()"]) expect(whole).toContain(`() => (${h}));`);
     expect(whole).toContain("__rrInsert(__n[1], el, null);");
-    // A call of a function of the app's own files is a slot, though the program sees it returns
-    // text, as alone; a package's, which the program cannot see, is text.
-    expect(whole).toContain("__rrSlot(__n[2], () => (text()));");
-    expect(whole).toContain("__rrSlot(__n[6], () => (UI.text()));");
+    // Text, and a package the program cannot see.
+    expect(whole).toContain("__rrBind(__rrT0, 2, __n[2], () => (text()));");
+    expect(whole).toContain("__rrBind(__rrT0, 6, __n[6], () => (UI.text()));");
     expect(whole).toContain("__rrBind(__rrT0, 8, __n[8], () => (pkg()));");
-    // Alone, the file cannot see what its imports hold: a value is text, which the development
-    // build checks (NODE_AS_TEXT); a call is a slot, as in the program.
+    // Alone, the file cannot see what a package's imports hold: text, which the development
+    // build checks (NODE_AS_TEXT).
     const alone = compileJs(js(src));
-    expect(alone).toContain("__rrSlot(__n[0], () => (make()));");
-    expect(alone).toContain("__rrBind(__rrT0, 8, __n[8], () => (pkg()));");
-    expect(alone).not.toContain("__rrInsert(");
+    expect(alone).not.toMatch(/__rrInsert\(|__rrSlot\(/);
   });
 
   test("the scan: what each local is made of, and the program's names", () => {
@@ -206,11 +217,11 @@ describe("a hole that holds JSX", () => {
       main: `import { x } from "pkg"; const el = <b />; const a = el, b = x; function g() { return a; }`,
     });
     expect([...p.factsOf("main").jsx!].sort()).toEqual(["a", "el", "g"]);
-    // A module the program does not have, and an import cycle.
+    // A module the program does not have, and an import cycle through packages it resolves.
     expect([...new Program([]).factsOf("none").jsx!]).toEqual([]);
     const cycle = program({
-      main: `import { b } from "./b"; export const a = b;`,
-      b: `import { a } from "./main"; export const b = a;`,
+      main: `import { b } from "@app/b"; export const a = b;`,
+      "@app/b": `import { a } from "main"; export const b = a;`,
     });
     expect([...cycle.factsOf("main").jsx!]).toEqual([]);
   });
@@ -218,7 +229,7 @@ describe("a hole that holds JSX", () => {
 
 // #endregion
 
-// #region Calls of the app's own imports
+// #region Imports from the app's own files
 
 /** A module of the app: functions that return JSX, text and a flag, and an object of two. */
 const UI = `
@@ -311,38 +322,62 @@ describe("a hole that calls a function of the app's own files", () => {
       }
     }
   });
+});
 
-  test("a value of one is as it was: a slot in a whole program when it holds JSX, alone text", () => {
+/** Each case: what the module declares, and a hole that reads a value of `./ui` through it. */
+const VALUES: Record<string, [string, string]> = {
+  jsx: ["", "el"],
+  text: ["", "label"],
+  object: ["", "obj"],
+  namespace: ["", "UI.el"],
+  "namespace text": ["", "UI.label"],
+  conditional: ["", "on() ? el : label"],
+  alias: ["const mine = label;", "mine"],
+};
+
+describe("a hole that reads a value of the app's own files", () => {
+  test("is a slot alone and in a whole program, in client, hydrate and server builds", () => {
+    const ui = UI + `export const el = <u>u</u>, label = "x";`;
+    for (const [name, [own, hole]] of Object.entries(VALUES)) {
+      const src = `import { el, label, obj } from "./ui"; import * as UI from "./ui"; ${own} export const App = () => <div>{${hole}}</div>;`;
+      for (const [build, options, slot] of SLOT) {
+        const [alone, whole] = both(src, options, { ui });
+        expect({ name, build, alone: slot.test(alone), whole: slot.test(whole) }).toEqual({
+          name,
+          build,
+          alone: true,
+          whole: true,
+        });
+      }
+    }
+    // Alone, such a slot is followed, as an import may be a store; the program sees which are
+    // none, and inserts those once. What may change is followed in both.
     const [alone, whole] = both(
-      `import { obj } from "./ui"; export const App = () => <div>{obj}{obj.label}</div>;`,
+      `import { el, obj } from "./ui"; export const App = () => <div>{el}{obj.label}{on() ? el : null}</div>;`,
       {},
-      { ui: UI },
+      { ui },
     );
-    expect(alone).not.toMatch(/__rrInsert\(|__rrSlot\(/);
-    expect(whole).toContain("__rrInsert(__n[0], obj, null); __rrInsert(__n[1], obj.label, null);");
+    expect(alone).toContain("__rrSlot(__n[0], () => (el)); __rrSlot(__n[1], () => (obj.label));");
+    expect(whole).toContain("__rrInsert(__n[0], el, null); __rrInsert(__n[1], obj.label, null);");
+    for (const out of [alone, whole]) expect(out).toContain("__rrSlot(__n[2], () => (on() ? el : null));");
   });
 
-  test("the scan: the names whose call may return JSX, and the values that call one", () => {
+  test("the names: each import from the app's own files, and what is made of one, alone and in a whole program", () => {
     const src = `
       import { make } from "./ui";
       import * as N from "~/n";
       import lib from "lib";
       import data from "./data.json";
-      const mine = make, o = { make }, f = () => N.x(), m = lib({ fn: () => make() });
-      const x = make(), y = o.make(), z = lib(), w = data.get(), v = mine;
-      function g() { return mine(); }
+      const mine = make, f = () => N.x(), m = lib({ fn: () => make() }), z = lib(), w = data.get();
     `;
-    const info = scanModule(js(src));
-    const calls = ["N.*", "f", "g", "m", "make", "mine", "o", "v"];
-    expect([...info.calls].sort()).toEqual(calls);
-    expect([...info.jsx].filter(([, v]) => v === true).map(([k]) => k)).toEqual(["x", "y"]);
-    // The program gives them as they are.
-    expect([...program({ main: src }).factsOf("main").calls!].sort()).toEqual(calls);
+    const names = ["N.*", "f", "m", "make", "mine"];
+    expect([...moduleFacts(js(src)).jsx!].sort()).toEqual(names);
+    expect([...program({ main: src, ui: UI }).factsOf("main").jsx!].sort()).toEqual(names);
   });
 });
 
-describe("at runtime, a hole that calls a function of the app's own files", () => {
-  test("alone, it inserts the function's nodes and writes its text; true, false and null render nothing", () => {
+describe("at runtime, a hole that reads the app's own files", () => {
+  test("alone, a call of one inserts the function's nodes and writes its text; true, false and null render nothing", () => {
     const ui = `
       import { signal } from "@reactre/core";
       export const [n, setN] = signal(1);
@@ -361,6 +396,19 @@ describe("at runtime, a hole that calls a function of the app's own files", () =
     expect(html(root)).toBe("<div><b>1</b>t1</div>");
     app.setN(2);
     expect(html(root)).toBe("<div><b>2</b>t2</div>");
+  });
+
+  test("alone, a value of one is inserted: an element, an array of them, text", () => {
+    const ui = `export const el = <i>i</i>, items = [<li>1</li>, <li>2</li>], label = "x", none = null;`;
+    const main = `
+      import { render } from "@reactre/core";
+      import { el, items, label, none } from "./ui";
+      render(() => <div>{el}{items}{label}{none}</div>, root);
+      return {};
+    `;
+    const root = new FakeElement("DIV");
+    link({ ui: compileJs(js(ui)), main: compileJs(js(main)) }, root);
+    expect(html(root)).toBe("<div><i>i</i><li>1</li><li>2</li>x</div>");
   });
 });
 
