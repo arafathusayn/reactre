@@ -195,8 +195,55 @@ async function sameError(make: Make): Promise<string> {
   return raw(() => ReactNodeServer.renderToString(make(React)));
 }
 
-/** A promise that resolves to `value` after `ms`, as a thenable both servers wait on. */
-const later = <T>(value: T, ms = 5): Promise<T> => new Promise((r) => setTimeout(() => r(value), ms));
+// The tests' clock. What a test waits on (data, an abort, a drain) comes at a time on this clock,
+// not the machine's: it moves on to the next time only once the servers are quiet, so each
+// server streams what came before it in full and the stream depends on the order of the times
+// alone. Real timers raced: on a loaded machine a render that took 10 ms set one timer that much
+// later than the one before it, two timers a few milliseconds apart fired in one turn or the
+// other way round, and a server streamed its boundaries in another order.
+let now = 0,
+  timers = 0,
+  ticking = false;
+const due: { at: number; n: number; fn: () => void }[] = [];
+// A test takes setImmediate away (to see the timers the servers fall back on); the clock keeps it.
+const immediate = setImmediate;
+
+/** Let the servers' queued work run: React's waits for a timer of 0 ms or setImmediate, compat's for setImmediate. */
+async function idle(): Promise<void> {
+  for (let i = 0; i < 10; i++) {
+    await new Promise((r) => immediate(r));
+    await new Promise((r) => setTimeout(r, 0));
+  }
+}
+
+/** Run `fn` `ms` from now on the tests' clock, after what is due before it (and with what is due then, in order). */
+function after(ms: number, fn: () => void): void {
+  due.push({ at: now + ms, n: timers++, fn });
+  if (ticking) return;
+  ticking = true;
+  void (async () => {
+    while (due.length) {
+      await idle();
+      due.sort((a, b) => a.at - b.at || a.n - b.n);
+      now = due[0]!.at;
+      while (due.length && due[0]!.at === now) {
+        const { fn } = due.shift()!;
+        try {
+          fn();
+        } catch (e) {
+          // Thrown as a timer's callback throws it, and the clock goes on.
+          setTimeout(() => {
+            throw e;
+          }, 0);
+        }
+      }
+    }
+    ticking = false;
+  })();
+}
+
+/** A promise that resolves to `value` after `ms` on the tests' clock, as a thenable both servers wait on. */
+const later = <T>(value: T, ms = 5): Promise<T> => new Promise((r) => after(ms, () => r(value)));
 
 describe("React's production build", () => {
   test("is the reference", () => {
@@ -304,7 +351,7 @@ describe("errors", () => {
         await reader.cancel();
         await later(null, 2);
       } else {
-        setTimeout(() => controller.abort(reason), 2);
+        after(2, () => controller.abort(reason));
         await text(stream);
       }
       return errors;
@@ -1806,7 +1853,7 @@ describe("Suspense", () => {
   test("streaming: a boundary that errors after the shell is rendered on the client", async () => {
     const make: Make = (L) => {
       let p: Any;
-      const Fail = (): Any => L.use((p ??= new Promise((_, reject) => setTimeout(() => reject(new Error("late")), 3))));
+      const Fail = (): Any => L.use((p ??= new Promise((_, reject) => after(3, () => reject(new Error("late"))))));
       return L.createElement(
         "div",
         null,
@@ -2101,8 +2148,7 @@ describe("SuspenseList and ViewTransition", () => {
       const cache = new Map<string, Any>();
       const Wait = ({ id, ms, fail }: Any): Any => {
         let p = cache.get(id);
-        if (!p)
-          cache.set(id, (p = new Promise((res, rej) => setTimeout(() => (fail ? rej(new Error(id)) : res(id)), ms))));
+        if (!p) cache.set(id, (p = new Promise((res, rej) => after(ms, () => (fail ? rej(new Error(id)) : res(id))))));
         return L.createElement("i", null, L.use(p));
       };
       return L.createElement(
@@ -2208,7 +2254,7 @@ describe("aborting", () => {
         signal: controller.signal,
         onError: (e: Any) => void errors.push(full(e?.message ?? String(e))),
       });
-      setTimeout(() => controller.abort(reason), 3);
+      after(3, () => controller.abort(reason));
       const out = await text(stream);
       return out + "\n" + errors.join("|");
     };
@@ -2267,7 +2313,7 @@ describe("aborting", () => {
             events.push("shell");
             s.pipe(writable);
             events.push(thrown(() => s.pipe(writable)));
-            setTimeout(() => s.abort(), 2);
+            after(2, () => s.abort());
           },
           onAllReady: () => events.push("all"),
           onError: (e: Any) => void events.push("error:" + full(e.message)),
@@ -2309,8 +2355,8 @@ describe("aborting", () => {
               onShellReady() {
                 s.pipe(writable);
                 listeners.get(event)!();
-                if (event === "drain") setTimeout(() => s.abort("done"), 2);
-                setTimeout(() => resolve(Buffer.concat(chunks).toString() + "|" + events.join(",")), 10);
+                if (event === "drain") after(2, () => s.abort("done"));
+                after(10, () => resolve(Buffer.concat(chunks).toString() + "|" + events.join(",")));
               },
               onError: (e: Any) => void events.push(full(e?.message ?? String(e))),
             },
@@ -2668,7 +2714,7 @@ describe("more of React's paths", () => {
       const sync = { then: (ok: Any) => ok("sync") };
       const tracked: Any = {
         status: "custom",
-        then: (ok: Any) => setTimeout(() => ((tracked.status = "fulfilled"), (tracked.value = "x"), ok()), 1),
+        then: (ok: Any) => after(1, () => ((tracked.status = "fulfilled"), (tracked.value = "x"), ok())),
       };
       let pending: Any;
       const Pending = (): Any => (pending ??= later("later", 2));
@@ -2832,7 +2878,7 @@ describe("more of React's paths", () => {
         signal: controller.signal,
         onError: (e: Any) => void errors.push(String(e)),
       });
-      setTimeout(() => controller.abort("stop"), 2);
+      after(2, () => controller.abort("stop"));
       return (await text(stream)) + "|" + errors.join(",");
     };
     expect(await run(Server, Compat)).toBe(await run(ReactServer, React));
@@ -2892,7 +2938,7 @@ describe("more of React's paths", () => {
           },
         );
         stream.allReady.catch(() => {});
-        setTimeout(() => controller.abort("stop"), 2);
+        after(2, () => controller.abort("stop"));
         return await text(stream);
       } catch (e) {
         return "errored: " + (e as Error).message;
@@ -3105,7 +3151,7 @@ describe("component stacks", () => {
     };
     const run = async (server: Any, L: Lib): Promise<string[]> => {
       const controller = new AbortController();
-      setTimeout(() => controller.abort("stop"), 3);
+      after(3, () => controller.abort("stop"));
       return errorInfos(server, make(L), { signal: controller.signal });
     };
     expect(await run(Server, Compat)).toEqual(await run(ReactServer, React));
@@ -3279,7 +3325,7 @@ describe("stream chunks and backpressure", () => {
             seen.push(show(c));
             if (!full(i++)) return true;
             seen.push("full");
-            setTimeout(() => ended || (seen.push("drain"), drain()), 2);
+            after(2, () => ended || (seen.push("drain"), drain()));
             return false;
           },
           end: () => ((ended = true), resolve(seen)),
@@ -3320,7 +3366,7 @@ describe("replaying promises", () => {
   /** A promise that resolves to `value` soon; past `limit` tries, a settled thenable, so a render that never replays still ends. */
   const fresh = (value: Any, tries: { n: number }, limit = 4): Any =>
     tries.n++ < limit
-      ? new Promise((resolve) => setTimeout(() => resolve(value + "@" + tries.n), 2))
+      ? new Promise((resolve) => after(2, () => resolve(value + "@" + tries.n)))
       : { status: "fulfilled", value: "gave up", then() {} };
 
   test("a promise made during render is replayed when the component renders again", async () => {
