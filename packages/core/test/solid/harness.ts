@@ -55,7 +55,6 @@ export const GAPS = {
   "render-effects": "createEffect's user phase, after the render effects, and its defer option",
   from: "from(), a signal of an external source",
   "memo-options": "memo options loadingValue, deferStream, transparent, ssrSource",
-  "store-path": "storePath, the path-based store setter",
   "client-only": "clientOnly(), a component rendered only in the browser",
   "ssr-helpers": "httpStatus, httpHeader, takeHydrationValue, getHydrationWriter",
   hydration: "hydrate(), claiming server-rendered HTML",

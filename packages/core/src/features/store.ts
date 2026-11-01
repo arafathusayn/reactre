@@ -1,5 +1,6 @@
 // @reactre/core/features/store: Solid 2.0's stores. `createStore`, `createProjection`,
-// `reconcile`, `snapshot` and `deep`, with its props helpers `merge` and `omit`.
+// `reconcile`, `snapshot` and `deep`, with its props helpers `merge` and `omit`, and `path`, its
+// `storePath`: a setter's function that writes one value at a path.
 //
 // A store is a proxy over a plain object or array. Reading a property inside an effect, a
 // reactive hole or a memo subscribes to that property alone; arrays are followed by index and by
@@ -365,6 +366,184 @@ export function reconcile<T>(value: T, key: string | null = "id"): (draft: T) =>
     if (wrappable(t) && wrappable(v)) diff(t, v, key);
   };
 }
+
+/** What `path(...keys, path.DELETE)` writes: the property is deleted. */
+const DELETE: unique symbol = /* @__PURE__ */ Symbol();
+
+/** A value a store does not go into. */
+type Leaf = string | number | bigint | boolean | symbol | null | undefined | ((...args: never[]) => unknown);
+/** `T` without what a path cannot go into. */
+type In<T> = Exclude<T, Leaf>;
+/** The keys of `T` a path goes through: an array's are its indexes. */
+type KeyOf<T> = In<T> extends readonly unknown[] ? number : keyof In<T>;
+/** What a path finds at key `K` of `T`. */
+type At<T, K> = K extends keyof In<T> ? In<T>[K] : never;
+/** A range of an array's indexes, `from` to `to` (both included) by `by`: 0, its last, 1 by default. */
+export interface PathRange {
+  readonly from?: number;
+  readonly to?: number;
+  readonly by?: number;
+}
+/** One step of a path through `T`: a key, several keys, and in an array a range or a test of its items. */
+export type PathPart<T, K extends KeyOf<T> = KeyOf<T>> =
+  K | readonly K[] | (In<T> extends readonly (infer I)[] ? PathRange | ((item: I, index: number) => boolean) : never);
+/**
+ * What a path writes where it ends: a value (an object over an object is merged into it), a
+ * function of the value there, or `path.DELETE`.
+ */
+export type PathValue<T> = T | Partial<T> | ((prev: T) => T | Partial<T>) | typeof DELETE;
+
+/** `path`: its overloads, from no key to six, and `DELETE`. */
+export interface Path {
+  /** Written by `path`, deletes the property. */
+  readonly DELETE: typeof DELETE;
+  // `NoInfer`: the store's type comes from the setter `path` is given to, not from the value.
+  <T>(value: NoInfer<PathValue<T>>): (draft: T) => void;
+  <T, K1 extends KeyOf<T>>(k1: PathPart<T, K1>, value: NoInfer<PathValue<At<T, K1>>>): (draft: T) => void;
+  <T, K1 extends KeyOf<T>, K2 extends KeyOf<At<T, K1>>>(
+    k1: PathPart<T, K1>,
+    k2: PathPart<At<T, K1>, K2>,
+    value: NoInfer<PathValue<At<At<T, K1>, K2>>>,
+  ): (draft: T) => void;
+  <T, K1 extends KeyOf<T>, K2 extends KeyOf<At<T, K1>>, K3 extends KeyOf<At<At<T, K1>, K2>>>(
+    k1: PathPart<T, K1>,
+    k2: PathPart<At<T, K1>, K2>,
+    k3: PathPart<At<At<T, K1>, K2>, K3>,
+    value: NoInfer<PathValue<At<At<At<T, K1>, K2>, K3>>>,
+  ): (draft: T) => void;
+  <
+    T,
+    K1 extends KeyOf<T>,
+    K2 extends KeyOf<At<T, K1>>,
+    K3 extends KeyOf<At<At<T, K1>, K2>>,
+    K4 extends KeyOf<At<At<At<T, K1>, K2>, K3>>,
+  >(
+    k1: PathPart<T, K1>,
+    k2: PathPart<At<T, K1>, K2>,
+    k3: PathPart<At<At<T, K1>, K2>, K3>,
+    k4: PathPart<At<At<At<T, K1>, K2>, K3>, K4>,
+    value: NoInfer<PathValue<At<At<At<At<T, K1>, K2>, K3>, K4>>>,
+  ): (draft: T) => void;
+  <
+    T,
+    K1 extends KeyOf<T>,
+    K2 extends KeyOf<At<T, K1>>,
+    K3 extends KeyOf<At<At<T, K1>, K2>>,
+    K4 extends KeyOf<At<At<At<T, K1>, K2>, K3>>,
+    K5 extends KeyOf<At<At<At<At<T, K1>, K2>, K3>, K4>>,
+  >(
+    k1: PathPart<T, K1>,
+    k2: PathPart<At<T, K1>, K2>,
+    k3: PathPart<At<At<T, K1>, K2>, K3>,
+    k4: PathPart<At<At<At<T, K1>, K2>, K3>, K4>,
+    k5: PathPart<At<At<At<At<T, K1>, K2>, K3>, K4>, K5>,
+    value: NoInfer<PathValue<At<At<At<At<At<T, K1>, K2>, K3>, K4>, K5>>>,
+  ): (draft: T) => void;
+  <
+    T,
+    K1 extends KeyOf<T>,
+    K2 extends KeyOf<At<T, K1>>,
+    K3 extends KeyOf<At<At<T, K1>, K2>>,
+    K4 extends KeyOf<At<At<At<T, K1>, K2>, K3>>,
+    K5 extends KeyOf<At<At<At<At<T, K1>, K2>, K3>, K4>>,
+    K6 extends KeyOf<At<At<At<At<At<T, K1>, K2>, K3>, K4>, K5>>,
+  >(
+    k1: PathPart<T, K1>,
+    k2: PathPart<At<T, K1>, K2>,
+    k3: PathPart<At<At<T, K1>, K2>, K3>,
+    k4: PathPart<At<At<At<T, K1>, K2>, K3>, K4>,
+    k5: PathPart<At<At<At<At<T, K1>, K2>, K3>, K4>, K5>,
+    k6: PathPart<At<At<At<At<At<T, K1>, K2>, K3>, K4>, K5>, K6>,
+    value: NoInfer<PathValue<At<At<At<At<At<At<T, K1>, K2>, K3>, K4>, K5>, K6>>>,
+  ): (draft: T) => void;
+}
+
+/** A key a path does not go through or write, as in Solid 2.0: it leads to what every object shares. */
+const shared = (k: unknown): boolean => k === "__proto__" || k === "constructor" || k === "prototype";
+
+/**
+ * Follow `args[i]`, the path's step `i`, from `cur` (a draft), and write its last argument where
+ * the path ends. A step of several keys goes each way in turn, as `args[i]` set to each.
+ */
+function walk(cur: Obj, args: unknown[], i: number): void {
+  const last = args.length - 1;
+  let k: PropertyKey | undefined,
+    prev: unknown = cur;
+  if (i < last) {
+    const p = args[i];
+    if (shared(p)) return;
+    let ks: Iterable<unknown> | null = null;
+    if (Array.isArray(p)) ks = p;
+    else if (Array.isArray(cur) && typeof p === "function") {
+      const out: number[] = [];
+      for (let j = 0; j < cur.length; j++) if ((p as (v: unknown, i: number) => unknown)(cur[j], j)) out.push(j);
+      ks = out;
+    } else if (Array.isArray(cur) && typeof p === "object" && p !== null) {
+      const { from = 0, to = cur.length - 1, by = 1 } = p as PathRange,
+        out: number[] = [];
+      for (let j = from; j <= to; j += by) out.push(j);
+      ks = out;
+    }
+    if (ks !== null) {
+      for (const each of ks) {
+        args[i] = each;
+        walk(cur, args, i);
+      }
+      args[i] = p;
+      return;
+    }
+    k = p as PropertyKey;
+    if (i < last - 1) return walk(cur[k] as Obj, args, i + 1);
+    prev = cur[k];
+  }
+  let v = args[last];
+  if (typeof v === "function") {
+    v = (v as (prev: unknown) => unknown)(prev);
+    if (v === prev) return;
+  }
+  if (k === undefined && v == null) return;
+  if (v === DELETE) delete cur[k!];
+  else if (k === undefined || (wrappable(raw(prev)) && wrappable(raw(v)) && !Array.isArray(raw(v)))) {
+    // Merged into what is there: each own enumerable key of `v`, symbols too; a getter as a getter.
+    const into = (k === undefined ? cur : prev) as Obj,
+      t = raw(into),
+      from = raw(v) as Obj;
+    for (const key of Reflect.ownKeys(from)) {
+      const desc = Object.getOwnPropertyDescriptor(from, key)!;
+      if (!desc.enumerable || shared(key)) continue;
+      if (desc.get === undefined && desc.set === undefined) into[key] = desc.value;
+      else {
+        const had = Object.hasOwn(t, key);
+        Object.defineProperty(t, key, desc);
+        bump(t, key);
+        if (!had) bump(t, KEYS);
+      }
+    }
+  } else cur[k!] = v;
+}
+
+/**
+ * A setter's function that writes one value at a path into its draft, as Solid 1.x's
+ * `setStore("user", "name", "Ada")` did: `setStore(path("user", "name", "Ada"))`. Each step is a
+ * key, an array of keys (each is written), and in an array a range `{ from, to, by }` or a test
+ * `(item, index) => boolean` of its items. The last argument is the value: a function gets the
+ * value there and returns the new one (returning it unchanged writes nothing), an object written
+ * over an object (not an array) is merged into it, and `path.DELETE` deletes the property. With
+ * no key, the value is merged into the store itself. `__proto__`, `constructor` and `prototype`
+ * are neither followed nor written. It is Solid 2.0's `storePath`.
+ *
+ * @example
+ *   setStore(path("user", "name", "Grace"));
+ *   setStore(path("todos", (t) => !t.done, "done", true)); // every undone todo, done
+ *   setStore(path("todos", { from: 0, to: 1 }, "seen", (n) => n + 1));
+ *   setStore(path("user", "nickname", path.DELETE));
+ */
+export const path: Path = /* @__PURE__ */ Object.assign(
+  (...args: unknown[]) =>
+    (draft: unknown): void =>
+      walk(draft as Obj, args, 0),
+  { DELETE },
+) as Path;
 
 /** A copy of `v`, read through store proxies when `tracked` (each read subscribes). */
 function copy(v: unknown, tracked: boolean, seen: Map<object, unknown>): unknown {

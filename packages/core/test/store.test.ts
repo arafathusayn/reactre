@@ -10,7 +10,7 @@ import { FakeElement, installFakeDocument } from "@reactre/testdom";
 
 import { createRoot } from "../src/features/owner.ts";
 import * as store from "../src/features/store.ts";
-import { createProjection, createStore, deep, merge, omit, reconcile, snapshot } from "../src/features/store.ts";
+import { createProjection, createStore, deep, merge, omit, path, reconcile, snapshot } from "../src/features/store.ts";
 import * as core from "../src/index.ts";
 import { batch, effect, signal } from "../src/index.ts";
 
@@ -435,6 +435,154 @@ describe("reconcile", () => {
       ["a", "b"],
       ["a", "c"],
     ]);
+  });
+});
+
+describe("path", () => {
+  test("writes a value at a path, and re-runs only its readers", () => {
+    const [s, set] = createStore({ user: { name: "a", age: 1 }, n: 0 });
+    const name = runs(() => s.user.name),
+      age = runs(() => s.user.age);
+    set(path("user", "name", "b"));
+    set(path("n", (n) => n + 1));
+    expect(snapshot(s)).toEqual({ user: { name: "b", age: 1 }, n: 1 });
+    expect([name(), age()]).toEqual([2, 1]);
+  });
+
+  test("a function gets the value there; returning it unchanged writes nothing", () => {
+    const [s, set] = createStore({ list: [{ id: 1 }] });
+    const list = runs(() => s.list);
+    let seen: unknown;
+    set(
+      path("list", (l) => {
+        seen = l;
+        return l;
+      }),
+    );
+    expect(snapshot(seen)).toEqual([{ id: 1 }]);
+    expect(list()).toBe(1);
+  });
+
+  test("an object over an object is merged into it, an array replaces, a value over a value replaces", () => {
+    const [s, set] = createStore<{ user: { name: string; age?: number }; tags: string[]; at: number | { x: number } }>({
+      user: { name: "a" },
+      tags: ["x", "y"],
+      at: 1,
+    });
+    const user = s.user;
+    set(path("user", { age: 2 }));
+    set(path("tags", ["z"]));
+    set(path("at", { x: 1 }));
+    expect(s.user).toBe(user);
+    expect(snapshot(s)).toEqual({ user: { name: "a", age: 2 }, tags: ["z"], at: { x: 1 } });
+  });
+
+  test("with no key, the value is merged into the store; null or undefined writes nothing", () => {
+    const [s, set] = createStore<Record<PropertyKey, unknown>>({ a: 1 });
+    const sym = Symbol("s");
+    const keys = runs(() => Reflect.ownKeys(s));
+    set(path({ b: 2, [sym]: 3 }));
+    // The setter batches: its two new keys re-run the reader once.
+    expect(keys()).toBe(2);
+    const at = path as unknown as (v: unknown) => (d: Record<PropertyKey, unknown>) => void;
+    set(at(null));
+    set(at(undefined));
+    expect(keys()).toBe(2);
+    expect(s["a"]).toBe(1);
+    expect(s["b"]).toBe(2);
+    expect(s[sym]).toBe(3);
+    set(path((d) => ({ c: (d["b"] as number) + 1 })));
+    expect(s["c"]).toBe(3);
+  });
+
+  test("a merged getter stays a getter, and re-runs the readers of its key", () => {
+    const [s, set] = createStore<{ a: number; b?: number; c?: number }>({ a: 1, c: 0 });
+    const b = runs(() => s.b),
+      keys = runs(() => Object.keys(s));
+    const value = {
+      get b(): number {
+        return 10;
+      },
+      get c(): number {
+        return 20;
+      },
+    };
+    set(path(value));
+    expect(s.b).toBe(10);
+    expect(s.c).toBe(20);
+    expect(typeof Object.getOwnPropertyDescriptor(snapshot(s), "b")?.value).toBe("number");
+    expect([b(), keys()]).toEqual([2, 2]);
+  });
+
+  test("a key that is not enumerable is not merged", () => {
+    const [s, set] = createStore<Record<string, unknown>>({});
+    const value = Object.defineProperty({ a: 1 }, "hidden", { value: 2, enumerable: false });
+    set(path(value));
+    expect(Object.keys(s)).toEqual(["a"]);
+  });
+
+  test("path.DELETE deletes the property", () => {
+    const [s, set] = createStore<{ user: { name: string; nickname?: string } }>({
+      user: { name: "a", nickname: "b" },
+    });
+    const has = runs(() => "nickname" in s.user);
+    set(path("user", "nickname", path.DELETE));
+    expect("nickname" in s.user).toBe(false);
+    expect(has()).toBe(2);
+  });
+
+  test("several keys, a range and a test of an array's items", () => {
+    const todos = (): { id: number; done: boolean; seen: number }[] =>
+      [1, 2, 3, 4, 5].map((id) => ({ id, done: id % 2 === 0, seen: 0 }));
+    const [s, set] = createStore({ todos: todos(), flags: { a: false, b: false, c: false } });
+    set(path("todos", (t) => !t.done, "done", true));
+    expect(s.todos.map((t) => t.done)).toEqual([true, true, true, true, true]);
+    set(path("todos", { from: 1, to: 3 }, "seen", (n) => n + 1));
+    set(path("todos", { by: 2 }, "seen", (n) => n + 10));
+    set(path("todos", [0, 4], "id", (id) => -id));
+    expect(s.todos.map((t) => t.seen)).toEqual([10, 1, 11, 1, 10]);
+    expect(s.todos.map((t) => t.id)).toEqual([-1, 2, 3, 4, -5]);
+    set(path("flags", ["a", "c"], true));
+    expect(snapshot(s.flags)).toEqual({ a: true, b: false, c: true });
+    // A step's keys are put back after it: the function writes the same way each time.
+    const bump = path<{ n: number[] }, "n", number>("n", [0, 1], (n) => n + 1);
+    const [t, setT] = createStore({ n: [0, 0, 0] });
+    setT(bump);
+    setT(bump);
+    expect(t.n).toEqual([2, 2, 0]);
+  });
+
+  test("at depth, through the setter's batch: an effect runs once", () => {
+    const [s, set] = createStore({ a: { b: { c: { d: { e: { f: 0, g: 0 } } } } } });
+    const seen: number[] = [];
+    effect(() => void seen.push(s.a.b.c.d.e.f + s.a.b.c.d.e.g));
+    set(path("a", "b", "c", "d", "e", { f: 1, g: 2 }));
+    set(path("a", "b", "c", "d", "e", "f", 5));
+    expect(seen).toEqual([0, 3, 7]);
+  });
+
+  test("__proto__, constructor and prototype are neither followed nor written", () => {
+    const polluted = (): unknown => (Object.prototype as Record<string, unknown>)["polluted"];
+    const [s, set] = createStore<Record<string, unknown>>({ a: { x: 1 } });
+    const at = path as unknown as (...args: unknown[]) => (d: Record<string, unknown>) => void;
+    set(at("__proto__", "polluted", 1));
+    set(at("constructor", "prototype", "polluted", 1));
+    set(at("a", "prototype", 1));
+    set(at(JSON.parse('{"__proto__": {"polluted": 1}, "constructor": 2, "b": 3}')));
+    expect(polluted()).toBeUndefined();
+    expect(snapshot(s)).toEqual({ a: { x: 1 }, b: 3 });
+    expect(Object.getPrototypeOf(s)).toBe(Object.prototype);
+  });
+
+  test("its types follow the store", () => {
+    const [, set] = createStore({ user: { name: "a" }, list: [{ id: 1 }] });
+    set(path("user", "name", "b"));
+    set(path("list", 0, "id", (id) => id + 1));
+    set(path("list", (item) => item.id > 0, "id", 2));
+    // @ts-expect-error: no such key
+    set(path("user", "age", 1));
+    // @ts-expect-error: a name is a string
+    set(path("user", "name", 1));
   });
 });
 

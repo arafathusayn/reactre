@@ -1,19 +1,19 @@
 # Solid 2.0 parity, measured
 
-836 of Solid 2.0's own tests (solid-js 2.0.0-rc.20, [solidjs/solid@5e68925](https://github.com/solidjs/solid/tree/5e68925cc2fd216a9fb06345019e66d5da5c523c)), ported to reactre's API in [`packages/core/test/solid/`](../packages/core/test/solid): **515 pass** (62%), and 321 fail because reactre lacks the capability or behaves differently.
+836 of Solid 2.0's own tests (solid-js 2.0.0-rc.20, [solidjs/solid@5e68925](https://github.com/solidjs/solid/tree/5e68925cc2fd216a9fb06345019e66d5da5c523c)), ported to reactre's API in [`packages/core/test/solid/`](../packages/core/test/solid): **521 pass** (62%), and 315 fail because reactre lacks the capability or behaves differently.
 
 | Area                                                      | Files                        |  Ported |    Pass |     Gap |  Todo |
 | --------------------------------------------------------- | ---------------------------- | ------: | ------: | ------: | ----: |
 | Signals and memos                                         | signals, memo                |      72 |      53 |      19 |     0 |
 | Effects, ownership, timing                                | effects, owner, timing       |      90 |      57 |      33 |     0 |
-| Stores                                                    | store, reconcile, projection |     172 |     129 |      43 |     0 |
-| Control flow (Show, Switch, For, Repeat, Portal, Dynamic) | show, for, portal            |     172 |      65 |     107 |     0 |
+| Stores                                                    | store, reconcile, projection |     172 |     134 |      38 |     0 |
+| Control flow (Show, Switch, For, Repeat, Portal, Dynamic) | show, for, portal            |     172 |      66 |     106 |     0 |
 | Context, errors, components                               | context, errors, component   |      77 |      45 |      32 |     0 |
 | Async, Loading, actions                                   | loading, actions             |     122 |      71 |      51 |     0 |
 | Server rendering, hydration                               | server, hydration            |     131 |      95 |      36 |     0 |
-| **Total**                                                 | 18 files                     | **836** | **515** | **321** | **0** |
+| **Total**                                                 | 18 files                     | **836** | **521** | **315** | **0** |
 
-Without the list permutations (below), control flow is 65 of 84, and the total 515 of 748 (69%).
+Without the list permutations (below), control flow is 66 of 84, and the total 521 of 748 (70%).
 
 The top gaps, by the ports they block:
 
@@ -30,7 +30,7 @@ The top gaps, by the ports they block:
 
 `list-functions` (`mapArray`, `repeat`) and most of `render-effects` (`createRenderEffect` with `defer` and `schedule`, `createTrackedEffect`, `onFlush`) landed as feature modules, features/lists and features/effects, and their ports pass. What is left of `render-effects` is `reaction`'s, below.
 
-The other targets this set out to count: `memo-options` 5, `store-path` 5, `hydration` 4, `client-only` 4, `store-alias` 4, `from` 3, and `jsx-props` 0 (no port found JSX in a prop that did not work). [Gaps, by target](#gaps-by-target) lists all 61 targets and their tests.
+The other targets this set out to count: `memo-options` 5, `store-path` 0 (done), `hydration` 4, `client-only` 4, `store-alias` 4, `from` 3, and `jsx-props` 0 (no port found JSX in a prop that did not work). [Gaps, by target](#gaps-by-target) lists all 61 targets and their tests.
 
 ## What was read
 
@@ -96,7 +96,7 @@ Parity here means Solid's capabilities, not its names: reactre keeps its own (`s
 | `createProjection(fn, seed, { key })`        | `createProjection(fn, seed, { key })`                  | feature `store` | No async `fn`.                                                                                        |
 | `reconcile(v, key)`                          | `reconcile(v, key)`                                    | feature `store` | `key` is a property name or null; Solid also takes a function of the item.                            |
 | `snapshot`, `deep`, `merge`, `omit`          | `snapshot`, `deep`, `merge`, `omit`                    | feature `store` |                                                                                                       |
-| `storePath` (in @solidjs/signals only)       | missing                                                |                 |                                                                                                       |
+| `storePath`, `storePath.DELETE`              | `path`, `path.DELETE`                                  | feature `store` |                                                                                                       |
 | `$PROXY`, `$TRACK`, `isWrappable`, `flatten` | missing                                                |                 |                                                                                                       |
 | (compiler) store reads in JSX                | the compiler binds reads it can follow to a store root | core, compiled  | A read through an alias, a box, a function's result or `props.list` is written once (README's table). |
 
@@ -160,7 +160,7 @@ Each gap test names a target: what reactre would need for it to pass. The first 
 | `render-effects`                                                                                                                                                                                                   |      2 | `reaction` (createEffect) in a user phase after the render effects, and its `defer` option; the rest landed in features/effects (and `create-reaction`, 5, for `createReaction`) |
 | `from`                                                                                                                                                                                                             |      3 | `from(source)`                                                                                                                                                                   |
 | `memo-options`                                                                                                                                                                                                     |      5 | `loadingValue`, `deferStream`, `ssrSource` (no port needed `transparent`)                                                                                                        |
-| `store-path`                                                                                                                                                                                                       |      5 | `storePath`                                                                                                                                                                      |
+| `store-path`                                                                                                                                                                                                       |      0 | done: `path`, features/store's `storePath`, passes all five                                                                                                                      |
 | `client-only`                                                                                                                                                                                                      |      4 | `clientOnly`                                                                                                                                                                     |
 | `hydration`                                                                                                                                                                                                        |      4 | `<NoHydration>`, a boundary's error serialized for the client, a page without the markers, a class object read from a signal                                                     |
 | `for-placement`                                                                                                                                                                                                    |     30 | `<For>`/`<Repeat>` as a component's whole view (3 Solid sources × 10 permutations)                                                                                               |
@@ -345,10 +345,6 @@ Its server `defer` port, "defer: true skips the initial effect run but still com
 - reconcile.test.ts, a snapshot is a copy of the objects given, not them: "Reconcile reorder a keyed array, by snapshot identity".
 - reconcile.test.ts, a keyless swap merges the new object's values into the old one, which another store owns: "Reconcile swaps keyless store-proxy property values".
 - reconcile.test.ts, the draft writes into the object given, so returning that object adopts the write: "a returned replacement that is the SAME raw as committed still cancels the draft".
-
-#### `store-path` (5)
-
-- store.test.ts, storePath is missing: "storePath root merge keeps symbol keys"; "Functional setter no-op when returning same value"; "Triggers reactive updates"; "Deeply nested reactive updates"; "Delete triggers reactive updates".
 
 #### `symbol-keys` (5)
 

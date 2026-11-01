@@ -37,11 +37,11 @@
   },
   "store": {
     "min": 16470,
-    "gzip": 6827
+    "gzip": 6825
   },
   "storeEach": {
     "min": 16470,
-    "gzip": 6829
+    "gzip": 6828
   },
   "memo": {
     "min": 6555,
@@ -81,7 +81,7 @@
   },
   "actions": {
     "min": 10617,
-    "gzip": 4512
+    "gzip": 4511
   },
   "dev": {
     "min": 18952,

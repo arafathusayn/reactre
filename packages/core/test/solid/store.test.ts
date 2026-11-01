@@ -9,9 +9,9 @@
 // 2016-2025 Ryan Carniato; the license is in ./harness.ts.
 //
 // Solid's createEffect(compute, fn) is `reaction(compute, apply)`, createMemo is core's `memo`,
-// createSignal core's `signal`. Where Solid writes twice before one flush() and the order of
-// those writes matters, the port makes them in one `flush(fn)`, which applies them together as
-// Solid's flush does.
+// createSignal core's `signal`, storePath features/store's `path`. Where Solid writes twice before
+// one flush() and the order of those writes matters, the port makes them in one `flush(fn)`,
+// which applies them together as Solid's flush does.
 
 import { describe, expect, mock, test } from "bun:test";
 import { types } from "node:util";
@@ -21,15 +21,10 @@ import { FakeElement, installFakeDocument } from "@reactre/testdom";
 import { map } from "../../src/features/lists.ts";
 import { createRoot } from "../../src/features/owner.ts";
 import { reaction } from "../../src/features/reaction.ts";
-import * as storeApi from "../../src/features/store.ts";
-import { createStore, deep, merge, omit, reconcile, snapshot } from "../../src/features/store.ts";
+import { createStore, deep, merge, omit, path, reconcile, snapshot } from "../../src/features/store.ts";
 import { flush } from "../../src/features/timing.ts";
 import { effect, memo, signal, untrack } from "../../src/index.ts";
 import { base, compile, gap } from "./harness.ts";
-
-/** Solid's storePath, which features/store does not have: a call throws until it does. */
-type StorePath = ((...args: unknown[]) => (draft: object) => void) & { DELETE: unknown };
-const storePath = (storeApi as Record<string, unknown>)["storePath"] as StorePath;
 
 /**
  * Solid's createEffect(compute, fn) for a compute that returns nothing: `fn` runs, untracked,
@@ -1103,9 +1098,9 @@ describe("createStore.test.ts", () => {
         },
       );
 
-      gap("store-path", "storePath is missing", "storePath root merge keeps symbol keys", () => {
+      test("storePath root merge keeps symbol keys", () => {
         const [pathStore, setPathStore] = createStore<Record<PropertyKey, unknown>>({});
-        setPathStore(storePath({ [meta]: 42 }));
+        setPathStore(path({ [meta]: 42 }));
         flush();
         expect(pathStore[meta]).toBe(42);
       });
@@ -1434,9 +1429,7 @@ describe("shallow.test.ts", () => {
 });
 
 describe("storePath.test.ts", () => {
-  const why = "storePath is missing";
-
-  gap("store-path", why, "Functional setter no-op when returning same value", () => {
+  test("Functional setter no-op when returning same value", () => {
     const [store, setStore] = createStore({ count: 5 });
     let effectCount = 0;
     createRoot(() => {
@@ -1449,12 +1442,12 @@ describe("storePath.test.ts", () => {
     });
     flush();
     expect(effectCount).toBe(1);
-    setStore(storePath("count", (prev: number) => prev));
+    setStore(path("count", (prev: number) => prev));
     flush();
     expect(effectCount).toBe(1);
   });
 
-  gap("store-path", why, "Triggers reactive updates", () => {
+  test("Triggers reactive updates", () => {
     const [store, setStore] = createStore({ count: 0 });
     let observed: number | undefined;
     createRoot(() => {
@@ -1467,12 +1460,12 @@ describe("storePath.test.ts", () => {
     });
     flush();
     expect(observed).toBe(0);
-    setStore(storePath("count", 42));
+    setStore(path("count", 42));
     flush();
     expect(observed).toBe(42);
   });
 
-  gap("store-path", why, "Deeply nested reactive updates", () => {
+  test("Deeply nested reactive updates", () => {
     const [store, setStore] = createStore({ a: { b: { c: { d: 0 } } } });
     let observed: number | undefined;
     createRoot(() => {
@@ -1485,12 +1478,12 @@ describe("storePath.test.ts", () => {
     });
     flush();
     expect(observed).toBe(0);
-    setStore(storePath("a", "b", "c", "d", 99));
+    setStore(path("a", "b", "c", "d", 99));
     flush();
     expect(observed).toBe(99);
   });
 
-  gap("store-path", why, "Delete triggers reactive updates", () => {
+  test("Delete triggers reactive updates", () => {
     const [store, setStore] = createStore<{ name: string; nickname?: string }>({ name: "John", nickname: "Johnny" });
     let observed: string | undefined = "unset";
     createRoot(() => {
@@ -1503,7 +1496,7 @@ describe("storePath.test.ts", () => {
     });
     flush();
     expect(observed).toBe("Johnny");
-    setStore(storePath("nickname", storePath.DELETE));
+    setStore(path("nickname", path.DELETE));
     flush();
     expect(observed).toBeUndefined();
     expect("nickname" in store).toBe(false);
