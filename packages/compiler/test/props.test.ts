@@ -101,15 +101,28 @@ describe("call sites", () => {
     expect(compileSource(`export const x = () => <p />;`)).not.toContain("__props");
   });
 
-  test("a prop read of the component around the call is passed on as a getter when it may change", () => {
+  test("a prop read of the component around the call is passed on as a getter; only a reactive one binds", () => {
     const out = compileSource(`
-      function Inner(p) { return <b>{p.v}</b>; }
+      function Inner(p) { return <b title={p.w}>{p.v}</b>; }
       function Outer(props) { return <Inner v={props.v} w={props.w} q={"x"} />; }
       export const x = () => <div><Outer v={n()} w="static" /></div>;
     `);
-    // Outer's v is reactive at its call site, its w is not: v is forwarded as a getter.
-    expect(body(out, "Outer")).toContain('Inner({ get v() { return props.v; }, w: props.w, q: "x" })');
-    expect(body(out, "Inner")).toContain("__rrBind(");
+    // A prop read is a getter whatever it reads, so children passed on stay unbuilt; Outer's v is
+    // reactive at its call site and its w is not, so Inner binds the hole of v alone.
+    expect(body(out, "Outer")).toContain('Inner({ get v() { return props.v; }, get w() { return props.w; }, q: "x" })');
+    expect(body(out, "Inner")).toContain('clone([(p.w), ""])');
+    expect(body(out, "Inner")).toContain("__rrBind(__rrT0, 1, __n[1], () => (p.v))");
+  });
+
+  test("children passed on to another component stay unbuilt until it reads them", () => {
+    const out = compileSource(`
+      function Frame(p) { return <section>{p.children}</section>; }
+      function Card(props) { return <Frame>{props.children}</Frame>; }
+      export const x = () => <div><Card><i /></Card></div>;
+    `);
+    expect(body(out, "Card")).toContain("Frame({ get children() { return props.children; } })");
+    // Nothing passes children that may change: Frame inserts them once.
+    expect(body(out, "Frame")).toContain("__rrInsert(__n[0], p.children, null)");
   });
 
   test("a key with a quote in it, and a <Dynamic> component's props", () => {
@@ -202,6 +215,28 @@ describe("holes that read a prop", () => {
       export const App = () => <main><Box><i /></Box></main>;
     `);
     expect(body(fixed, "Box")).toContain("__rrInsert(__n[0], props.children, null)");
+  });
+
+  test("a local made of the whole props object reads props: merge's defaults, omit's rest, a spread", () => {
+    const out = compileSource(`
+      function Button(props) {
+        const size = props.size, p = merge({ size: "m" }, props);
+        const rest = omit(p, "size");
+        return <button class={p.size} title={size} {...rest}>{p.children}</button>;
+      }
+      function Plain(props) { return <i {...props} />; }
+      export const App = () => <div><Button size={n()}><b /></Button><Plain title={t()} /></div>;
+    `);
+    // p and rest hold the props' getters; size read its value once.
+    expect(body(out, "Button")).toContain("__rrApply(__n[0], __rrSpread, () => (");
+    expect(body(out, "Button")).toContain('"class": p.size');
+    expect(body(out, "Button")).toContain("__rrSlot(__n[1], () => (p.children))");
+    expect(body(out, "Plain")).toContain("__rrApply(__n[0], __rrSpread, () => ({ ...props }))");
+    const fixed = compileSource(`
+      function Label(props) { const p = merge({ size: "m" }, props); return <b>{p.size}</b>; }
+      export const App = () => <div><Label size="l" /></div>;
+    `);
+    expect(body(fixed, "Label")).toContain("clone([(p.size)])");
   });
 });
 

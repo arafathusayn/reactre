@@ -236,7 +236,8 @@ export function readsOf(expr: string, name: string, helpers?: ReadonlySet<string
       i = skip;
       continue;
     }
-    if (tok.t !== name || tokens[i - 1]?.t === ".") continue;
+    // A member of something else (`x.props`), but not a spread (`...props`, three `.` tokens).
+    if (tok.t !== name || (tokens[i - 1]?.t === "." && tokens[i - 2]?.t !== ".")) continue;
     let j = i + 1;
     if (tokens[j]?.t === "?" && tokens[j + 1]?.t === ".") j++;
     const key = tokens[j]?.t === "." ? tokens[j + 1] : undefined;
@@ -283,7 +284,8 @@ export function propUse(expr: string, helpers: ReadonlySet<string>, scope: reado
 
 /**
  * What `expr` reads of the props of each component in `scope` (outermost first) that names its
- * props object; an inner component's parameter hides an outer one of the same name.
+ * props object; an inner component's parameter hides an outer one of the same name. A use of a
+ * local made of the whole props object (`Def.aliases`) may read any prop.
  */
 export function propReads(
   expr: string,
@@ -296,7 +298,7 @@ export function propReads(
     const d = scope[i]!;
     if (d.param.kind !== "name" || seen.has(d.param.name)) continue;
     seen.add(d.param.name);
-    const r = readsOf(expr, d.param.name, helpers);
+    const r = d.aliases.some((a) => readsOf(expr, a, helpers) !== null) ? true : readsOf(expr, d.param.name, helpers);
     if (r !== null) out.push([d, r]);
   }
   return out;
@@ -318,6 +320,12 @@ export interface Def {
   /** Its name; `default` for a default export without one. */
   readonly name: string;
   readonly param: Param;
+  /**
+   * The locals its body makes of its whole props object, for a parameter that names it (see
+   * `aliasesOf`): `p` in `const p = merge({ size: "m" }, props)`. Reading one's members may read
+   * any prop.
+   */
+  readonly aliases: readonly string[];
   /** Where it starts and ends in the module (its parameters and body). */
   readonly start: number;
   readonly end: number;
@@ -371,6 +379,34 @@ function paramOf(src: string, [from, to]: readonly [number, number]): Param {
   return { kind: "pattern", locals };
 }
 
+/**
+ * The locals that the body src[from, to) of a component whose props object is `name` makes of the
+ * whole object: each name a `const`, `let` or `var` declares whose initializer uses `name`, or an
+ * earlier such local, other than by reading a member (`merge(defaults, props)`, `omit(props, "a")`,
+ * `props`). Such a local may hold the props' getters (the store's `merge` and `omit` keep them), so
+ * a hole that reads one of its members reads props. A destructuring pattern, and a local that reads
+ * a member (`const t = props.title`), read their values once, as in Solid.
+ */
+function aliasesOf(src: string, from: number, to: number, name: string): string[] {
+  const tokens = tokenize(src, from, to),
+    m = matches(tokens);
+  const out = [name];
+  for (let i = 0; i < tokens.length; i++) {
+    const kw = tokens[i]!.t;
+    if (kw !== "const" && kw !== "let" && kw !== "var") continue;
+    // Each declarator, `local = init`, up to the `,` or `;` (or the block's end) that ends it.
+    for (let j = i + 1; isName(tokens[j]?.t) && tokens[j + 1]?.t === "=" && j + 2 < tokens.length;) {
+      let k = j + 2;
+      while (k < tokens.length && !ENDS.has(tokens[k]!.t)) k = m[k]! > k ? m[k]! + 1 : k + 1;
+      const init = src.slice(tokens[j + 2]!.s, tokens[k - 1]!.e);
+      if (out.some((a) => readsOf(init, a) === true)) out.push(tokens[j]!.t);
+      if (tokens[k]?.t !== ",") break;
+      j = k + 1;
+    }
+  }
+  return out.slice(1);
+}
+
 /** Whether `name` names a component: it starts with a capital letter. */
 const isComponentName = (name: string): boolean => /^[A-Z]/.test(name);
 
@@ -384,7 +420,9 @@ function scanDefs(src: string, tokens: readonly Token[], m = matches(tokens)): {
   const defs: Def[] = [],
     names = new Set<number>();
   const add = (name: string, fn: Fn, start: number, open: boolean, at: number) => {
-    defs.push({ name, param: paramOf(src, fn.params), start, end: fn.end, open });
+    const param = paramOf(src, fn.params);
+    const aliases = param.kind === "name" ? aliasesOf(src, fn.params[1], fn.end, param.name) : [];
+    defs.push({ name, param, aliases, start, end: fn.end, open });
     if (at >= 0) names.add(at);
   };
   for (let i = 0; i < tokens.length; i++) {

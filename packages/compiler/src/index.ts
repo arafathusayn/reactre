@@ -493,12 +493,17 @@ class Compiler {
 
   /**
    * Whether an element's child reads `children` from its component's props (`{props.children}`, or
-   * `{children}` from a pattern): content, which may be nodes, so it is inserted, not text.
+   * `{children}` from a pattern, `{p.children}` from a local made of the props): content, which
+   * may be nodes, so it is inserted, not text.
    */
   private readsChildren(expr: string): boolean {
     for (const d of this.scope) {
       if (d.param.kind === "pattern") {
         for (const [local, key] of d.param.locals) if (key === "children" && readsOf(expr, local) !== null) return true;
+      }
+      for (const a of d.aliases) {
+        const r = readsOf(expr, a);
+        if (r !== null && r !== true && r.has("children")) return true;
       }
     }
     return propReads(expr, this.scope).some(([, r]) => r !== true && r.has("children"));
@@ -694,18 +699,21 @@ class Compiler {
 
   /**
    * A component's props object, as Solid passes them: a prop whose expression may change (it calls
-   * something, or reads a prop passed reactively) is a getter, so the component reads it where it
-   * uses it, in a hole that follows it; one that holds JSX (children, mostly) is a getter too, so
-   * it is built when the component reads it, after the component's own code before that. Spread
-   * props are merged by `__props`, which keeps their getters. Null when every prop is a value and
-   * there is no spread: the props are written as they are.
+   * something) is a getter, so the component reads it where it uses it, in a hole that follows it;
+   * one that holds JSX (children, mostly) is a getter too, so it is built when the component reads
+   * it, after the component's own code before that. So is one that reads a prop of the component
+   * around the call (`<Theme value="dark">{props.children}</Theme>`), which may be either: read
+   * where it is passed, it would build children before the component they are passed to runs, a
+   * provider's children outside the provider. Spread props are merged by `__props`, which keeps
+   * their getters. Null when every prop is a value and there is no spread: the props are written as
+   * they are.
    */
   private passProps(entries: readonly [string, string, number][]): string | null {
     const kinds = entries.map(([k, v]) => {
       if (k === "...") return "spread";
       const use = propUse(v, this.helpers, this.scope);
       if (use.fn) return "value";
-      return use.lazy || use.calls || this.readsChanging(use.reads) ? "getter" : "value";
+      return use.lazy || use.calls || use.reads.length > 0 ? "getter" : "value";
     });
     if (kinds.every((k) => k === "value")) return null;
     const groups: string[] = [];
