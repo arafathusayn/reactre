@@ -2709,7 +2709,7 @@ class Template {
 /** Internal: a template from the compiler's description; the compiler hoists one per JSX tree. */
 export function __template(desc: TemplateNode): object {
   // #if REFRESH
-  if (refreshTemplates !== null || (globalThis as Any).__REACT_DEVTOOLS_GLOBAL_HOOK__ != null) return devTemplate(desc);
+  if ((globalThis as Any).__REACT_DEVTOOLS_GLOBAL_HOOK__ != null) return devTemplate(desc);
   // #endif
   return new Template(desc);
 }

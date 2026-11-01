@@ -372,6 +372,14 @@ test("while a refresh hook is present, a template description gives the same tem
   const t1 = __template(desc());
   expect(__template(desc())).toBe(t1);
   expect(__template(["p", 0, "other: ", 0])).not.toBe(t1);
+  // Without the hook, each description gives a template of its own, as in a production build.
+  const hook = g.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+  delete g.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+  try {
+    expect(__template(desc())).not.toBe(__template(desc()));
+  } finally {
+    g.__REACT_DEVTOOLS_GLOBAL_HOOK__ = hook;
+  }
 
   // A component hosting its block keeps its DOM over an edit that leaves the markup as it was,
   // and gets a new one, keeping its state, when the edit changes it.
