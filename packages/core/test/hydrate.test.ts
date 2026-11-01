@@ -344,6 +344,8 @@ describe("lists", () => {
   });
 
   test("a list with no rows on the server claims none; one whose rows are only on the server loses them", () => {
+    // The server's row is where the client's fallback is: a mismatch, which the fallback's slot warns of.
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
     const p = page<{ App: () => unknown; set: (r: string[]) => void }>(
       `
       import { For, signal } from "@reactre/core";
@@ -356,6 +358,8 @@ describe("lists", () => {
     expect(shown(p.root)).toBe("<ul><li>none</li></ul>");
     p.app.set(["b"]);
     expect(shown(p.root)).toBe("<ul><li>b</li></ul>");
+    expect(String(warn.mock.calls[0]![0])).toContain("where a slot renders something else");
+    warn.mockRestore();
   });
 });
 
@@ -416,6 +420,41 @@ describe("mismatches", () => {
     p = page<{ App: () => unknown }>(SRC, (h) => h.replace("<!--]-->", "<!--x-->"));
     expect(String(warn.mock.calls[3]![0])).toContain("the page has <!--[--> where");
     expect(shown(p.root)).toBe("<main><h1>1</h1><p>inner 1</p><ul><li>1</li><li>2</li><li>3</li></ul></main>");
+  });
+});
+
+describe("the server's markers for boundaries", () => {
+  test("an <Errored>'s fallback: its error's name and message, only with `hydrate`", () => {
+    const render = (hydrate: boolean, err: unknown) =>
+      server.renderToString(() => server.__ssrErrored(err), { hydrate });
+    expect(render(true, new TypeError("bad: it"))).toBe("<!--rr:e:TypeError:bad%3A%20it-->");
+    expect(render(true, "plain")).toBe("<!--rr:e:Error:plain-->");
+    expect(render(false, new Error("x"))).toBe("");
+    expect(server.__ssrErrored(new Error("outside a render"))).toBe(null);
+    // The server's <Errored> puts it before the fallback (here outside a render: nothing before it).
+    const nodes = serverErrors.Errored({
+      fallback: (e: unknown) => (e as Error).message,
+      get children(): string {
+        throw new Error("thrown");
+      },
+    }) as FakeNode[];
+    expect(nodes.map((n) => n.textContent).join("")).toBe("thrown");
+    expect(
+      (serverErrors.Errored({ fallback: "static", children: "ok" }) as FakeNode[]).map((n) => n.textContent).join(""),
+    ).toBe("ok");
+  });
+
+  test("a <Loading> whose fallback renderToString writes, with `hydrate`: between markers", () => {
+    const app = ssr<{ App: () => unknown }>(`
+      import { Loading, memo } from "@reactre/core/features/async";
+      const word = memo(() => new Promise(() => {}));
+      const App = () => <main><Loading fallback={<i>wait</i>}><p>{word()}</p></Loading></main>;
+      return { App };
+    `);
+    expect(server.renderToString(app.App, { hydrate: true })).toContain(
+      "<!--rr:b--><!--[--><i>wait</i><!--]--><!--/rr:b-->",
+    );
+    expect(server.renderToString(app.App)).toBe("<main><i>wait</i></main>");
   });
 });
 

@@ -129,6 +129,14 @@ describe("constructs", () => {
   });
 });
 
+describe("the server's output hydration reads", () => {
+  test("an element with a key that may change, outside an element, is a slot on the server too, as on the client", () => {
+    const out = compileSource(`export const A = (p) => <p key={p.k}>x</p>;`, "tsx", { server: true });
+    expect(out).toContain("__rrsS(");
+    expect(compileSource(`export const A = () => <p key="k">x</p>;`, "tsx", { server: true })).not.toContain("__rrsS(");
+  });
+});
+
 describe("the hydrate compile error", () => {
   test("a file that imports hydrate needs the mode, aliased or not; isHydrating alone does not", () => {
     const src = (names: string) =>
