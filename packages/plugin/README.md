@@ -90,8 +90,19 @@ reactre({
   // Files to compile, and files to leave alone, by path.
   include: /\.[jt]sx$/,
   exclude: /[\\/]node_modules[\\/]/,
+  // reactre mode: read the whole program at a production build's start, so a component's holes
+  // that read a prop are bound only where some call site passes that prop reactively.
+  wholeProgram: true,
 });
 ```
+
+### The whole program
+
+In reactre mode, a prop that may change is passed to a component as a getter, and a hole that reads a prop (`{props.title}`) is bound only if some call site may pass that prop reactively ([Props](https://www.npmjs.com/package/@reactre/core#props)). To see every call site, a build reads its program when it starts: from the build's entries (an HTML page's module scripts included), it follows each import your bundler's own resolver places among your files, aliases and tsconfig paths included, and leaves node_modules alone. A component whose every caller passes literals and plain names keeps its holes written once, as before props were reactive.
+
+- Only a one-shot build reads it: `vite build`, Rollup, Rolldown, esbuild (again at each rebuild of a context), webpack, Rspack and `Bun.build`. A dev server and watch mode compile each file alone, where a component the file exports gets every prop reactively.
+- A build whose graph the plugin cannot see (`import(expr)`, `import.meta.glob`, `require.context`, a virtual module, a file type that may import code, webpack's function entries) compiles each file alone too.
+- A module the program did not reach joins it at its transform. If it passes a prop reactively to a component compiled already without it, the build fails, naming both; `wholeProgram: false` compiles each file alone.
 
 ### Switching React APIs off
 

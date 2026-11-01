@@ -26,7 +26,7 @@ const Counter = () => <button onClick={() => setCount((n) => n + 1)}>Clicked {co
 render(Counter, document.getElementById("app")!);
 ```
 
-`Counter` runs once. `{count()}` reads a signal, so that one text node updates when `count` changes. A hole that calls a function updates when what it read changes; any other hole is written once. So a hole that reads a plain variable (`let n = 0; ... <b>{n}</b>`) shows the value it had when the element was created, and changing the variable later changes nothing on the page: keep a value that changes in a signal.
+`Counter` runs once. `{count()}` reads a signal, so that one text node updates when `count` changes. A hole that calls a function updates when what it read changes, and so does one that reads a prop passed that way ([Props](#props)); any other hole is written once. So a hole that reads a plain variable (`let n = 0; ... <b>{n}</b>`) shows the value it had when the element was created, and changing the variable later changes nothing on the page: keep a value that changes in a signal.
 
 ## A list
 
@@ -62,6 +62,35 @@ render(App, document.getElementById("app")!);
 A row can also hold components, nested `<For>` lists and JSX expressions. They belong to the row: a new item for the row's key builds them again, and they are disposed when the row leaves. A row of plain elements does none of this work.
 
 Elements take what React's do: fragments, spread props, `style` as an object or a string, `ref` (a function or an object with `current`), SVG, `value`, `checked` and `selected` as properties, and `key`, which outside `<For>` rebuilds the element when it changes. A handler expression that reads a signal (`onClick={editing() ? save : edit}`) follows it.
+
+## Props
+
+A component runs once, and its props follow what they were given, as in Solid:
+
+```tsx
+import type { Child } from "@reactre/core/jsx-runtime";
+
+const Label = (props: { text: string; children?: Child }) => (
+  <p class={props.text.length > 10 ? "long" : ""}>
+    {props.text} {props.children}
+  </p>
+);
+
+const App = () => (
+  <main>
+    <Label text={name()}>
+      <b>new</b>
+    </Label>
+    <Label text="fixed" />
+  </main>
+);
+```
+
+- A prop whose expression calls a function (`text={name()}`) is passed as a getter, so `Label` reads it where it uses it: `{props.text}` and its `class` update when `name` changes, and `Label` does not run again. A literal, a plain name and a function (`onClick={() => save()}`) are passed as they are.
+- Children that hold JSX are a getter too: they are built when the component reads `props.children`, after the code it runs before that. A provider can set things up first and then return `props.children`. `{props.children}` in an element inserts them, nodes or text.
+- Read props through the object: `props.text`. Destructuring (`({ text }) =>`), or `const { text } = props`, reads each value once, when the component runs, and it then stays the value it had.
+- `<Child {...props} />` passes the props on, getters included.
+- What it costs: a hole that reads a prop is bound (an effect that rewrites it) only if some call site of the component may pass that prop reactively. Above, `{props.text}` is bound because one call passes `name()`; if every call passed text, it would be written once, as before. @reactre/plugin and the compiler's Bun plugin read the whole program at a production build's start to know this. A component whose callers cannot all be seen is treated as getting every prop reactively: one an entry exports (a library's API), one used as a value (`<Dynamic component={Label}>`, `const C = Label`), one called with spread props, and, on a dev server or in watch mode, where each file is compiled alone, every component the file exports.
 
 ## Control flow and elements
 
@@ -246,7 +275,7 @@ The store APIs are Solid 2.0's, under its names: setters are draft-first (`setSt
 </For>
 ```
 
-`each={store.todos}` renders the array once and then only when `store.todos` is given a new array, since a `<For>` reads the array it is given untracked and needs a new one for each render; spread it. A row's hole that reads only its item is compared when the row gets a new item, and a store's items change in place, keeping their proxies, so such a hole is written once: make it call something.
+`each={store.todos}` renders the array once and then only when `store.todos` is given a new array, since a `<For>` reads the array it is given untracked and needs a new one for each render; spread it. A row's hole that reads only its item is compared when the row gets a new item, and a store's items change in place, keeping their proxies, so such a hole is written once: make it call something. A store read passed as a prop follows the same rule, since it is a member read and not a prop of the component around it: `<Label text={store.title} />` passes the value it had, and `text={store.title.trim()}` a getter that follows it.
 
 ### Context and error boundaries
 
@@ -270,7 +299,7 @@ A context is a component, as in Solid 2.0: there is no `.Provider`. What its chi
 
 `<Errored>` catches what is thrown while its children are built (a component's body, an effect's first run, a row's creation) and while they update (an effect's or a slot's later run, a row's reactive holes). What the children made is disposed, and the fallback shows once the run that threw, and every run around it, has ended, before the write that caused it returns. The first error is the one shown, and what the fallback throws goes to the boundary above. Event handlers, timers and promises throw to their caller, as in Solid. A row's hole that a selector's change re-runs throws in the selector's effect, so its error goes to the boundary around the `selector()` call.
 
-A provider and a boundary read their children inside themselves, so they need them unbuilt: as a getter (`get children()`, the compiler's lazy children), or as a function child.
+A provider and a boundary read their children inside themselves, so they need them unbuilt. The compiler passes children that hold JSX as a getter ([Props](#props)), so `<Theme value="dark"><Label /></Theme>` and `<Errored>` work as written above, and a boundary catches what its child's component body throws. Called by hand, give them a getter (`get children()`) or a function child.
 
 An effect's own handler is an option of the effect, as Solid 2.0's `createEffect` has it: `effect(fn, { error })` from this module hands what a run of `fn` throws to `error` (untracked), and the effect keeps following what the run read before it threw. Without a boundary or `onError`, an error is thrown on to the write or the `render` that caused it, as without the module.
 
@@ -297,6 +326,8 @@ An app ships only what it uses. With a bundler that tree-shakes (all of the plug
 | Rows with several selector keys | `import "@reactre/core/features/selectors"`. The compiler adds the import itself to a file whose `<For>` row makes two or more calls with arguments in its reactive holes (`isSelected(row.id)`, `isHovered(row.id)`). |       0.16 KB | A row that reads a second selector key, or the same selector with a second key, throws an error naming the import. Only a row that reads the keys through a function of its own (`class={classes(row)}`) needs the import by hand. |
 
 Control flow is not a feature to turn on either: it compiles to slots, memos and lists (most of it holds a slot, so it brings ownership), and only the class-list helper is code of its own, in an app only where it uses one (`dynamic()` is a feature module, above). An app with a `<Show>`, a `<For>` fallback and a class list ([`sizes.json`](sizes.json)'s `show`) is 5,962 bytes gzipped.
+
+Props cost only where they may change: a call site passes a getter only for a prop that may, and a component binds a hole that reads a prop only when some call site may pass it so. Spread props at a component call (`<C {...props} />`) bring the small helper that keeps their getters. An app whose components get only literals and plain names compiles to the same code as before; [`sizes.json`](sizes.json)'s `props` profile is an app that passes props reactively, spreads them and builds children lazily.
 
 Ownership is what makes `effect` own the effects and cleanups its run makes, a slot dispose its old content, a row dispose what it holds when it leaves, and `attach` return a disposer. `onCleanup` itself costs a few bytes: called where nothing owns (at module scope, in a view given to `render`), it does nothing.
 

@@ -122,8 +122,8 @@ const OK = {};
  * and every run around it, has ended. The first error is the one shown; what the fallback throws
  * goes to the boundary above. Event handlers, timers and promises throw to their caller.
  *
- * Its children are read inside it, so it must get them unbuilt: a getter (`get children()`), or a
- * function, which renders as a slot.
+ * Its children are read inside it, so it must get them unbuilt: a getter (`get children()`, as the
+ * compiler passes JSX children), or a function, which renders as a slot.
  *
  * @example
  *   import { Errored } from "@reactre/core/features/errors";

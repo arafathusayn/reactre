@@ -20,7 +20,7 @@ await Bun.build({
 
 ## What it compiles
 
-- Host elements and SVG, with holes that follow what they read, handlers, `style` as an object or a string, `value`, `checked` and `selected` as properties, `ref`, spread props, fragments, components (called once) and `key`.
+- Host elements and SVG, with holes that follow what they read, handlers, `style` as an object or a string, `value`, `checked` and `selected` as properties, `ref`, spread props, fragments, components (called once, with reactive props: see below) and `key`.
 - `<For each key>`, a keyed list, with a `fallback` shown while `each` is empty.
 - `<Show when fallback keyed>` and `<Switch fallback>` of `<Match when keyed>`: a slot behind a memo of the condition (or of the matched case), so the content is rebuilt only when that changes.
 - `<Repeat count from fallback>`: a keyed list over the indexes.
@@ -33,6 +33,18 @@ await Bun.build({
 Control flow (`Show`, `Switch`, `Match`, `Repeat`, `Portal`, `Dynamic`) is recognized by its import from `"@reactre/core"`, under any local name or through `import * as`, so a component of an app's own named `Show` or `Switch` stays a component. `<For>` is also matched by its name, as it always was. Each compiles to the slots, memos and lists compiled code already uses, so an app ships no runtime of its own for them. A file that uses none of them compiles to the same code as before they existed.
 
 The output imports only the runtime helpers a file uses, so a bundler leaves out the rest. A `<For>` row that makes two or more calls with arguments in its reactive holes (`isSelected(row.id)`, `isHovered(row.id)`) may read two selector keys, and its file imports [`@reactre/core/features/selectors`](https://www.npmjs.com/package/@reactre/core#what-an-app-ships).
+
+## Props
+
+Props work as in Solid. At a call site, a prop whose expression calls a function (`<Label text={name()} />`) is passed as a getter, `Label({ get text() { return name(); } })`, and so are children that hold JSX, which are then built when the component reads `props.children`. A literal, a plain name and a function literal are passed as they are, so a call site of static props compiles as it always did. Spread props at a component call are merged by a small helper that keeps their getters. A component that destructures its props (`({ text }) =>`) reads each value once.
+
+In the component, a hole that reads a prop (`{props.text}`, `class={props.cls}`, `<Show when={props.open}>`) is bound only if some call site may pass that prop reactively; otherwise it is written once, as any hole that calls nothing. That takes every call site:
+
+- In `Bun.build`, `reactreCompiler()` reads the whole program from the entrypoints before it compiles (`wholeProgram: false` turns it off), resolving imports as Bun does. [`@reactre/plugin`](https://www.npmjs.com/package/@reactre/plugin) does the same for every bundler.
+- `compileJs` and `compileSource` see one file alone. A component the file neither exports nor uses as a value has all its call sites there; any other is treated as getting every prop reactively, which is always correct, only slower.
+- `compileJs(js, { props })` takes the facts from elsewhere: for each component the file defines, by name, the props some call site may pass reactively, or `true` for all. `@reactre/compiler/program` finds them: `scanModule` reads a module, a `Program` links modules by their imports and exports, and `analyze(entries, host)` reads a build from its entries with the bundler's resolver.
+
+A component whose callers cannot all be seen gets every prop reactively: one an entry exports (a library's API), one used as a value (`<Dynamic component={C}>`, `const X = C`, `[A, B]`), one called with spread props, an object's method, a function passed to a call (`const Card = wrap((props) => ...)`), and the exports of a module imported dynamically or through a namespace used as a value. A program that cannot see its whole graph (`import(expr)`, `import.meta.glob`, a virtual module) falls back to each file alone. A module that joins the program late, at its transform, and passes a prop reactively to a component already compiled without it fails the build, naming both.
 
 A construct the compiler does not handle, such as a `<For>` or `<Repeat>` outside an element, a row that is not one element, a `<Match>` outside a `<Switch>` or a `keyed` that is not written as a boolean, is a compile error that points at its source, never a silent fallback.
 

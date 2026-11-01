@@ -115,7 +115,8 @@ export class ContextNotFoundError extends Error {
  *
  * `value` is read once, when the provider runs: to share something that changes, provide a
  * signal's read function, or an object of them. Its children are read inside it, so the provider
- * must get them unbuilt: a getter (`get children()`), or a function, which renders as a slot.
+ * must get them unbuilt: a getter (`get children()`, as the compiler passes JSX children), or a
+ * function, which renders as a slot.
  *
  * With `defaultValue`, `useContext` returns it where no provider is above. Without one,
  * `useContext` throws `ContextNotFoundError` there. A provider of `undefined` is no provider.
