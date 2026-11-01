@@ -274,12 +274,8 @@ describe("packages/solid/test/server/signals.spec.ts", () => {
       expect(m["calls"]).toEqual({ compute: 1, effect: 0 });
     });
 
-    gap(
-      "memo-options",
-      "reaction takes no options: ssrSource is a memo's only",
-      "ssrSource client skips both compute and effectFn",
-      async () => {
-        const m = await server(`
+    test("ssrSource client skips both compute and effectFn", async () => {
+      const m = await server(`
         import { reaction } from "@reactre/core/features/reaction";
         export const calls = { compute: 0, effect: 0 };
         export function App() {
@@ -287,10 +283,9 @@ describe("packages/solid/test/server/signals.spec.ts", () => {
           return <p>x</p>;
         }
       `);
-        m.renderToString(m.App);
-        expect(m["calls"]).toEqual({ compute: 0, effect: 0 });
-      },
-    );
+      m.renderToString(m.App);
+      expect(m["calls"]).toEqual({ compute: 0, effect: 0 });
+    });
   });
 
   describe("Server createRenderEffect", () => {

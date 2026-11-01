@@ -12,6 +12,18 @@ import { __owner, effect, memo, onCleanup, untrack } from "@reactre/core";
 
 /** A run (an effect's, a memo's) as the async runtime sees it: `lv` when no transition holds it. */
 type Live = { lv?: boolean };
+// #if TYPES
+
+/** Options of `reaction`. */
+export interface ReactionOptions {
+  /**
+   * Where the reaction runs in a server build (@reactre/core/server/reaction): `"server"` (the
+   * default) and `"hybrid"`, `compute` runs there, as `apply` never does; `"client"`, neither
+   * runs there. In the browser, the reaction runs as it does without it.
+   */
+  readonly ssrSource?: "server" | "hybrid" | "client";
+}
+// #endif
 
 /**
  * An effect split in two (MobX's `reaction`, Solid 2.0's `createEffect(compute, apply)`).
@@ -23,7 +35,8 @@ type Live = { lv?: boolean };
  * `effect(fn)` is the same thing with both halves in one function. The split keeps what `apply`
  * reads (and writes) from becoming a dependency, and runs `apply` only on a change of value.
  * Once `compute` reads through `latest` or `isPending` (@reactre/core/features/async), no
- * transition holds `apply`, as none holds an effect that reads through them.
+ * transition holds `apply`, as none holds an effect that reads through them. `options` matter
+ * only in a server build (see `ReactionOptions`).
  *
  * @example
  *   import { reaction } from "@reactre/core/features/reaction";
@@ -39,7 +52,15 @@ type Live = { lv?: boolean };
  *   ); // logs "from undefined to 1"
  *   setId(2); // clears the first interval, logs "from 1 to 2"
  */
-export function reaction<T>(compute: () => T, apply: (value: T, prev: T | undefined) => void | (() => void)): void {
+// #if TYPES
+export function reaction<T>(
+  compute: () => T,
+  apply: (value: T, prev: T | undefined) => void | (() => void),
+  _options?: ReactionOptions,
+): void {
+  // #else
+  // export function reaction<T>(compute: () => T, apply: (value: T, prev: T | undefined) => void | (() => void)): void {
+  // #endif
   // The memo's run and the effect's, as the async runtime marks them: `lv`, once `latest` or
   // `isPending` (features/async) was read in it, so that no transition holds it. `compute` runs
   // in the memo, which is never held, so the effect that runs `apply` takes the mark from it.

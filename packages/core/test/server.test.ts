@@ -1044,6 +1044,12 @@ describe("effects on the server", () => {
         () => (log.push(`compute ${n()}`), n()),
         (v) => void log.push(`apply ${v}`),
       );
+      // The client's alone: neither half runs.
+      serverReaction.reaction(
+        () => log.push("client's compute"),
+        () => void log.push("client's apply"),
+        { ssrSource: "client" },
+      );
       serverTiming.onSettled(() => void log.push("settled"));
       serverErrors.effect(() => void log.push("effect"), { error: () => log.push("error") });
       return "x";
