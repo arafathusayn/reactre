@@ -254,10 +254,12 @@ describe("the hooks", () => {
     // A module the plugin compiles, and the core's own modules other than its feature modules.
     expect(run(imports, "/app/view.tsx")).toBeNull();
     expect(run(imports, PACKAGES + "core/src/server.ts")).toBeNull();
-    expect(run(imports, PACKAGES + "core/src/features/context.ts")).toEqual({
-      code: `import { effect } from "@reactre/core/server";`,
+    // A feature module: the core points at the server, but for its effect, the core's, which runs.
+    expect(run(`import { __frag, effect } from "@reactre/core";`, PACKAGES + "core/src/features/context.ts")).toEqual({
+      code: `import { __frag } from "@reactre/core/server";import { effect } from "@reactre/core";`,
       map: null,
     });
+    expect(run(imports, PACKAGES + "core/src/features/context.ts")).toBeNull();
     // The client's environment.
     expect(server.handler.call({ environment: { config: { consumer: "client" } } }, imports, "/app/a.ts")).toBeNull();
   });

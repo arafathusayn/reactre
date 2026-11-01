@@ -67,26 +67,46 @@ describe("imports", () => {
       `import { signal } from "@reactre/core/server";import { __ssrEffect as effect, __ssrMemo as m } from "@reactre/core/server";`,
     );
     expect(serverImports(`import { effect as e } from "@reactre/core/features/errors";`)).toBe(
-      `import "@reactre/core/features/errors";import { __ssrEffect as e } from "@reactre/core/server";`,
+      `import "@reactre/core/server/errors";import { __ssrEffect as e } from "@reactre/core/server";`,
     );
     expect(serverImports(`import { Errored, effect, memo } from "@reactre/core/features/errors";`)).toBe(
-      `import { Errored, memo } from "@reactre/core/features/errors";import { __ssrEffect as effect } from "@reactre/core/server";`,
+      `import { Errored, memo } from "@reactre/core/server/errors";import { __ssrEffect as effect } from "@reactre/core/server";`,
     );
-    // Nothing to rename: as it was, the core pointed at the server.
+    // Nothing to rename: the module pointed at the server's, whose effect does not run either.
     expect(serverImports(`import { Errored } from "@reactre/core/features/errors";`)).toBe(
-      `import { Errored } from "@reactre/core/features/errors";`,
+      `import { Errored } from "@reactre/core/server/errors";`,
     );
+    // The feature modules whose effects do not run on the server, and a namespace or a re-export
+    // of the core, whose `effect` is the server's.
+    expect(serverImports(`import { reaction } from "@reactre/core/features/reaction";`)).toBe(
+      `import { reaction } from "@reactre/core/server/reaction";`,
+    );
+    expect(serverImports(`import { flush, onSettled } from "@reactre/core/features/timing";`)).toBe(
+      `import { flush, onSettled } from "@reactre/core/server/timing";`,
+    );
+    expect(
+      serverImports(`import * as E from "@reactre/core/features/errors";export { effect } from "@reactre/core";`),
+    ).toBe(`import * as E from "@reactre/core/server/errors";export { effect } from "@reactre/core/server";`);
     expect(serverImports(`import { a, } from "@reactre/core";`)).toBe(`import { a, } from "@reactre/core/server";`);
   });
 
-  test("a feature module of the core's: only the core points at the server, and nothing is renamed", () => {
+  test("a feature module of the core's: only the core points at the server, but for its effect, the core's own", () => {
     expect(
       serverImports(
         `import { __frag, effect } from "@reactre/core";\nimport { __scope } from "@reactre/core/features/context";\nimport * as core from "@reactre/core";`,
         false,
       ),
     ).toBe(
-      `import { __frag, effect } from "@reactre/core/server";\nimport { __scope } from "@reactre/core/features/context";\nimport * as core from "@reactre/core/server";`,
+      `import { __frag } from "@reactre/core/server";import { effect } from "@reactre/core";\nimport { __scope } from "@reactre/core/features/context";\nimport * as core from "@reactre/core/server";`,
+    );
+    expect(serverImports(`import { effect as e, signal, } from '@reactre/core';`, false)).toBe(
+      `import { signal } from "@reactre/core/server";import { effect as e } from "@reactre/core";`,
+    );
+    expect(serverImports(`import { effect } from "@reactre/core";`, false)).toBe(
+      `import { effect } from "@reactre/core";`,
+    );
+    expect(serverImports(`import { signal } from "@reactre/core";`, false)).toBe(
+      `import { signal } from "@reactre/core/server";`,
     );
   });
 
@@ -261,6 +281,49 @@ describe("compile errors, as the client's", () => {
       /<Portal> takes mount, children, not to/,
     );
     fails(`export const A = () => <br>x</br>;`, /<br> takes no children/);
+  });
+});
+
+describe("names the server writes", () => {
+  /** A jsx call of `<div data-x="1" />` (or `<Dynamic>`'s), with `name` in place of data-x, compiled for the server. */
+  const attr = (name: string): string =>
+    compileJs(transpileSource(`export const A = () => <div data-x="1" />;`).replace(`"data-x"`, JSON.stringify(name)), {
+      server: true,
+    });
+  /** The same, with `tag` in place of the div. */
+  const tag = (tag: string): string =>
+    compileJs(transpileSource(`export const A = () => <div />;`).replace(`"div"`, JSON.stringify(tag)), {
+      server: true,
+    });
+
+  test("an attribute name that is not one HTML attribute name fails to compile", () => {
+    for (const name of [
+      `x><script>alert(1)</script`,
+      "a b",
+      `a"b`,
+      "a'b",
+      "a=b",
+      "a/b",
+      "a\tb",
+      "a\u0000b",
+      "a\u007fb",
+      "",
+    ])
+      expect(() => attr(name)).toThrow(`is not a valid attribute name`);
+    expect(() => attr("a b")).toThrow(ReactreCompileError);
+    // Names an element takes: data, aria, namespaced, custom.
+    for (const name of ["data-x", "aria-label", "xlink:href", "x.y", "_a", "é"])
+      expect(attr(name)).toContain(` ${name}=\\"1\\"`);
+  });
+
+  test("a tag that is not one HTML element name fails to compile, written as one or as <Dynamic>'s", () => {
+    for (const name of [`div x><script>alert(1)</script`, "div x", "1a", "-a", "a/b", "a>b", ""])
+      expect(() => tag(name)).toThrow(`is not a valid tag name`);
+    expect(() => server(withImport("Dynamic", `export const A = () => <Dynamic component="div x" />;`))).toThrow(
+      `"div x" is not a valid tag name`,
+    );
+    expect(tag("my-widget")).toContain("<my-widget></my-widget>");
+    expect(tag("foreignObject")).toContain("<foreignObject></foreignObject>");
   });
 });
 

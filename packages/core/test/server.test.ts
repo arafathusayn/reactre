@@ -9,20 +9,27 @@
 // and off after them, as in async.test.ts.
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import { compileSource } from "@reactre/compiler";
+import { compileSource, reactreCompiler } from "@reactre/compiler";
 import { FakeElement, type FakeNode, FakeText, installFakeDocument, withStyles } from "@reactre/testdom";
 
 import * as asyncApi from "../src/features/async.ts";
 import { __hooks } from "../src/features/async.ts";
-import { configureClientErrors } from "../src/features/errors.ts";
+import { configureClientErrors, Errored } from "../src/features/errors.ts";
 import * as indexApi from "../src/features/index.ts";
 import * as memoApi from "../src/features/memo.ts";
+import * as timing from "../src/features/timing.ts";
 import * as core from "../src/index.ts";
 import * as browser from "../src/server.browser.ts";
 import * as server from "../src/server.ts";
 import * as serverAsync from "../src/server/async.ts";
 import * as serverDynamic from "../src/server/dynamic.ts";
+import * as serverErrors from "../src/server/errors.ts";
+import * as serverReaction from "../src/server/reaction.ts";
+import * as serverTiming from "../src/server/timing.ts";
 
 const SVG = "http://www.w3.org/2000/svg";
 
@@ -809,6 +816,332 @@ describe("the runtime's helpers", () => {
     expect(() => browser.renderToString(() => null)).toThrow("not in a browser bundle");
     expect(() => browser.renderToStream(() => null)).toThrow("not in a browser bundle");
     expect(() => browser.renderToStringAsync(() => null)).toThrow("not in a browser bundle");
+  });
+});
+
+// #endregion
+
+// #region Names, values, effects and <Errored>, as plans/solid-parity.md's bugs found them
+
+/** Names a markup injection tries, none of them one tag or attribute name. */
+const INJECTIONS = [
+  "x><script>alert(1)</script",
+  "x/><img src=x onerror=alert(1)",
+  'a"b',
+  "a'b",
+  "a b",
+  "a\tb",
+  "a\nb",
+  "a=b",
+  "a/b",
+  "a<b",
+  "a\u0000b",
+  "a\u007fb",
+  "a\u0085b",
+  "",
+];
+
+describe("the names the server writes", () => {
+  test("a spread's key that is not one attribute name is left out, whatever its value", () => {
+    for (const k of INJECTIONS)
+      for (const v of ["v", true, 0, { a: 1 }, ["a"]])
+        expect(server.__ssrAttrs({ [k]: v, "data-ok": "1" })).toBe(' data-ok="1"');
+    // The names an element takes: data, aria, namespaced, custom, non-ASCII; and a handler
+    // written in lowercase, an attribute on the client too, its value escaped.
+    expect(
+      server.__ssrAttrs({ "data-x": 1, "aria-label": "l", "xlink:href": "#a", "x.y": "", é: "e", onclick: '"><b>' }),
+    ).toBe(' data-x="1" aria-label="l" xlink:href="#a" x.y="" é="e" onclick="&quot;&gt;&lt;b&gt;"');
+    // Compiled: the spread the port's test writes, through the server compile.
+    const api = ssr<{ App: () => unknown }>(`
+      const props = { ${INJECTIONS.map((k, i) => `${JSON.stringify(k)}: ${i % 2 === 0 ? `"v"` : "true"}`).join(", ")}, "data-ok": "1" };
+      const App = () => <div {...props} title="t" />;
+      return { App };
+    `);
+    expect(server.renderToString(api.App)).toBe('<div data-ok="1" title="t"></div>');
+  });
+
+  test("a tag that is not one element name throws, on every render: __ssrElement, <Dynamic> and dynamic()", () => {
+    for (const tag of [...INJECTIONS, "1a", "-a", "é", "div x"]) {
+      expect(() => server.__ssrElement(tag, {})).toThrow(`reactre: "${tag}" is not a valid tag name`);
+      // dynamic() renders nothing for "", as for every falsy value.
+      if (tag === "") continue;
+      const View = serverDynamic.dynamic(() => tag as "div");
+      for (let i = 0; i < 2; i++)
+        expect(() => server.renderToString(() => View({} as never))).toThrow("is not a valid tag name");
+    }
+    for (const tag of [1, {}, Symbol("s")])
+      expect(() => server.__ssrElement(tag as never, {})).toThrow("is not a valid tag name");
+    const api = ssr<{ App: () => unknown; setTag: (t: string) => void }>(`
+      import { Dynamic, signal } from "@reactre/core";
+      const [tag, setTag] = signal("div x><script>alert(1)</script");
+      const App = () => <Dynamic component={tag()} />;
+      return { App, setTag };
+    `);
+    for (let i = 0; i < 2; i++) expect(() => server.renderToString(api.App)).toThrow("is not a valid tag name");
+    api.setTag("my-widget");
+    expect(server.renderToString(api.App)).toBe("<my-widget></my-widget>");
+    expect(server.renderToString(() => server.__ssrElement("foreignObject", {}))).toBe(
+      "<foreignObject></foreignObject>",
+    );
+    expect(server.renderToString(() => server.__ssrElement("Input", { a: "b" }))).toBe('<Input a="b"></Input>');
+  });
+
+  test("values and text are escaped in every path: attributes, spreads, styles, classes, children", () => {
+    const bad = `"><script>alert(1)</script>&`;
+    const esc = "&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt;&amp;";
+    expect(server.__ssrAttr(bad, "title")).toBe(` title="${esc}"`);
+    expect(server.__ssrClass(bad)).toBe(` class="${esc}"`);
+    expect(server.__ssrClasses(bad, [[`<${bad}`, 1]])).toBe(` class="${esc} &lt;${esc}"`);
+    // A style object's keys and values, and a style string.
+    expect(server.__ssrStyle({ [bad]: bad })).toBe(` style="${esc}:${esc}"`);
+    expect(server.__ssrStyle(bad)).toBe(` style="${esc}"`);
+    // A spread's values: a string, a class, a style object, a boolean's name alone.
+    expect(server.__ssrAttrs({ title: bad, className: bad, style: { color: bad }, hidden: true })).toBe(
+      ` title="${esc}" class="${esc}" style="color:${esc}" hidden`,
+    );
+    expect(server.__ssrText(bad, 0)).toBe(esc);
+    expect(server.renderToString(() => server.__ssrElement("p", { title: bad, children: [bad, [bad]] }))).toBe(
+      `<p title="${esc}">${esc}${esc}</p>`,
+    );
+    expect(server.renderToString(() => server.__ssrSlot([bad, 1, null]))).toBe(`${esc}1`);
+    // Compiled, with every kind of hole, each value from an expression.
+    const api = ssr<{ App: () => unknown }>(`
+      const bad = ${JSON.stringify(bad)};
+      const App = () => (
+        <div title={bad} class={bad} style={{ color: bad }} hidden={true}>
+          {bad}
+          <p class={{ [bad]: true }} {...{ "data-x": bad }}>{[bad]}</p>
+          <i class={["a", { [bad]: bad }]} />
+          <textarea value={bad} />
+        </div>
+      );
+      return { App };
+    `);
+    expect(server.renderToString(api.App)).toBe(
+      `<div title="${esc}" class="${esc}" style="color:${esc}" hidden>${esc}` +
+        `<p class="${esc}" data-x="${esc}">${esc}</p><i class="a ${esc}"></i><textarea>${esc}</textarea></div>`,
+    );
+  });
+});
+
+describe("effects on the server", () => {
+  test("@reactre/core/server's effect does not run, however the app reaches it", () => {
+    const log: string[] = [];
+    expect(server.effect).toBe(server.__ssrEffect);
+    server.renderToString(() => {
+      server.effect(() => log.push("effect"));
+      return "x";
+    });
+    expect(log).toEqual([]);
+  });
+
+  test("reaction computes, once, and never applies; onSettled and errors' effect never run", async () => {
+    const log: string[] = [];
+    const [n, setN] = core.signal(1);
+    const App = () => {
+      serverReaction.reaction(
+        () => (log.push(`compute ${n()}`), n()),
+        (v) => void log.push(`apply ${v}`),
+      );
+      serverTiming.onSettled(() => void log.push("settled"));
+      serverErrors.effect(() => void log.push("effect"), { error: () => log.push("error") });
+      return "x";
+    };
+    expect(server.renderToString(App)).toBe("x");
+    expect(await server.renderToStringAsync(App)).toBe("x");
+    const s = await chunks(server.renderToStream(App));
+    expect(s.parts.join("")).toBe("x");
+    await tick();
+    setN(2);
+    expect(log).toEqual(["compute 1", "compute 1", "compute 1"]);
+    // The rest of each module is the client's.
+    expect(serverTiming.flush).toBe(timing.flush);
+    expect(serverErrors.Errored).toBe(Errored);
+  });
+});
+
+describe("<Errored> and async data", () => {
+  test("a cell that disposes one that waits and shows other content: the boundary sends the new content", async () => {
+    const d = deferred<string>();
+    const m = asyncApi.memo(() => d.p);
+    const [other, setOther] = core.signal(false);
+    const app = () =>
+      serverAsync.Loading({
+        fallback: "…",
+        children: () => server.__frag([() => (other() ? "other" : server.__frag([() => m()]))]),
+      });
+    const stream = chunks(server.renderToStream(app));
+    const whole = server.renderToStringAsync(app);
+    await tick();
+    setOther(true);
+    expect(templates((await stream).parts.join(""))).toEqual(["other"]);
+    expect(await whole).toBe("other");
+  });
+});
+
+/** The content of each boundary a stream sent, in order. */
+const templates = (html: string): string[] =>
+  [...html.matchAll(/<template id="rr:t\d+">([\s\S]*?)<\/template>/g)].map((x) => x[1]!);
+
+describe("in a server build", () => {
+  /** Where the bundles are written: a temporary folder the coverage run leaves out (bunfig.toml). */
+  let out: string;
+  let built = 0;
+  beforeAll(() => {
+    out = mkdtempSync(join(tmpdir(), "reactre-plugin-core-ssr-"));
+  });
+  afterAll(() => rmSync(out, { recursive: true, force: true }));
+
+  /** What a module built by `build` exports: its own, and @reactre/core/server's render functions. */
+  interface Built {
+    App: () => unknown;
+    renderToString(app: () => unknown): string;
+    renderToStream(app: () => unknown): ReadableStream<Uint8Array>;
+    renderToStringAsync(app: () => unknown): Promise<string>;
+    [k: string]: unknown;
+  }
+
+  /** The TSX module `src`, built as a server build of an app is (the compiler's Bun plugin), and loaded. */
+  async function build(src: string): Promise<Built> {
+    const entry = new URL("./ssr-entry.virtual.js", import.meta.url).pathname;
+    const code =
+      src + '\nexport { renderToString, renderToStream, renderToStringAsync } from "@reactre/core/server";\n';
+    const r = await Bun.build({
+      entrypoints: ["reactre-core:entry"],
+      target: "bun",
+      plugins: [
+        {
+          name: "entry",
+          setup(b) {
+            b.onResolve({ filter: /^reactre-core:entry$/ }, () => ({ path: entry }));
+            b.onLoad({ filter: /ssr-entry\.virtual\.js$/ }, () => ({
+              contents: compileSource(code, "tsx", { server: true }),
+              loader: "js",
+            }));
+          },
+        },
+        reactreCompiler({ server: true, wholeProgram: false }),
+      ],
+    });
+    if (!r.success) throw new AggregateError(r.logs, "the server build failed");
+    const file = join(out, `m${built++}.js`);
+    await Bun.write(file, await r.outputs[0]!.text());
+    return (await import(file)) as Built;
+  }
+
+  test("no effect of the app or of a feature module runs, however it is imported; computations do", async () => {
+    const m = await build(`
+      import * as core from "@reactre/core";
+      import { effect } from "@reactre/core";
+      import * as errors from "@reactre/core/features/errors";
+      import { effect as guarded } from "@reactre/core/features/errors";
+      import { reaction } from "@reactre/core/features/reaction";
+      import { onSettled } from "@reactre/core/features/timing";
+      import { createStore, createProjection } from "@reactre/core/features/store";
+      import { memo, resolve } from "@reactre/core/features/async";
+      export const log = [];
+      const [store] = createStore({ n: 2 });
+      export function App() {
+        const data = memo(() => new Promise((ok) => setTimeout(() => ok("data"), 1)));
+        const doubled = createProjection((d) => { d.n = store.n * 2; }, { n: 0 });
+        effect(() => log.push("effect"));
+        core.effect(() => log.push("namespace effect"));
+        guarded(() => log.push("errors' effect"), { error: () => log.push("error") });
+        errors.effect(() => log.push("errors' namespace effect"));
+        reaction(() => (log.push("compute"), 1), () => log.push("apply"));
+        onSettled(() => log.push("settled"));
+        resolve(() => data()).then((v) => log.push("resolved " + v));
+        return <p>{doubled.n} {data()}</p>;
+      }
+    `);
+    expect(await m.renderToStringAsync(m.App)).toBe("<p>4 data</p>");
+    await tick();
+    expect(m["log"]).toEqual(["compute", "resolved data"]);
+  });
+
+  /** An app whose data rejects, under `<Errored>` in `<Loading>`, when `reject` is called. */
+  const REJECTS = `
+    import { Loading, memo } from "@reactre/core/features/async";
+    import { Errored } from "@reactre/core/features/errors";
+    let no;
+    const p = new Promise((_, r) => (no = r));
+    export const reject = () => no(new Error("<boom>"));
+    const Data = () => {
+      const data = memo(() => p);
+      return <p>{data()}</p>;
+    };
+    export const App = () => (
+      <div>
+        <Loading fallback="…">
+          <Errored fallback={(e) => <span>caught {e.message}</span>}><Data /></Errored>
+        </Loading>
+      </div>
+    );
+  `;
+
+  test("an async rejection under <Errored> shows its fallback: renderToStream and renderToStringAsync", async () => {
+    const a = await build(REJECTS);
+    const s = chunks(a.renderToStream(a.App));
+    await tick();
+    (a["reject"] as () => void)();
+    const { parts, error } = await s;
+    expect(error).toBeUndefined();
+    expect(parts[0]).toBe("<div><!--rr:b0-->…<!--/rr:b0--></div>");
+    expect(templates(parts.join(""))).toEqual(["<span>caught &lt;boom&gt;</span>"]);
+    const b = await build(REJECTS);
+    const html = b.renderToStringAsync(b.App);
+    await tick();
+    (b["reject"] as () => void)();
+    expect(await html).toBe("<div><span>caught &lt;boom&gt;</span></div>");
+  });
+
+  test("renderToString: a rejection it cannot wait for shows <Loading>'s fallback, one already known <Errored>'s", async () => {
+    const a = await build(REJECTS);
+    expect(a.renderToString(a.App)).toBe("<div>…</div>");
+    const b = await build(`
+      import { Loading, memo } from "@reactre/core/features/async";
+      import { Errored } from "@reactre/core/features/errors";
+      const data = memo(() => Promise.reject(new Error("known")));
+      export const settle = () => { try { data(); } catch {} return new Promise((r) => setTimeout(r, 0)); };
+      export const App = () => (
+        <Loading fallback="…">
+          <Errored fallback={(e) => <span>caught {e.message}</span>}><p>{data()}</p></Errored>
+        </Loading>
+      );
+    `);
+    await (b["settle"] as () => Promise<void>)();
+    expect(b.renderToString(b.App)).toBe("<span>caught known</span>");
+  });
+
+  test("an <Errored> fallback that itself waits: the boundary sends it once it is ready", async () => {
+    const m = await build(`
+      import { Loading, memo } from "@reactre/core/features/async";
+      import { Errored } from "@reactre/core/features/errors";
+      const data = memo(async () => { await new Promise((r) => setTimeout(r, 1)); throw new Error("fail"); });
+      const Help = () => {
+        const text = memo(() => new Promise((ok) => setTimeout(() => ok("help"), 5)));
+        return <b>{text()}</b>;
+      };
+      export const App = () => (
+        <Loading fallback="…">
+          <Errored fallback={<Help />}><p>{data()}</p></Errored>
+        </Loading>
+      );
+    `);
+    const { parts, error } = await chunks(m.renderToStream(m.App));
+    expect(error).toBeUndefined();
+    expect(templates(parts.join(""))).toEqual(["<b>help</b>"]);
+    expect(await m.renderToStringAsync(m.App)).toBe("<b>help</b>");
+  });
+
+  test("without <Errored>, an async rejection fails the render", async () => {
+    const m = await build(`
+      import { Loading, memo } from "@reactre/core/features/async";
+      const data = memo(async () => { await new Promise((r) => setTimeout(r, 1)); throw new Error("fail"); });
+      export const App = () => <Loading fallback="…"><p>{data()}</p></Loading>;
+    `);
+    expect(m.renderToStringAsync(m.App)).rejects.toThrow("fail");
+    expect(((await chunks(m.renderToStream(m.App))).error as Error).message).toBe("fail");
   });
 });
 

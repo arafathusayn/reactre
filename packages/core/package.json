@@ -26,7 +26,9 @@
   "sideEffects": [
     "./src/features/*.ts",
     "./dist/features/*.js",
-    "./dist/dev/features/*.js"
+    "./dist/dev/features/*.js",
+    "./src/server/*.ts",
+    "./dist/server/*.js"
   ],
   "exports": {
     ".": {

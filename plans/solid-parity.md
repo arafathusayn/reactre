@@ -1,6 +1,6 @@
 # Solid 2.0 parity, measured
 
-836 of Solid 2.0's own tests (solid-js 2.0.0-rc.20, [solidjs/solid@5e68925](https://github.com/solidjs/solid/tree/5e68925cc2fd216a9fb06345019e66d5da5c523c)), ported to reactre's API in [`packages/core/test/solid/`](../packages/core/test/solid): **492 pass** (59%), and 344 fail because reactre lacks the capability or behaves differently.
+836 of Solid 2.0's own tests (solid-js 2.0.0-rc.20, [solidjs/solid@5e68925](https://github.com/solidjs/solid/tree/5e68925cc2fd216a9fb06345019e66d5da5c523c)), ported to reactre's API in [`packages/core/test/solid/`](../packages/core/test/solid): **498 pass** (60%), and 338 fail because reactre lacks the capability or behaves differently.
 
 | Area                                                      | Files                        |  Ported |    Pass |     Gap |  Todo |
 | --------------------------------------------------------- | ---------------------------- | ------: | ------: | ------: | ----: |
@@ -10,23 +10,23 @@
 | Control flow (Show, Switch, For, Repeat, Portal, Dynamic) | show, for, portal            |     172 |      60 |     112 |     0 |
 | Context, errors, components                               | context, errors, component   |      77 |      45 |      32 |     0 |
 | Async, Loading, actions                                   | loading, actions             |     122 |      71 |      51 |     0 |
-| Server rendering, hydration                               | server, hydration            |     131 |      85 |      46 |     0 |
-| **Total**                                                 | 18 files                     | **836** | **492** | **344** | **0** |
+| Server rendering, hydration                               | server, hydration            |     131 |      91 |      40 |     0 |
+| **Total**                                                 | 18 files                     | **836** | **498** | **338** | **0** |
 
-Without the list permutations (below), control flow is 60 of 84, and the total 492 of 748 (66%).
+Without the list permutations (below), control flow is 60 of 84, and the total 498 of 748 (67%).
 
 The top gaps, by the ports they block:
 
 1. **`row-shape`, 58**: a `<For>`/`<Repeat>` row must be `(item) => <one element />`; Solid's rows may be text, fragments or arrays. Solid runs each of its 6 such sources through about 10 permutations.
 2. **`for-placement`, 30**: `<For>`/`<Repeat>` as a component's whole view, not an element's direct child (3 sources × 10 permutations).
 3. **`action-writes`, 19**: an action holding and batching its plain writes until it ends.
-4. **`bug`, 10**: six bugs, [below](#bugs-found).
-5. **`dev-checks`, 15**: Solid's dev warnings (strict reads in a component body) and messages.
-6. **`held-writes`, 12**: reads and effects that see a write before `flush()`. By design (reactre applies writes at once), and counted once per file.
-7. **`client-error-hook`, 9**: `configureClientErrors`/`render`'s `onError` hearing what a boundary caught.
-8. **`glitch-free`, 9**: a diamond's join runs once per changed branch, and memos run depth-first; Solid's run once each, in topological order.
-9. **`list-functions`, 8** (`mapArray`, `repeat`); **`render-effects`, 8** (render phase, `onFlush`, `defer`, `schedule`); **`ssr-semantics`, 8** (server primitives).
-10. **`misuse-errors`, 7**; **`ssr-helpers`, 7** (`httpStatus`, `httpHeader`, `takeHydrationValue`, `getHydrationWriter`).
+4. **`dev-checks`, 15**: Solid's dev warnings (strict reads in a component body) and messages.
+5. **`held-writes`, 12**: reads and effects that see a write before `flush()`. By design (reactre applies writes at once), and counted once per file.
+6. **`client-error-hook`, 9**: `configureClientErrors`/`render`'s `onError` hearing what a boundary caught.
+7. **`glitch-free`, 9**: a diamond's join runs once per changed branch, and memos run depth-first; Solid's run once each, in topological order.
+8. **`list-functions`, 8** (`mapArray`, `repeat`); **`render-effects`, 8** (render phase, `onFlush`, `defer`, `schedule`); **`ssr-semantics`, 8** (server primitives).
+9. **`misuse-errors`, 7**; **`ssr-helpers`, 7** (`httpStatus`, `httpHeader`, `takeHydrationValue`, `getHydrationWriter`).
+10. **`bug`, 4**: two bugs still open, [below](#bugs-found); seven more are fixed.
 
 The other targets this set out to count: `memo-options` 5, `store-path` 5, `hydration` 5, `client-only` 4, `store-alias` 4, `from` 3, and `jsx-props` 0 (no port found JSX in a prop that did not work). [Gaps, by target](#gaps-by-target) lists all 61 targets and their tests.
 
@@ -166,7 +166,6 @@ Each gap test names a target: what reactre would need for it to pass. The first 
 | `fold`                                                                                                                                                                                                             |      0 | done: `memo(fn, { lazy })` passes; the two `signal(v, { unobserved })` ports fail on timing alone (`unobserved-timing`)                                                  |
 | `row-shape`                                                                                                                                                                                                        |     58 | a row that is text, a fragment, an array, `undefined` or an element child (6 sources × up to 10 permutations)                                                            |
 | `action-writes`                                                                                                                                                                                                    |     19 | an action holding and batching its plain writes                                                                                                                          |
-| `bug`                                                                                                                                                                                                              |     10 | the bugs below                                                                                                                                                           |
 | `dev-checks`                                                                                                                                                                                                       |     15 | Solid's dev warnings and messages (strict reads in a component body, ContextNotFoundError's texts)                                                                       |
 | `held-writes`                                                                                                                                                                                                      |     12 | reads and effects not seeing a write before `flush()`, by design                                                                                                         |
 | `client-error-hook`                                                                                                                                                                                                |      9 | `configureClientErrors` and `render`'s `onError` hearing what a boundary caught                                                                                          |
@@ -177,6 +176,7 @@ Each gap test names a target: what reactre would need for it to pass. The first 
 | `action-sync-yield`                                                                                                                                                                                                |      6 | a sync `yield` resuming at once                                                                                                                                          |
 | `match-placement`                                                                                                                                                                                                  |      6 | a `<For>` or `<Show>` of `<Match>`es in a `<Switch>`                                                                                                                     |
 | `create-reaction`, `dispose-order`, `owner-ids`, `pull-memos`, `portal-events`, `reconcile-identity`, `store-in-place`, `symbol-keys`                                                                              | 5 each |                                                                                                                                                                          |
+| `bug`                                                                                                                                                                                                              |      4 | the bugs below                                                                                                                                                           |
 | `async-store`, `class-instances`, `merge-views`, `optimistic-outside`, `projection-chain`, `refresh-promise`, `transition-scope`                                                                                   | 4 each |                                                                                                                                                                          |
 | `cleanup-throw`, `error-accessor`, `store-direct-write`                                                                                                                                                            | 3 each |                                                                                                                                                                          |
 | `array-text`, `class-values`, `effect-errors`, `lazy-retry`, `no-owner`, `pending-signal`, `settled-async`, `unobserved-timing`                                                                                    | 2 each |                                                                                                                                                                          |
@@ -206,16 +206,6 @@ Per target, per file and reason, the Solid test names (`×n`: that many permutat
 - actions.test.ts, a plain write in an action is not held: its effect runs at once: "should complete transition when action finishes"; "should flush held signals when action completes"; "should maintain transition context across all delegated yields"; "should hold regular signal value during transition while showing optimistic".
 - actions.test.ts, an action's writes are not batched: each optimistic write runs the effect: "should revert multiple optimistic signals together when transition completes".
 - actions.test.ts, a plain store write in an action is not held: its effect runs at once: "should hold regular store value during transition while showing optimistic".
-
-#### `bug` (10)
-
-- show.test.ts, with a function child, `when` runs twice per change: "Toggle show control flow".
-- signals.test.ts, memo(fn) calls a function fn returns, as a setter's updater: "updates downstream pending computations".
-- reconcile.test.ts, core memo stores what a function it returns returns: "replaces a TRACKED function-valued object leaf without invoking it"; "replaces a TRACKED function-valued array item without invoking it".
-- server.test.ts, reaction's apply half runs during a server render: "runs compute but not effectFn on the server".
-- server.test.ts, on the server an async rejection under `<Errored>` renders the empty content, not the fallback: "Errored inside Loading — async rejection resolves to error fallback HTML"; "bare rejected async memo under Errored inside Loading resolves to error fallback"; "stream completes after error (no hang)".
-- server.test.ts, a spread's attribute names are written unchecked, so a key can inject markup: "through a compiled spread".
-- server.test.ts, a `<Dynamic>` tag name is written unchecked, so a tag can inject markup: "a tag that is not one HTML element name throws, on every render".
 
 #### `dev-checks` (15)
 
@@ -269,8 +259,10 @@ Per target, per file and reason, the Solid test names (`×n`: that many permutat
 - effects.test.ts, reaction takes no defer option: "should defer user effects with the defer option".
 - effects.test.ts, reaction takes no schedule option: "does not run initial render-effect callback synchronously when schedule: true".
 - effects.test.ts, reactre has no onFlush: "runs after the drain when called from an effect callback"; "lands after inline writes in the same frame; callbacks run in order and batch".
-- server.test.ts, an effect has no defer option: "defer: true skips the initial effect run but still computes (#2811)".
+- server.test.ts, reaction is createEffect, whose apply half does not run on the server; reactre has no render effect: "computes and runs effect once".
 - server.test.ts, createTrackedEffect is missing (on the server): "is a no-op".
+
+Its server `defer` port, "defer: true skips the initial effect run but still computes (#2811)", passes: reaction takes no `defer`, but its apply half never runs on the server.
 
 #### `ssr-semantics` (8)
 
@@ -367,6 +359,12 @@ Per target, per file and reason, the Solid test names (`×n`: that many permutat
 - store.test.ts, deep and snapshot copy string keys only: "tracks updates in a symbol-keyed subtree".
 - reconcile.test.ts, reconcile compares and copies string keys only: "notifies an effect tracking a symbol-keyed property"; "a symbol `in` check updates when reconcile adds the key".
 
+#### `bug` (4)
+
+- show.test.ts, with a function child, `when` runs twice per change: "Toggle show control flow".
+- signals.test.ts, memo(fn) calls a function fn returns, as a setter's updater: "updates downstream pending computations".
+- reconcile.test.ts, core memo stores what a function it returns returns: "replaces a TRACKED function-valued object leaf without invoking it"; "replaces a TRACKED function-valued array item without invoking it".
+
 #### `async-store` (4)
 
 - actions.test.ts, createStore takes no async function: "control: createStore(fn, seed) in the same spot".
@@ -457,7 +455,7 @@ Per target, per file and reason, the Solid test names (`×n`: that many permutat
 
 ## Bugs found
 
-Where reactre claims a capability and the port shows it wrong. Each has `gap("bug", ...)` tests, which fail until it is fixed. Bugs 2, 3 and 5 are fixed: their ports are plain tests now, and each has regression tests in the module's own test file.
+Where reactre claims a capability and the port shows it wrong. Each has `gap("bug", ...)` tests, which fail until it is fixed. Bugs 2, 3, 5, 6, 7, 8 and 9 are fixed: their ports are plain tests now, and each has regression tests in the module's own test file.
 
 1. **Core `memo` treats a function its `fn` returns as a setter's updater** (3 ports: signals "updates downstream pending computations", reconcile's two "replaces a TRACKED function-valued ... without invoking it"). `memo` stores `fn()` through `signal`'s setter, which calls any function it is given. The async build (`computed`) does not, so the two builds disagree. `reaction`, built on `memo`, has it too. features/memo's `memo` does not.
    ```ts
@@ -494,24 +492,24 @@ Where reactre claims a capability and the port shows it wrong. Each has `gap("bu
    effect(() => console.log(s[0]));
    set(reconcile([{ v: 2 }], null)); // logs nothing; s[0] is the old object, now { v: 2 }
    ```
-6. **`reaction` runs its apply half during a server render** (server "runs compute but not effectFn on the server"). The README says effects do not run on the server. The server compile rewrites the app's own `effect` imports, but feature modules (features/reaction) get the real core `effect` through `@reactre/core/server`. In a server build: `reaction(() => 1, () => log.push("ran"))` in a component, then `renderToString`, logs "ran". Other feature modules' effects may do the same (not checked).
-7. **On the server, `<Errored>` turns an async rejection into empty content** (3 server ports from ssr-async.spec and ssr-stream.spec). No fallback and no error: the stream ends with `<template id="rr:t0"><p></p></template>`. Without `<Errored>`, `renderToStringAsync` rejects with the error, as it should. In a server build:
+6. **Fixed.** `@reactre/core/server`'s `effect` is the one that does not run, however an app reaches it (a named import, a namespace, a re-export), and a server build points the app's imports of features/reaction, timing and errors at server versions: `reaction` computes and never applies, and `onSettled` and errors' `effect(fn, { error })` never run. The feature modules whose own effects compute what they return (a projection, features/memo's derived signal, `resolve`, `until`) import the core's `effect`, which runs (`serverImports(code, false)`). With it, the port of Solid's server `createRenderEffect`, "computes and runs effect once", is a `render-effects` gap: reaction is `createEffect` (server.test.ts "effects on the server", "in a server build"). Was: **`reaction` runs its apply half during a server render** (server "runs compute but not effectFn on the server"). The README says effects do not run on the server. The server compile rewrites the app's own `effect` imports, but feature modules (features/reaction) get the real core `effect` through `@reactre/core/server`. In a server build: `reaction(() => 1, () => log.push("ran"))` in a component, then `renderToString`, logs "ran". Other feature modules' effects may do the same (not checked).
+7. **Fixed.** The `<Loading>` boundary sent its content the moment the cell that threw was disposed, which was in the middle of `<Errored>`'s run that puts the fallback in its place. A boundary now sends what it has in a microtask after it stops waiting, through renderToStream and renderToStringAsync; renderToString, which cannot wait, writes `<Loading>`'s fallback for a rejection still to come and `<Errored>`'s for one already known (server.test.ts "`<Errored>` and async data", "in a server build"). Was: **On the server, `<Errored>` turns an async rejection into empty content** (3 server ports from ssr-async.spec and ssr-stream.spec). No fallback and no error: the stream ends with `<template id="rr:t0"><p></p></template>`. Without `<Errored>`, `renderToStringAsync` rejects with the error, as it should. In a server build:
    ```tsx
    const data = memo(() => Promise.reject(new Error("boom"))); // features/async
    <Loading fallback="L"><Errored fallback={(e) => <span>err {e.message}</span>}><p>{data()}</p></Errored></Loading>
    // renderToStringAsync: "<p></p>"; expected the fallback
    ```
-8. **The server writes a spread's attribute names unchecked** (server "through a compiled spread"): a key can inject markup. The client's `setAttribute` throws for such a name; Solid drops it.
+8. **Fixed.** `__ssrAttrs` leaves out, as Solid does, a key that is empty or holds whitespace, a control character, `"`, `'`, `<`, `>`, `/` or `=`; the server compile throws for such a name written in the source (server.test.ts "the names the server writes", and the compiler's "names the server writes"). Was: **The server writes a spread's attribute names unchecked** (server "through a compiled spread"): a key can inject markup. The client's `setAttribute` throws for such a name; Solid drops it.
    ```ts
    __ssrAttrs({ "x><script>alert(1)</script": "" }); // ` x><script>alert(1)</script=""`
    ```
-9. **The server writes a `<Dynamic>` tag name unchecked** (server "a tag that is not one HTML element name throws, on every render"): `<Dynamic component={tag()} />` with `"div x"` gives `<div x></div x>`. Solid throws "is not a valid tag name".
+9. **Fixed.** `__ssrElement` (`<Dynamic>`, `dynamic()`) throws `"<tag>" is not a valid tag name`, on every render, for a tag that does not start with an ASCII letter or holds one of those characters; the server compile throws for one written in the source. `<Portal>` writes nothing on the server, so its `mount` never reaches the HTML (the same tests). Was: **The server writes a `<Dynamic>` tag name unchecked** (server "a tag that is not one HTML element name throws, on every render"): `<Dynamic component={tag()} />` with `"div x"` gives `<div x></div x>`. Solid throws "is not a valid tag name".
 
 Found on the way, filed as gaps rather than bugs since reactre claims nothing about them, but worth a look:
 
 - A cleanup that throws stops the teardown (`cleanup-throw`): the owner's later cleanups never run and its later children are never disposed, so they stay subscribed. `createRoot((d) => { onCleanup(() => log.push("owner")); reaction(() => 1, () => () => { throw e; }); return d; })()` throws and `log` stays empty.
 - Fixed: a draft write of `__proto__`, or a `reconcile` of JSON with an own `__proto__` key, set that store object's prototype (`proto-guard`). It was worse than first filed: `reconcile(JSON.parse('{"__proto__": {"x": 1}}'))` merged into `Object.prototype` itself (the inherited `__proto__` read as the object to merge into), and so did a draft write through an inherited `__proto__` or `constructor` (`d.__proto__.x = 1`). Now, as in Solid 2.0, a draft write of `__proto__` is dropped; an inherited `__proto__` or `constructor` reads as undefined through a store or a draft; and an own `__proto__` (JSON's), from `reconcile`, a returned object or `snapshot`, is kept as own data (store.test.ts "\_\_proto\_\_ and constructor").
-- `packages/core/package.json`'s `sideEffects` lists `./src/features/*.ts` and not `./src/server/*.ts`, so in a server build a bare `import "@reactre/core/features/async"` (rewritten to `server/async`) can be dropped by the bundler, and an async memo then reads as a Promise.
+- Fixed: `packages/core/package.json`'s `sideEffects` listed `./src/features/*.ts` and not `./src/server/*.ts`, so in a server build a bare `import "@reactre/core/features/async"` (rewritten to `server/async`) could be dropped by the bundler, and an async memo then read as a Promise. It lists `./src/server/*.ts` and `./dist/server/*.js` now.
 
 ## How the ports are written
 

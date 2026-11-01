@@ -12,9 +12,10 @@
 //     core with server versions of what touches the DOM, and the plugin points the feature
 //     modules' imports of it here too: a context's provider, `<Errored>`, `<Reveal>` and `lazy`
 //     run as they are, on the `__frag` below. `<Loading>` and `dynamic()` touch the DOM
-//     themselves, so they have server versions (./server/async.ts, ./server/dynamic.ts).
-//   - Signals and memos work as on the client; the app's effects do not run (the server mode
-//     imports `__ssrEffect` for `effect`), and its memos compute when first read (`__ssrMemo`).
+//     themselves, so they have server versions (./server/async.ts, ./server/dynamic.ts), and so
+//     do the effects of features/reaction, timing and errors (./server/reaction.ts, ...).
+//   - Signals and memos work as on the client; the app's effects do not run (this module's
+//     `effect` is `__ssrEffect`), and its memos compute when first read (`__ssrMemo`).
 //   - Async data: a read that is not ready throws, as on the client. A hole or slot that may
 //     change is compiled to a thunk (`__ssrLazy`): when it throws so, it becomes a cell, filled by
 //     an effect that runs it again when the value comes, as a hole's effect does on the client.
@@ -70,6 +71,13 @@ const ENTITY: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;",
 export function escape(s: string): string {
   return ESCAPE.test(s) ? s.replace(ESCAPES, (c) => ENTITY[c]!) : s;
 }
+
+/**
+ * A character no tag or attribute name written here may hold: whitespace, a control character,
+ * a quote, `<`, `>`, `/` or `=`. A name without them (a tag's starting with an ASCII letter) is
+ * read back by the HTML parser as that one name; one with them could end the tag and start markup.
+ */
+const NOT_NAME = /[\0-\x20\x7F-\x9F"'<>/=]/;
 
 /** Append part `p` to `out`, joining it to a string before it. */
 function push(out: Part[], p: Part): void {
@@ -162,6 +170,8 @@ class Render {
   script = false;
   /** The ids of a stream's boundaries. */
   ids = 0;
+  /** A `check` waits for a microtask (`later`). */
+  queued = false;
   constructor(mode: Mode, options: RenderOptions, sink: Sink | null) {
     this.mode = mode;
     this.options = options;
@@ -216,6 +226,20 @@ class Render {
     sink.close();
   }
 
+  /**
+   * `check`, in a microtask: a boundary stops waiting as a cell it counted is disposed, which may
+   * be in the middle of a run that puts other content in its place (an `<Errored>` showing its
+   * fallback for what the cell threw), so what is sent is read once that run has ended.
+   */
+  later(): void {
+    if (this.queued) return;
+    this.queued = true;
+    queueMicrotask(() => {
+      this.queued = false;
+      this.check();
+    });
+  }
+
   /** An error after the render's call returned: the stream (or the promise) fails with it. */
   fail(err: unknown): void {
     if (this.done) return;
@@ -251,7 +275,7 @@ class Boundary {
   done(): void {
     if (--this.n !== 0) return;
     this.r.busy--;
-    this.r.check();
+    this.r.later();
   }
 }
 
@@ -404,12 +428,14 @@ export function __ssrStyle(v: unknown): string {
 /**
  * Internal: spread props as attributes, as `__spread` applies them on the client: handlers, refs,
  * `children` and `key` are left out, `className` is `class`, `htmlFor` is `for`, `style` takes an
- * object, and a later prop of a name wins.
+ * object, and a later prop of a name wins. A key that is not one attribute name (empty, or with
+ * whitespace, a quote, `<`, `>`, `/`, `=` or a control character) is left out, as Solid 2.0 leaves
+ * it: written, it could end the tag and start markup of its own.
  */
 export function __ssrAttrs(v: unknown): string {
   const attrs = new Map<string, string>();
   for (const [k, x] of Object.entries((v ?? {}) as Record<string, unknown>)) {
-    if (k === "children" || k === "key" || k === "ref" || /^on[A-Z]/.test(k)) continue;
+    if (k === "children" || k === "key" || k === "ref" || /^on[A-Z]/.test(k) || k === "" || NOT_NAME.test(k)) continue;
     const name = k === "className" ? "class" : k === "htmlFor" ? "for" : k;
     attrs.set(name, name === "style" ? __ssrStyle(x) : name === "class" ? __ssrClass(x) : __ssrAttr(x, name));
   }
@@ -503,8 +529,14 @@ const VOID = new Set("area base br col embed hr img input link meta source track
 /**
  * Internal: tag `tag`'s element with `props` as spread props (`__ssrAttrs`) and their children,
  * as `<Dynamic>` and `dynamic()` build one for a tag name chosen at runtime.
+ *
+ * @throws Error for a tag that is not one element name: a string that starts with an ASCII letter
+ *   and holds no whitespace, quote, `<`, `>`, `/`, `=` or control character. The client's
+ *   `createElement` throws for one too, and Solid 2.0's server does ("is not a valid tag name").
  */
 export function __ssrElement(tag: string, props: Record<string, unknown>): Html {
+  if (typeof tag !== "string" || !/^[a-zA-Z]/.test(tag) || NOT_NAME.test(tag))
+    throw new Error(`reactre: "${String(tag)}" is not a valid tag name`);
   const open = `<${tag}${__ssrAttrs(props)}>`;
   if (VOID.has(tag)) return new Html([open]);
   const out: Part[] = [open];
@@ -559,8 +591,15 @@ export function __ssrLoading(props: { fallback?: unknown; children?: unknown }):
   return new Html([b]);
 }
 
-/** Internal: `effect` in a module compiled for the server: an effect does not run there. */
+/**
+ * Internal: `effect` in a module compiled for the server: an effect does not run there. It is
+ * this module's `effect` too, so an app's effect does not run however the app reaches it (a
+ * namespace import, a re-export); the core's feature modules, whose own effects compute what they
+ * return (a projection, a derived signal, `resolve`), import the core's (@reactre/compiler's
+ * `serverImports`).
+ */
 export function __ssrEffect(_fn: () => void, _options?: unknown): void {}
+export { __ssrEffect as effect };
 
 /**
  * Internal: `memo` in a module compiled for the server: computed when first read, then kept. A

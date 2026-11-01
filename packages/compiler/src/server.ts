@@ -16,8 +16,9 @@
 //     so a read of an async value that is not ready makes it a cell that waits, as a hole's
 //     effect waits on the client, and `<Loading>` can show its fallback (@reactre/core/server).
 //   - Imports are pointed at the server: @reactre/core at @reactre/core/server, its
-//     features/async and features/dynamic at their server versions, and `effect` (which does not
-//     run there) and `memo` (computed when first read) at the server's (`serverImports`).
+//     features/async, dynamic, errors, reaction and timing at their server versions, and `effect`
+//     (which does not run there) and `memo` (computed when first read) at the server's
+//     (`serverImports`).
 //
 // The `<For>` and `<Repeat>` handling is in `list` and `forProps`, apart from the rest, as the
 // client's is in index.ts's `forList`.
@@ -42,11 +43,18 @@ import { literal, NOT_LITERAL } from "./scan.ts";
 
 // #region Imports
 
-/** The modules a server build of an app imports in place of the client's. */
+/**
+ * The modules a server build of an app imports in place of the client's: the core, and the
+ * feature modules that touch the DOM (`<Loading>`, `dynamic()`) or run effects (`reaction`'s
+ * apply half, `onSettled`, `effect(fn, { error })`), which do not run on the server.
+ */
 const SERVER_MODULES: Record<string, string> = {
   "@reactre/core": "@reactre/core/server",
   "@reactre/core/features/async": "@reactre/core/server/async",
   "@reactre/core/features/dynamic": "@reactre/core/server/dynamic",
+  "@reactre/core/features/errors": "@reactre/core/server/errors",
+  "@reactre/core/features/reaction": "@reactre/core/server/reaction",
+  "@reactre/core/features/timing": "@reactre/core/server/timing",
 };
 
 /** A module specifier of @reactre/core in an import or export: `from "..."`, `import "..."`, `import("...")`. */
@@ -62,12 +70,13 @@ const NAMED = /\bimport\s*\{([^}]*)\}\s*from\s*(["'])(@reactre\/core(?:\/feature
 export const CORE_FEATURE: RegExp = /[\\/]core[\\/](?:src|dist(?:[\\/]dev)?)[\\/]features[\\/][a-zA-Z]+\.[jt]s$/;
 
 /**
- * Module `js`'s imports of @reactre/core, as a server build makes them: the core and its
- * features/async and features/dynamic point at their server versions (@reactre/core/server, and
- * /server/async and /server/dynamic). With `app`, for the app's own modules, its named imports of
- * `effect` (from the core or features/errors) become @reactre/core/server's `__ssrEffect`, which
- * does not run, and of `memo` from the core its `__ssrMemo`, computed when first read. Without,
- * for @reactre/core's own feature modules, only the core itself points at the server.
+ * Module `js`'s imports of @reactre/core, as a server build makes them: the core and the feature
+ * modules of `SERVER_MODULES` point at their server versions (@reactre/core/server, and
+ * /server/async, /server/dynamic, ...). With `app`, for the app's own modules, its named imports
+ * of `effect` (from the core or features/errors) become @reactre/core/server's `__ssrEffect`,
+ * which does not run, and of `memo` from the core its `__ssrMemo`, computed when first read.
+ * Without, for @reactre/core's own feature modules, only the core itself points at the server,
+ * but for its `effect`, the core's own, which runs.
  */
 export function serverImports(js: string, app: boolean = true): string {
   let out = js;
@@ -87,11 +96,27 @@ export function serverImports(js: string, app: boolean = true): string {
       // A module imported for nothing still loads: features/errors's boundaries need it.
       return (kept.length === 0 ? `import "${from}";` : `import { ${kept.join(", ")} } from "${from}";`) + own;
     });
-  return out.replace(SPECIFIER, (whole, head: string, q: string, spec: string) => {
+  out = out.replace(SPECIFIER, (whole, head: string, q: string, spec: string) => {
     const to = app ? SERVER_MODULES[spec] : spec === "@reactre/core" ? "@reactre/core/server" : undefined;
     return to === undefined ? whole : `${head}${q}${to}${q}`;
   });
+  if (app) return out;
+  // A feature module's effects compute what it returns (a projection, a derived signal,
+  // `resolve`): it takes the core's `effect`, which runs, where @reactre/core/server's does not.
+  return out.replace(SERVER_NAMED, (whole, list: string) => {
+    const parts = list.split(",").map((p) => p.trim());
+    const effect = parts.filter((p) => p.split(/\s+as\s+/)[0] === "effect");
+    if (effect.length === 0) return whole;
+    const kept = parts.filter((p) => p !== "" && !effect.includes(p));
+    return (
+      (kept.length === 0 ? "" : `import { ${kept.join(", ")} } from "@reactre/core/server";`) +
+      `import { ${effect.join(", ")} } from "@reactre/core";`
+    );
+  });
 }
+
+/** A named import of @reactre/core/server, as `serverImports` points a feature module's import of the core. */
+const SERVER_NAMED = /\bimport\s*\{([^}]*)\}\s*from\s*(["'])@reactre\/core\/server\2;?/g;
 
 /** @reactre/core/server's helpers, with their local names, imported where the code uses them. */
 export const SERVER_HELPERS: readonly (readonly [string, string])[] = [
@@ -116,6 +141,13 @@ export const SERVER_HELPERS: readonly (readonly [string, string])[] = [
 ];
 
 // #endregion
+
+/**
+ * A character no tag or attribute name the server writes may hold, as @reactre/core/server's
+ * check of the names it gets at runtime: whitespace, a control character, a quote, `<`, `>`, `/`
+ * or `=`. A name with one could end the tag and start markup of its own.
+ */
+const NOT_NAME = /[\0-\x20\x7F-\x9F"'<>/=]/;
 
 /** A hole of an element tree: its markup's code, or a text hole's parts (see `Markup`). */
 type Hole = { readonly code: string } | TextHole;
@@ -228,6 +260,8 @@ export class ServerEmit {
   private element(x: Call, t: Markup, svg: boolean): void {
     const c = this.c;
     const tag = JSON.parse(x.type) as string;
+    if (!/^[a-zA-Z]/.test(tag) || NOT_NAME.test(tag))
+      throw new ReactreCompileError(`reactre: "${tag}" is not a valid tag name`);
     const inSvg = svg || tag === "svg";
     this.add(t, "<" + tag);
     let children: [string, number][] = [];
@@ -267,6 +301,8 @@ export class ServerEmit {
           continue;
         }
       }
+      if (name === "" || NOT_NAME.test(name))
+        throw new ReactreCompileError(`reactre: <${tag}>'s "${name}" is not a valid attribute name`);
       const lit = literal(v);
       if (lit !== NOT_LITERAL) {
         if (lit === null || lit === undefined || lit === false) continue;

@@ -7,6 +7,9 @@ import * as scan from "@reactre/compiler/scan";
 import * as server from "@reactre/core/server";
 import * as serverAsync from "@reactre/core/server/async";
 import * as serverDynamic from "@reactre/core/server/dynamic";
+import * as serverErrors from "@reactre/core/server/errors";
+import * as serverReaction from "@reactre/core/server/reaction";
+import * as serverTiming from "@reactre/core/server/timing";
 import * as plugin from "@reactre/plugin";
 import bun from "@reactre/plugin/bun";
 import esbuild from "@reactre/plugin/esbuild";
@@ -43,6 +46,9 @@ export const all: unknown[] = [
   server,
   serverAsync,
   serverDynamic,
+  serverErrors,
+  serverReaction,
+  serverTiming,
   html,
   stream,
 ];

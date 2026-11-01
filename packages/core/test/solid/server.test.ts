@@ -130,9 +130,6 @@ const templates = (html: string): string[] =>
 /** Let timers and promise callbacks run. */
 const tick = (ms = 0): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-/** The bug the ports of an async rejection under a server <Errored> find (plans/solid-parity.md). */
-const ERRORED_ASYNC = "on the server an async rejection under <Errored> renders the empty content, not the fallback";
-
 /** A function an API of Solid's that reactre lacks would be: read off `mod`, throwing when it is not there. */
 function missing<F>(mod: object, name: string): F {
   const f = (mod as Record<string, unknown>)[name];
@@ -264,12 +261,8 @@ describe("packages/solid/test/server/signals.spec.ts", () => {
   });
 
   describe("Server createEffect", () => {
-    gap(
-      "bug",
-      "reaction's apply half runs during a server render",
-      "runs compute but not effectFn on the server",
-      async () => {
-        const m = await server(`
+    test("runs compute but not effectFn on the server", async () => {
+      const m = await server(`
         import { reaction } from "@reactre/core/features/reaction";
         export const calls = { compute: 0, effect: 0 };
         export function App() {
@@ -277,10 +270,9 @@ describe("packages/solid/test/server/signals.spec.ts", () => {
           return <p>x</p>;
         }
       `);
-        expect(m.renderToString(m.App)).toBe("<p>x</p>");
-        expect(m["calls"]).toEqual({ compute: 1, effect: 0 });
-      },
-    );
+      expect(m.renderToString(m.App)).toBe("<p>x</p>");
+      expect(m["calls"]).toEqual({ compute: 1, effect: 0 });
+    });
 
     gap(
       "memo-options",
@@ -302,8 +294,12 @@ describe("packages/solid/test/server/signals.spec.ts", () => {
   });
 
   describe("Server createRenderEffect", () => {
-    test("computes and runs effect once", async () => {
-      const m = await server(`
+    gap(
+      "render-effects",
+      "reaction is createEffect, whose apply half does not run on the server; reactre has no render effect",
+      "computes and runs effect once",
+      async () => {
+        const m = await server(`
         import { reaction } from "@reactre/core/features/reaction";
         export const calls = { compute: 0, effect: [] };
         export function App() {
@@ -311,16 +307,14 @@ describe("packages/solid/test/server/signals.spec.ts", () => {
           return <p>x</p>;
         }
       `);
-      m.renderToString(m.App);
-      expect(m["calls"]).toEqual({ compute: 1, effect: [[42, undefined]] });
-    });
+        m.renderToString(m.App);
+        expect(m["calls"]).toEqual({ compute: 1, effect: [[42, undefined]] });
+      },
+    );
 
-    gap(
-      "render-effects",
-      "an effect has no defer option",
-      "defer: true skips the initial effect run but still computes (#2811)",
-      async () => {
-        const m = await server(`
+    // reaction takes no defer option: this passes because its apply half never runs on the server.
+    test("defer: true skips the initial effect run but still computes (#2811)", async () => {
+      const m = await server(`
         import { reaction } from "@reactre/core/features/reaction";
         export const calls = { compute: 0, effect: 0 };
         export function App() {
@@ -328,10 +322,9 @@ describe("packages/solid/test/server/signals.spec.ts", () => {
           return <p>x</p>;
         }
       `);
-        m.renderToString(m.App);
-        expect(m["calls"]).toEqual({ compute: 1, effect: 0 });
-      },
-    );
+      m.renderToString(m.App);
+      expect(m["calls"]).toEqual({ compute: 1, effect: 0 });
+    });
   });
 
   describe("Server createTrackedEffect", () => {
@@ -1084,7 +1077,7 @@ describe("packages/solid/test/server/ssr-async.spec.ts", () => {
       expect(html).toBe("<span>sync boom</span>");
     });
 
-    gap("bug", ERRORED_ASYNC, "Errored inside Loading — async rejection resolves to error fallback HTML", async () => {
+    test("Errored inside Loading — async rejection resolves to error fallback HTML", async () => {
       const m = await server(`
         import { Loading, memo } from "@reactre/core/features/async";
         import { Errored } from "@reactre/core/features/errors";
@@ -1236,12 +1229,8 @@ describe("packages/web/test/server/ssr-stream.spec.tsx", () => {
       expect(full).toContain("Bare Data");
     });
 
-    gap(
-      "bug",
-      ERRORED_ASYNC,
-      "bare rejected async memo under Errored inside Loading resolves to error fallback",
-      async () => {
-        const m = await server(`
+    test("bare rejected async memo under Errored inside Loading resolves to error fallback", async () => {
+      const m = await server(`
         import { Loading, memo } from "@reactre/core/features/async";
         import { Errored } from "@reactre/core/features/errors";
         export function App() {
@@ -1255,11 +1244,10 @@ describe("packages/web/test/server/ssr-stream.spec.tsx", () => {
           );
         }
       `);
-        const html = await m.renderToStringAsync(m.App);
-        expect(html).toContain("err:");
-        expect(html).toContain("boom");
-      },
-    );
+      const html = await m.renderToStringAsync(m.App);
+      expect(html).toContain("err:");
+      expect(html).toContain("boom");
+    });
 
     test("async memo — shell contains fallback, final has resolved value", async () => {
       const { shell, full } = await collect(
@@ -1362,7 +1350,7 @@ describe("packages/web/test/server/ssr-stream.spec.tsx", () => {
       },
     );
 
-    gap("bug", ERRORED_ASYNC, "stream completes after error (no hang)", async () => {
+    test("stream completes after error (no hang)", async () => {
       const { full, error } = await collect(
         await server(`
         import { Loading, memo } from "@reactre/core/features/async";
@@ -1612,34 +1600,24 @@ describe("packages/web/test/server/ssr-element-nullish-attrs.spec.tsx and ssr-el
     expect(m.renderToString(m.App)).toBe('<button data-x="1"></button>');
   });
 
-  gap(
-    "bug",
-    "a spread's attribute names are written unchecked, so a key can inject markup",
-    "through a compiled spread",
-    async () => {
-      expect(
-        await str(`
+  test("through a compiled spread", async () => {
+    expect(
+      await str(`
         const props = { "a b": "v", 'a"b': true, "x><script>alert(1)</script": "", "data-ok": "1" };
         export const App = () => <div {...props} />;
       `),
-      ).toBe('<div data-ok="1"></div>');
-    },
-  );
+    ).toBe('<div data-ok="1"></div>');
+  });
 
-  gap(
-    "bug",
-    "a <Dynamic> tag name is written unchecked, so a tag can inject markup",
-    "a tag that is not one HTML element name throws, on every render",
-    async () => {
-      const m = await server(`
+  test("a tag that is not one HTML element name throws, on every render", async () => {
+    const m = await server(`
       import { Dynamic } from "@reactre/core";
       import { signal } from "@reactre/core";
       const [tag] = signal("div x");
       export const App = () => <Dynamic component={tag()} />;
     `);
-      expect(() => m.renderToString(m.App)).toThrow("is not a valid tag name");
-    },
-  );
+    expect(() => m.renderToString(m.App)).toThrow("is not a valid tag name");
+  });
 
   test("custom elements and case-sensitive SVG names render", async () => {
     const m = await server(`
