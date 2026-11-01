@@ -36,11 +36,8 @@
 //     an array of those. Void elements (`<input>`, `<img>`, ...) take no children.
 //   - SVG elements have their own attributes and events. A tag both HTML and SVG name (`a`,
 //     `script`, `style`, `title`) has HTML's.
-//   - `<For>` takes a `fallback`, shown while `each` is empty (below, through
-//     LibraryManagedAttributes, as `For` itself is declared in ./index.ts). The other control flow
-//     elements are declared in ./flow.ts.
-
-import type { For } from "./index.ts";
+//   - `<For>` (declared in ./index.ts) takes a `fallback`, shown while `each` is empty. The other
+//     control flow elements are declared in ./flow.ts.
 
 // #region Values
 
@@ -651,8 +648,6 @@ export declare namespace JSX {
   interface IntrinsicAttributes {}
   /** The host elements and their attributes. */
   interface IntrinsicElements extends IntrinsicElementMap {}
-  /** A component's props as JSX checks them: its own, and for `<For>`, a `fallback` too. */
-  type LibraryManagedAttributes<C, P> = C extends typeof For ? P & { fallback?: Child } : P;
 }
 
 // #endregion

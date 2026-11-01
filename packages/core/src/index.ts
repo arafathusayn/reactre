@@ -72,6 +72,8 @@
 
 import { List, Prototype } from "@reactre/dom";
 
+import type { Child } from "./jsx-runtime.ts";
+
 // #region Reactivity core
 
 /** Something an observer reads: a signal, or a selector's key. */
@@ -1288,13 +1290,13 @@ function at(parent: Element): Text {
 }
 
 /**
- * `<For each key>`: a keyed list; compiled away, so only its type is used.
+ * `<For each key fallback>`: a keyed list; compiled away, so only its type is used.
  * Calling it at runtime throws: the source was not compiled by @reactre/compiler.
  *
  * Rows are keyed by `key`, reused across renders and moved with the fewest
  * DOM moves. A row's markup is built once, when its key first appears; its
  * holes that read only the item are compared when the list renders it again
- * with a new item.
+ * with a new item. `fallback` is shown while `each` is empty.
  *
  * @example
  *   <tbody>
@@ -1306,6 +1308,8 @@ function at(parent: Element): Text {
 export function For<T>(_props: {
   each: readonly T[];
   key: (item: T) => string | number;
+  /** Shown while `each` is empty. */
+  fallback?: Child;
   children: (item: T) => unknown;
 }): unknown {
   throw new Error("reactre: <For> must be compiled by @reactre/compiler");
