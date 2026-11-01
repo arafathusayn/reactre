@@ -76,18 +76,18 @@ export function Loading(props: Props): unknown {
     if (n === end) break;
   }
   nodes.push(anchor);
-  let live = true;
-  onCleanup(() => {
-    live = false;
-    streamed.delete(id);
-  });
+  // Gone before its content comes, the boundary is not hydrated.
+  onCleanup(() => streamed.delete(id));
   streamed.set(id, () => {
     streamed.delete(id);
-    if (!live) return;
     // The swap put the content, a slot's pair, where the fallback was: just before the anchor.
-    const start = __open(anchor.previousSibling!);
-    const got = __claim(start, () => __Owned.within(own, () => build(props, false)), "a <Loading>");
-    for (const n of got as Node[]) anchor.parentNode!.insertBefore(n, anchor);
+    const p = anchor.parentNode!,
+      sent: Node[] = [];
+    for (let n = __open(anchor.previousSibling!); n !== anchor; n = n.nextSibling!) sent.push(n);
+    const got = __claim(sent[0]!, () => __Owned.within(own, () => build(props, false)), "a <Loading>") as Node[];
+    for (const n of got) p.insertBefore(n, anchor);
+    // What the swap put in and the boundary did not claim (all of it, after a mismatch) goes.
+    for (const n of sent) if (!got.includes(n) && n.parentNode === p) p.removeChild(n);
   });
   return nodes;
 }

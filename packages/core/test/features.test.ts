@@ -77,6 +77,9 @@
 //   actions   an action with an optimistic value, which reverts when it ends.
 //   index     a <For keyed={false}>, whose rows are by position.
 //   dev       jfb with the development build (the core's index.ts as it is).
+//   hydrate   the plain app hydrating its server-rendered HTML (@reactre/core/features/hydrate),
+//             bundled with the compiler's `hydrate` option: what hydration adds. Every other
+//             profile is bundled without it and ships none of hydration's code.
 //
 // The size budgets live in ../sizes.json. When a change is worth its bytes, record the new sizes:
 //
@@ -86,7 +89,7 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { gzipSync } from "node:zlib";
 
 import { reactreCompiler } from "@reactre/compiler";
-import { FakeElement, installFakeDocument } from "@reactre/testdom";
+import { FakeElement, FakeEvent, installFakeDocument } from "@reactre/testdom";
 import type { BunPlugin } from "bun";
 
 import { stripAsync, withoutAsync } from "../src/withoutAsync.ts";
@@ -104,9 +107,17 @@ const budgets = Bun.fileURLToPath(new URL("../sizes.json", import.meta.url));
  * stripped of its async code whatever the app imports; with `dev`, it is the development build,
  * index.ts as it is.
  */
-async function bundle(name: string, src: string, minify = true, stripped = false, dev = false): Promise<string> {
+async function bundle(
+  name: string,
+  src: string,
+  minify = true,
+  stripped = false,
+  dev = false,
+  hydrate = false,
+): Promise<string> {
   const entry = `${scratch}/${name}.tsx`;
   await Bun.write(entry, src);
+  const compiler = hydrate ? reactreCompiler({ hydrate: true }) : reactreCompiler();
   const r = await Bun.build({
     entrypoints: [entry],
     format: "iife",
@@ -115,7 +126,7 @@ async function bundle(name: string, src: string, minify = true, stripped = false
     // The packages' sources, as the repository's own builds resolve them.
     conditions: ["reactre-source"],
     // Bun loads a file with the first plugin's onLoad that returns it.
-    plugins: stripped ? [withoutAsync, reactreCompiler()] : dev ? [asIs, reactreCompiler()] : [reactreCompiler()],
+    plugins: stripped ? [withoutAsync, compiler] : dev ? [asIs, compiler] : [compiler],
   });
   if (!r.success) throw new Error(r.logs.join("\n"));
   return r.outputs[0]!.text();
@@ -232,6 +243,30 @@ const apps = {
     }
     render(App, root);
     globalThis.api = { setA, setB };
+  `,
+  /**
+   * The plain app hydrating the HTML @reactre/core/server renders of it with `hydrate: true`,
+   * bundled with the compiler's `hydrate` option.
+   */
+  hydrate: `
+    import { batch, For, selector, signal } from "@reactre/core";
+    import { hydrate } from "@reactre/core/features/hydrate";
+    const [rows, setRows] = signal([{ id: 1, label: "a" }, { id: 2, label: "b" }]);
+    const [sel, setSel] = signal(0);
+    const isSel = selector(sel);
+    function App() {
+      return (
+        <ul>
+          <For each={rows()} key={(r) => r.id}>
+            {(r) => <li class={isSel(r.id) ? "on" : ""}><a onClick={() => setSel(r.id)}>{r.label}</a></li>}
+          </For>
+        </ul>
+      );
+    }
+    root.innerHTML = '<ul><!--[--><li class=""><a>a</a></li><li class=""><a>b</a></li><!--]--></ul>';
+    const page = root.firstChild;
+    hydrate(App, root);
+    globalThis.api = { setRows, setSel, batch, kept: () => root.firstChild === page };
   `,
   /** The same row with the feature imported by the app. */
   imported: `
@@ -859,6 +894,33 @@ describe("development build", () => {
   });
 });
 
+describe("hydration", () => {
+  test("off: an app built without the `hydrate` option ships none of its code", async () => {
+    for (const name of ["plain", "slot", "show", "context", "errors", "async"] as const) {
+      const code = await bundle(name, apps[name], false);
+      for (const s of ["function __hclone", "function claimTree", "rr:e:", "$rrh"]) expect(code).not.toContain(s);
+    }
+  });
+
+  test("on: the plain app keeps the server's nodes, and its rows, selector and handlers work", async () => {
+    const code = await bundle("hydrate", apps.hydrate, false, false, false, true);
+    expect(code).toContain("function claimTree");
+    expect(code).not.toContain("HYDRATION_MISMATCH");
+    const { root, api } = run(await bundle("hydrate", apps.hydrate, true, false, false, true));
+    expect(api.kept!()).toBe(true);
+    const lis = (root.firstChild as FakeElement).childNodes.filter((n) => n.nodeType === 1) as FakeElement[];
+    expect(lis.map(text)).toEqual(["a", "b"]);
+    (lis[1]!.firstChild as FakeElement).dispatchEvent(new FakeEvent("click"));
+    expect(lis.map((li) => li.className)).toEqual(["", "on"]);
+    api.setRows!([
+      { id: 2, label: "b" },
+      { id: 3, label: "c" },
+    ]);
+    expect(text(root)).toBe("bc");
+    expect((root.firstChild as FakeElement).childNodes.includes(lis[1]!)).toBe(true);
+  });
+});
+
 describe("sizes", () => {
   test("each profile stays within its gzip budget", async () => {
     const jfb = Bun.fileURLToPath(new URL("../../../apps/jfb/app/reactre.tsx", import.meta.url));
@@ -892,6 +954,8 @@ describe("sizes", () => {
     for (const name of ["async", "actions"] as const) measure(name, await bundle(name, apps[name]));
     // The benchmark app with the development build, as a dev server serves it.
     measure("dev", await bundle("dev", await Bun.file(jfb).text(), true, false, true));
+    // The plain app hydrating, with the compiler's `hydrate` option.
+    measure("hydrate", await bundle("hydrate", apps.hydrate, true, false, false, true));
     if (process.env.UPDATE_SIZES) {
       await Bun.write(budgets, JSON.stringify(sizes, null, 2) + "\n");
       return;

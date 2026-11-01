@@ -13,7 +13,7 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 
-import { compileSource, ReactreCompileError } from "@reactre/compiler";
+import { compileSource, ReactreCompileError, reactreCompiler } from "@reactre/compiler";
 import { FakeComment, FakeElement, FakeEvent, type FakeNode, FakeText, installFakeDocument } from "@reactre/testdom";
 
 import * as asyncApi from "../src/features/async.ts";
@@ -180,6 +180,15 @@ describe("templates", () => {
     expect((find(root, "textarea") as unknown as { value: string }).value).toBe("v2");
     expect(kept(root, before)).toBe(true);
     expect((p.app as unknown as { ran: number[] }).ran).toEqual([1, 2]);
+  });
+
+  test("a constant value the page does not have is written", () => {
+    const p = page<{ App: () => unknown }>(
+      `const App = () => <p title={"t" + 1} class={"c" + 1}>{"x" + 1}</p>; return { App };`,
+      (h) => h.replace('title="t1"', 'title="other"').replace('class="c1"', 'class="z"').replace("x1", "y"),
+    );
+    expect(shown(p.root)).toBe('<p class="c1" title="t1">x1</p>');
+    expect(kept(p.root, p.before)).toBe(true);
   });
 
   test("isHydrating is true while hydrate runs; the disposer stops the view and empties the root", () => {
@@ -508,6 +517,356 @@ describe("the runtime's helpers", () => {
     expect(hydrateApi.__close(root.firstChild as unknown as Node)).toBe(root.lastChild as unknown as Node);
     expect(hydrateApi.__open(root.lastChild as unknown as Node)).toBe(root.firstChild as unknown as Node);
     expect(() => hydrateApi.__close(root.lastChild as unknown as Node)).toThrow("does not match");
+    expect(() => hydrateApi.__open(root.firstChild as unknown as Node)).toThrow("does not match");
     expect(new FakeComment("x").data).toBe("x");
+  });
+
+  test("__claim: a mismatch runs it again afresh, and warns; anything else thrown goes on; a string the page lacks is new text", () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const root = new FakeElement("DIV");
+    root.innerHTML = "<i></i>tail";
+    const t = core.__template(["<b>", "</b>"], [-1]);
+    const got = hydrateApi.__claim(root.firstChild as unknown as Node, () => hydrateApi.__hclone(t, ["x"]), "a test");
+    expect((got as unknown as FakeElement).tagName).toBe("B");
+    expect(String(warn.mock.calls[0]![0])).toContain("where a test renders something else");
+    warn.mockRestore();
+    expect(() =>
+      hydrateApi.__claim(
+        null,
+        () => {
+          throw new Error("other");
+        },
+        "",
+      ),
+    ).toThrow("other");
+    hydrateApi.__seek(root.lastChild as unknown as Node);
+    const [text] = hydrateApi.__frag(["head"]);
+    expect([text!.textContent, root.lastChild!.textContent]).toEqual(["head", "tail"]);
+    hydrateApi.__seek(null);
+  });
+});
+
+describe("the hydrate builds of <Loading> and <Errored>", () => {
+  // The unbundled runtime builds a boundary's content with the core's `__frag`, which moves what it
+  // claims: these check what each boundary does with the server's markers, and the built apps
+  // below check that the nodes stay where they are.
+  const P = core.__template(["<p>", "</p>"], [-1]);
+  /** A view that claims (or clones) a <p> with text `s`. */
+  const para = (s: string) => () => hydrateApi.__hclone(P, [s]);
+
+  /** A root in the body with `html`. */
+  const rooted = (html: string): FakeElement => {
+    const root = new FakeElement("DIV");
+    body.appendChild(root);
+    root.innerHTML = html;
+    return root;
+  };
+
+  test("<Loading>: not hydrating, the core's; over children the server rendered, they are claimed", () => {
+    const L = hydrateAsync.Loading as (p: object) => unknown;
+    expect((L({ children: "x" }) as FakeNode[]).map((n) => n.textContent).join("")).toBe("x");
+    const root = rooted("<p>ok</p>");
+    const p = root.firstChild;
+    hydrateApi.hydrate(() => L({ fallback: "wait", children: para("ok") }), root as unknown as Element);
+    expect(shown(root)).toBe("<p>ok</p>");
+    expect(find(root, "p")).toBe(p);
+  });
+
+  test("<Loading>: while it hydrates, what waits for a value does not show its fallback; after, it does", async () => {
+    const L = hydrateAsync.Loading as (p: object) => unknown;
+    const pending = () => asyncApi.memo(() => new Promise<string>(() => {}));
+    const root = rooted("<p>ok</p>");
+    const read = pending();
+    hydrateApi.hydrate(
+      () =>
+        L({
+          fallback: "wait",
+          children: () => [para("ok")(), core.__frag([() => read()])],
+        }),
+      root as unknown as Element,
+    );
+    await Promise.resolve();
+    expect(shown(root)).toBe("<p>ok</p>");
+    const fresh = new FakeElement("DIV");
+    const later = pending();
+    core.render(() => L({ fallback: "wait", children: () => later() }), fresh as unknown as Element);
+    await Promise.resolve();
+    expect(shown(fresh)).toBe("wait");
+  });
+
+  test("<Loading> whose fallback renderToString wrote is built afresh", () => {
+    const root = rooted("<!--rr:b--><!--[--><i>wait</i><!--]--><!--/rr:b-->");
+    const i = find(root, "i");
+    hydrateApi.hydrate(
+      () => (hydrateAsync.Loading as (p: object) => unknown)({ fallback: "wait", children: para("ok") }),
+      root as unknown as Element,
+    );
+    expect(shown(root)).toBe("<p>ok</p>");
+    expect(i.parentNode).toBe(null);
+  });
+
+  test("<Loading> a stream has not sent: the server's fallback stays until the swap, then its content is claimed", () => {
+    const L = hydrateAsync.Loading as (p: object) => unknown;
+    const $rrh = (globalThis as unknown as { $rrh: (i: number) => void }).$rrh;
+    const root = rooted("<!--rr:b3--><!--[--><i>wait</i><!--]--><!--/rr:b3-->");
+    const i = find(root, "i");
+    hydrateApi.hydrate(() => L({ fallback: "wait", children: para("ok") }), root as unknown as Element);
+    expect(shown(root)).toBe("<i>wait</i>");
+    expect(find(root, "i")).toBe(i);
+    // The swap: the content where the fallback and its markers were.
+    const tpl = rooted("<!--[--><p>ok</p><!--]-->");
+    const p = find(tpl, "p");
+    const start = root.firstChild!;
+    let end = start;
+    while (end.nodeType !== 8 || (end as FakeComment).data !== "/rr:b3") end = end.nextSibling!;
+    for (const x of [...tpl.childNodes]) root.insertBefore(x, start);
+    while (start.nextSibling !== end) root.removeChild(start.nextSibling!);
+    root.removeChild(start);
+    root.removeChild(end);
+    // Here the core's `__frag` builds the content, which does not claim a pair: a mismatch, so the
+    // content is built afresh in place of the swapped one (the built apps below claim it).
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    $rrh(3);
+    expect(String(warn.mock.calls[0]![0])).toContain("where a <Loading> renders something else");
+    warn.mockRestore();
+    expect(shown(root)).toBe("<p>ok</p>");
+    expect(p.parentNode).toBe(null);
+    // Once hydrated, and for a boundary disposed before its content came, the swap does nothing.
+    $rrh(3);
+    const gone = rooted("<!--rr:b4--><i>wait</i><!--/rr:b4-->");
+    hydrateApi.hydrate(() => L({ fallback: "wait", children: para("ok") }), gone as unknown as Element)();
+    $rrh(4);
+    expect(gone.firstChild).toBe(null);
+  });
+
+  test("<Errored>: without the server's marker, the core's; with it, the fallback claims the server's, and reset builds the children", () => {
+    const E = hydrateErrors.Errored as (p: object) => unknown;
+    const root = rooted("<p>ok</p>");
+    hydrateApi.hydrate(() => E({ fallback: "no", children: para("ok") }), root as unknown as Element);
+    expect(shown(root)).toBe("<p>ok</p>");
+    const page = rooted("<!--[--><!--rr:e:TypeError:bad%3A%20it--><p>TypeError bad: it</p><!--]-->");
+    const p = find(page, "p");
+    let reset!: () => void, seen: unknown;
+    hydrateApi.hydrate(
+      () =>
+        E({
+          fallback: (e: Error, r: () => void) => {
+            reset = r;
+            seen = e;
+            return para(`${e.name} ${e.message}`)();
+          },
+          children: para("fixed"),
+        }),
+      page as unknown as Element,
+    );
+    expect(shown(page)).toBe("<p>TypeError bad: it</p>");
+    expect(find(page, "p")).toBe(p);
+    expect(seen).toBeInstanceOf(Error);
+    expect((seen as Error).name).toBe("TypeError");
+    reset();
+    expect(shown(page)).toBe("<p>fixed</p>");
+    // A fallback that is not a function, shown again after the first.
+    const other = rooted("<!--[--><!--rr:e:Error:x--><b>no</b><!--]-->");
+    let fail = true;
+    hydrateApi.hydrate(
+      () =>
+        E({
+          fallback: "no",
+          get children() {
+            if (fail) throw new Error("again");
+            return "ok";
+          },
+        }),
+      other as unknown as Element,
+    );
+    expect(shown(other)).toContain("no");
+    fail = false;
+  });
+});
+
+describe("built apps: a context, <Errored> and <Loading>", () => {
+  const scratch = Bun.fileURLToPath(new URL("../.cache/hydrate", import.meta.url));
+
+  /**
+   * Bundle `entry` (a module body, with `app.tsx` of `APP` beside it) as the compiler's Bun plugin
+   * bundles it with `options`, then run it: it sets what the test drives on `globalThis`.
+   */
+  async function run(name: string, entry: string, options: { server?: boolean; hydrate?: boolean }): Promise<void> {
+    await Bun.write(`${scratch}/app.tsx`, APP);
+    await Bun.write(`${scratch}/${name}.tsx`, entry);
+    const r = await Bun.build({
+      entrypoints: [`${scratch}/${name}.tsx`],
+      format: "iife",
+      target: "browser",
+      conditions: ["reactre-source"],
+      plugins: [reactreCompiler(options)],
+    });
+    if (!r.success) throw new Error(r.logs.join("\n"));
+    new Function(await r.outputs[0]!.text())();
+  }
+
+  /** The app: a provider, an <Errored> whose child throws until it is fixed, and two <Loading>s. */
+  const APP = `
+    import { signal } from "@reactre/core";
+    import { Loading, memo } from "@reactre/core/features/async";
+    import { createContext, useContext } from "@reactre/core/features/context";
+    import { Errored } from "@reactre/core/features/errors";
+    const Theme = createContext("light");
+    let settle;
+    export const resolve = (v) => settle(v);
+    // Each render's own data, which the test gives.
+    const Word = () => {
+      const word = memo(() => new Promise((ok) => (settle = ok)));
+      return <p class="word">{word()}</p>;
+    };
+    export const [n, setN] = signal(1);
+    export const [broken, setBroken] = signal(true);
+    export const resets = [];
+    const Label = () => <b class={useContext(Theme)}>{n()}</b>;
+    const Maybe = () => {
+      if (broken()) throw new TypeError("bad: thing");
+      return <s>fixed</s>;
+    };
+    export const App = () => (
+      <main>
+        <Theme value="dark"><Label /></Theme>
+        <Errored fallback={(err, reset) => (resets.push(reset), <p class="error">{err.name} {err.message}</p>)}>
+          <Maybe />
+        </Errored>
+        <Loading fallback={<i>wait</i>}><p>sync {n()}</p></Loading>
+        <Loading fallback={<i>loading</i>}><Word /></Loading>
+      </main>
+    );
+  `;
+
+  /** What the server bundle sets. */
+  interface Server {
+    html(): string;
+    stream(): ReadableStream<Uint8Array>;
+    whole(): Promise<string>;
+    resolve(v: string): void;
+  }
+  /** What the client bundle sets, once it has hydrated `root`. */
+  interface Client {
+    resolve(v: string): void;
+    setN(n: number): void;
+    setBroken(b: boolean): void;
+    resets: (() => void)[];
+  }
+
+  let srv: Server;
+  beforeAll(async () => {
+    await run(
+      "server",
+      `
+      import { renderToStream, renderToString, renderToStringAsync } from "@reactre/core/server";
+      import { App, resolve } from "./app.tsx";
+      globalThis.srv = {
+        html: () => renderToString(App, { hydrate: true }),
+        stream: () => renderToStream(App, { hydrate: true }),
+        whole: () => renderToStringAsync(App, { hydrate: true }),
+        resolve,
+      };
+      `,
+      { server: true },
+    );
+    srv = (globalThis as unknown as { srv: Server }).srv;
+  });
+
+  /** A root in the body with `html`, hydrated by a fresh client bundle. */
+  async function hydrated(html: string): Promise<{ root: FakeElement; before: FakeNode[]; cli: Client }> {
+    const root = new FakeElement("DIV");
+    body.appendChild(root);
+    root.innerHTML = html;
+    const before = all(root).filter((n) => n.nodeType !== 8);
+    (globalThis as unknown as { root: FakeElement }).root = root;
+    await run(
+      "client",
+      `
+      import { hydrate } from "@reactre/core/features/hydrate";
+      import { App, resets, resolve, setBroken, setN } from "./app.tsx";
+      hydrate(App, globalThis.root);
+      globalThis.cli = { resolve, resets, setBroken, setN };
+      `,
+      { hydrate: true },
+    );
+    return { root, before, cli: (globalThis as unknown as { cli: Client }).cli };
+  }
+
+  const settle = () => new Promise((ok) => setTimeout(ok, 0));
+
+  test("renderToString: the provider's content, <Errored>'s fallback and a ready <Loading> are claimed; one that waited builds afresh", async () => {
+    const html = srv.html();
+    expect(html).toContain("<!--rr:e:TypeError:bad%3A%20thing-->");
+    expect(html).toContain("<!--rr:b--><!--[--><i>loading</i><!--]--><!--/rr:b-->");
+    const { root, before, cli } = await hydrated(html);
+    const [b, error, sync] = [find(root, "b"), find(root, "p"), all(root).filter((x) => x instanceof FakeElement)[3]];
+    expect([b, error, sync].every((x) => before.includes(x!))).toBe(true);
+    expect(shown(root)).toBe(
+      '<main><b class="dark">1</b><p class="error">TypeError bad: thing</p><p>sync 1</p><i>loading</i></main>',
+    );
+    // The waiting boundary's fallback is the client's own.
+    expect(before.includes(find(root, "i"))).toBe(false);
+    cli.resolve("word");
+    await settle();
+    expect(shown(root)).toBe(
+      '<main><b class="dark">1</b><p class="error">TypeError bad: thing</p><p>sync 1</p><p class="word">word</p></main>',
+    );
+    cli.setN(2);
+    expect(shown(root)).toContain('<b class="dark">2</b>');
+    expect(shown(root)).toContain("<p>sync 2</p>");
+    expect(find(root, "b")).toBe(b);
+    // `reset` builds the children afresh.
+    cli.setBroken(false);
+    cli.resets[0]!();
+    expect(shown(root)).toBe('<main><b class="dark">2</b><s>fixed</s><p>sync 2</p><p class="word">word</p></main>');
+  });
+
+  test("renderToStringAsync: every boundary's children are claimed, and keep the server's text until the client's data comes", async () => {
+    const whole = srv.whole();
+    srv.resolve("server");
+    const html = await whole;
+    const { root, before, cli } = await hydrated(html);
+    expect(kept(root, before)).toBe(true);
+    expect(shown(root)).toContain('<p class="word">server</p>');
+    cli.resolve("client");
+    await settle();
+    expect(shown(root)).toContain('<p class="word">client</p>');
+    expect(kept(root, before)).toBe(true);
+  });
+
+  test("renderToStream: a boundary the stream has not sent keeps the server's fallback, and hydrates when it is swapped in", async () => {
+    const reader = srv.stream().getReader(),
+      dec = new TextDecoder();
+    const shell = dec.decode((await reader.read()).value);
+    expect(shell).toContain("<!--rr:b0--><!--[--><i>loading</i><!--]--><!--/rr:b0-->");
+    const { root, before, cli } = await hydrated(shell);
+    expect(kept(root, before)).toBe(true);
+    expect(shown(root)).toContain("<i>loading</i>");
+    srv.resolve("streamed");
+    const rest = dec.decode((await reader.read()).value);
+    expect(rest).toContain("self.$rrh&&self.$rrh(i)");
+    // The swap script, as the browser runs it: the template's content in place of the fallback.
+    const tpl = new FakeElement("DIV");
+    tpl.innerHTML = /<template id="rr:t0">(.*?)<\/template>/.exec(rest)![1]!;
+    const nodes = all(root);
+    const s = nodes.find((x) => x.nodeType === 8 && (x as FakeComment).data === "rr:b0")!,
+      e = nodes.find((x) => x.nodeType === 8 && (x as FakeComment).data === "/rr:b0")!;
+    const p = s.parentNode!;
+    while (s.nextSibling !== e) p.removeChild(s.nextSibling!);
+    const swapped = [...tpl.childNodes];
+    for (const x of swapped) p.insertBefore(x, s);
+    p.removeChild(s);
+    p.removeChild(e);
+    (globalThis as unknown as { $rrh: (i: number) => void }).$rrh(0);
+    expect(shown(root)).toContain('<p class="word">streamed</p>');
+    const word = all(root).find((x) => x instanceof FakeElement && x.className === "word")!;
+    expect(swapped.includes(word)).toBe(true);
+    cli.resolve("later");
+    await settle();
+    expect(shown(root)).toContain('<p class="word">later</p>');
+    expect(all(root).includes(word)).toBe(true);
+    // A boundary that is gone before its content comes is not hydrated.
+    (globalThis as unknown as { $rrh: (i: number) => void }).$rrh(0);
   });
 });

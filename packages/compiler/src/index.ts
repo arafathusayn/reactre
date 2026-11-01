@@ -1262,7 +1262,9 @@ export class Compiler {
     t.holes.forEach((h, i) => {
       if (h.kind === "value") {
         if (this.changes(h.expr)) {
-          vals.push('""');
+          // Hydrating, the page's value stays until the bind writes one (an async value that is
+          // not ready yet writes none).
+          vals.push(this.hydrate ? "void 0" : '""');
           after.push(`${this.m(h.at)}__rrBind(${id}, ${i}, __n[${i}], () => (${this.value(h)}));`);
         } else vals.push(`(${this.value(h)})`);
         return;

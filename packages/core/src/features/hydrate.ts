@@ -74,7 +74,10 @@ function warnMismatch(what: string): void {
 }
 // #endif
 
-/** How many nodes the page has had claimed: none, after `hydrate`'s view, means it was not compiled to claim. */
+/**
+ * How many times code compiled to claim has run (a template's, a boundary's that reads the
+ * cursor): none, after `hydrate`'s view, means it was not compiled to claim.
+ */
 let claims = 0;
 
 /** What `hydrate` throws for an app whose templates were not compiled to claim. */
@@ -155,6 +158,7 @@ export function isHydrating(): boolean {
 
 /** Internal (@reactre/core/hydrate/*): the cursor, the page's next node to claim; null while nothing hydrates. */
 export function __cursor(): Node | null {
+  claims++;
   return C;
 }
 
@@ -244,7 +248,8 @@ function claimTree(t: Prototype, s: Node | null, out: unknown[], vals: readonly 
     const k = t.kinds[i],
       v = vals[i],
       node = out[i] as Node;
-    if (k === PROP || k === SLOT) continue;
+    // A reactive hole's value is undefined: its bind writes it, and keeps the page's while it waits.
+    if (k === PROP || k === SLOT || v === undefined) continue;
     const str = v == null ? "" : "" + (v as string);
     if (k === TEXT) {
       if ((node as Text).data !== str) t.write(i, node, v);
@@ -323,6 +328,7 @@ export function __htemplate(t: Prototype, two: readonly number[]): Prototype {
  * the cursor, claimed.
  */
 export function __hclone(t: Prototype, vals: readonly unknown[], n?: unknown[]): Element {
+  claims++;
   if (C === null) {
     const r = t.clone(vals);
     if (n !== undefined) t.locate(r, n);
@@ -330,7 +336,6 @@ export function __hclone(t: Prototype, vals: readonly unknown[], n?: unknown[]):
   }
   const r = claimTree(t, C, n ?? [], vals);
   C = r.nextSibling;
-  claims++;
   return r;
 }
 
