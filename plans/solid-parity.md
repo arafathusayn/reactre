@@ -1,17 +1,17 @@
 # Solid 2.0 parity, measured
 
-836 of Solid 2.0's own tests (solid-js 2.0.0-rc.20, [solidjs/solid@5e68925](https://github.com/solidjs/solid/tree/5e68925cc2fd216a9fb06345019e66d5da5c523c)), ported to reactre's API in [`packages/core/test/solid/`](../packages/core/test/solid): **623 pass** (75%), and 213 fail because reactre lacks the capability or behaves differently.
+836 of Solid 2.0's own tests (solid-js 2.0.0-rc.20, [solidjs/solid@5e68925](https://github.com/solidjs/solid/tree/5e68925cc2fd216a9fb06345019e66d5da5c523c)), ported to reactre's API in [`packages/core/test/solid/`](../packages/core/test/solid): **627 pass** (75%), and 209 fail because reactre lacks the capability or behaves differently.
 
 | Area                                                      | Files                        |  Ported |    Pass |     Gap |  Todo |
 | --------------------------------------------------------- | ---------------------------- | ------: | ------: | ------: | ----: |
 | Signals and memos                                         | signals, memo                |      72 |      53 |      19 |     0 |
 | Effects, ownership, timing                                | effects, owner, timing       |      90 |      63 |      27 |     0 |
-| Stores                                                    | store, reconcile, projection |     172 |     134 |      38 |     0 |
+| Stores                                                    | store, reconcile, projection |     172 |     138 |      34 |     0 |
 | Control flow (Show, Switch, For, Repeat, Portal, Dynamic) | show, for, portal            |     172 |     154 |      18 |     0 |
 | Context, errors, components                               | context, errors, component   |      77 |      53 |      24 |     0 |
 | Async, Loading, actions                                   | loading, actions             |     122 |      71 |      51 |     0 |
 | Server rendering, hydration                               | server, hydration            |     131 |      95 |      36 |     0 |
-| **Total**                                                 | 18 files                     | **836** | **623** | **213** | **0** |
+| **Total**                                                 | 18 files                     | **836** | **627** | **209** | **0** |
 
 The top gaps, by the ports they block:
 
@@ -32,7 +32,7 @@ The top gaps, by the ports they block:
 
 `list-functions` (`mapArray`, `repeat`) and most of `render-effects` (`createRenderEffect` with `defer` and `schedule`, `createTrackedEffect`, `onFlush`) landed as feature modules, features/lists and features/effects, and their ports pass. What is left of `render-effects` is `reaction`'s, below.
 
-The other targets this set out to count: `memo-options` 5, `store-path` 0 (done), `hydration` 4, `client-only` 4, `store-alias` 4, `from` 3, and `jsx-props` 0 (no port found JSX in a prop that did not work). [Gaps, by target](#gaps-by-target) lists all 61 targets and their tests.
+The other targets this set out to count: `memo-options` 5, `store-path` 0 (done), `hydration` 4, `client-only` 4, `from` 3, `store-alias` 0 (done: the compiler follows a store through a local, a box, a function's result and a prop), and `jsx-props` 0 (no port found JSX in a prop that did not work: the ports pass JSX in `fallback`. A component's `{props.header}` given JSX was a text hole; it is inserted now, and a file compiled alone inserts every prop hole of a component it exports, as it may be passed JSX). [Gaps, by target](#gaps-by-target) lists all 61 targets and their tests.
 
 ## What was read
 
@@ -100,7 +100,7 @@ Parity here means Solid's capabilities, not its names: reactre keeps its own (`s
 | `snapshot`, `deep`, `merge`, `omit`          | `snapshot`, `deep`, `merge`, `omit`                    | feature `store` |                                                                                                       |
 | `storePath`, `storePath.DELETE`              | `path`, `path.DELETE`                                  | feature `store` |                                                                                                       |
 | `$PROXY`, `$TRACK`, `isWrappable`, `flatten` | missing                                                |                 |                                                                                                       |
-| (compiler) store reads in JSX                | the compiler binds reads it can follow to a store root | core, compiled  | A read through an alias, a box, a function's result or `props.list` is written once (README's table). |
+| (compiler) store reads in JSX                | the compiler binds reads it can follow to a store root | core, compiled  | Reads through an alias, a box, a function's result or `props.list` follow the store (README's table). |
 
 ### solid-js: components, context, control flow
 
@@ -166,8 +166,8 @@ Each gap test names a target: what reactre would need for it to pass. The first 
 | `client-only`                                                                                                                                                                                         |      4 | `clientOnly`                                                                                                                                                                     |
 | `hydration`                                                                                                                                                                                           |      4 | `<NoHydration>`, a boundary's error serialized for the client, a page without the markers, a class object read from a signal                                                     |
 | `for-placement`                                                                                                                                                                                       |      0 | done: `<For>`/`<Repeat>` as a component's whole view, or anywhere content goes (features/for); its 30 ports (3 Solid sources × 10 permutations) pass                             |
-| `jsx-props`                                                                                                                                                                                           |      0 | none found: JSX in `fallback` and other props rendered in every port that had it                                                                                                 |
-| `store-alias`                                                                                                                                                                                         |      4 | a store read through an alias, a box, a function's result, `props.list`                                                                                                          |
+| `jsx-props`                                                                                                                                                                                           |      0 | none found: JSX in `fallback` and other props rendered in every port that had it; `{props.x}` given JSX is inserted now                                                          |
+| `store-alias`                                                                                                                                                                                         |      0 | done: a store read through an alias, a box, a function's result, `props.list` passes                                                                                             |
 | `fold`                                                                                                                                                                                                |      0 | done: `memo(fn, { lazy })` passes; the two `signal(v, { unobserved })` ports fail on timing alone (`unobserved-timing`)                                                          |
 | `row-shape`                                                                                                                                                                                           |      0 | done: a row that is text, a fragment, an array, `undefined` or an element child (features/for); its 58 ports pass                                                                |
 | `for-index`                                                                                                                                                                                           |      0 | done: a keyed row function of two parameters gets an index accessor                                                                                                              |
@@ -382,10 +382,6 @@ Landed in the development build, as Solid's are in its: an autorun's function an
 - loading.test.ts, refresh() resolves with undefined, not the new value: "sync source: resolves with the re-executed value"; "async source: resolves with the landed value; the window stays quiet".
 - loading.test.ts, an ignored refresh() whose re-ask fails is an unhandled rejection: "fire-and-forget refresh with a failing re-ask surfaces no unhandled rejection".
 - loading.test.ts, refresh() of a plain signal's read throws TypeError: "plain signal accessor: refresh is a no-op — already quiescent, resolves with the value".
-
-#### `store-alias` (4)
-
-- store.test.ts, the compiler cannot follow the read to a store, so the hole is written once: "a store's array read through a local alias"; "a store read through a box"; "a store's array returned by a function, and its rows' reads"; "a store's array passed as props.list".
 
 #### `transition-scope` (4)
 

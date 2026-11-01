@@ -8,6 +8,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:tes
 import { compileSource } from "@reactre/compiler";
 import { FakeElement, installFakeDocument } from "@reactre/testdom";
 
+import * as forApi from "../src/features/for.ts";
 import { createRoot } from "../src/features/owner.ts";
 import * as store from "../src/features/store.ts";
 import { createProjection, createStore, deep, merge, omit, path, reconcile, snapshot } from "../src/features/store.ts";
@@ -15,14 +16,14 @@ import * as core from "../src/index.ts";
 import { batch, effect, signal } from "../src/index.ts";
 
 /** What a source's imports of @reactre/core and of its store feature bind to. */
-const runtime = { ...core, ...store };
+const runtime = { ...core, ...store, ...forApi };
 
 beforeEach(installFakeDocument);
 
 /** Compile a TSX module body ending in `return { ... }` and run it, `root` in scope. */
 function run<T>(src: string, root: FakeElement): T {
   const js = compileSource(src)
-    .replace(/^import \{([^}]*)\} from "@reactre\/core(?:\/features\/store)?";$/gm, (_, names: string) =>
+    .replace(/^import \{([^}]*)\} from "@reactre\/core(?:\/features\/(?:store|for))?";$/gm, (_, names: string) =>
       names
         .split(",")
         .map((n) => {
@@ -1015,5 +1016,39 @@ describe("in compiled TSX", () => {
     // holes that read its item. List's one caller passes it the store's array.
     expect(texts().slice(0, 6)).toEqual(["2", "2", "A", "Ab", "Ab", "Ab"]);
     expect(list()).toEqual(["Ab", "Ab"]);
+  });
+
+  test("a list that is a component's whole view, or whose rows are not one element, follows a store passed as a prop or read through a local", () => {
+    // Each list here is features/for's `__each`: List's is its whole view, its rows fragments;
+    // Tag is used as a value, so its callers cannot all be seen and its props may be stores.
+    const root = box();
+    const api = run<{ set: store.StoreSetter<{ todos: Todo[] }> }>(
+      `
+      import { For, render } from "@reactre/core";
+      import { createStore } from "@reactre/core/features/store";
+      const [s, set] = createStore({ todos: [{ id: 1, title: "a", done: false }] });
+      const todos = s.todos;
+      function List(props) { return <For each={props.todos} key={(t) => t.id}>{(t) => <>{t.title}<b /></>}</For>; }
+      function Tag(props) { return <For each={props.items} key={(t) => t.id}>{(t) => t.title}</For>; }
+      const tags = [Tag];
+      render(() => (
+        <div>
+          <p><List todos={s.todos} /></p>
+          <p><Tag items={s.todos} /></p>
+          <p>{1}<For each={todos} key={(t) => t.id}>{(t) => [t.title, "!"]}</For></p>
+        </div>
+      ), root);
+      return { set };
+      `,
+      root,
+    );
+    const div = root.firstChild as FakeElement;
+    const texts = () => (div.childNodes as FakeElement[]).map((n) => n.textContent);
+    expect(texts()).toEqual(["a", "a", "1a!"]);
+    api.set((d) => {
+      d.todos[0]!.title = "A";
+      d.todos.push({ id: 2, title: "b", done: false });
+    });
+    expect(texts()).toEqual(["Ab", "Ab", "1A!b!"]);
   });
 });

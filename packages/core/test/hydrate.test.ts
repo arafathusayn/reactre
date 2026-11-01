@@ -22,6 +22,7 @@ import { __hooks } from "../src/features/async.ts";
 import { configureClientErrors } from "../src/features/errors.ts";
 import * as hydrateApi from "../src/features/hydrate.ts";
 import * as indexApi from "../src/features/index.ts";
+import * as storeApi from "../src/features/store.ts";
 import * as hydrateAsync from "../src/hydrate/async.ts";
 import * as hydrateErrors from "../src/hydrate/errors.ts";
 import * as hydrateFor from "../src/hydrate/for.ts";
@@ -55,6 +56,7 @@ const serverModules: Record<string, unknown> = {
   "@reactre/core/server/async": serverAsync,
   "@reactre/core/server/errors": serverErrors,
   "@reactre/core/features/hydrate": hydrateApi,
+  "@reactre/core/features/store": storeApi,
 };
 /** What a source compiled for hydration imports. */
 const clientModules: Record<string, unknown> = {
@@ -66,6 +68,7 @@ const clientModules: Record<string, unknown> = {
   "@reactre/core/hydrate/errors": hydrateErrors,
   "@reactre/core/hydrate/for": hydrateFor,
   "@reactre/core/server": { isServer: false },
+  "@reactre/core/features/store": storeApi,
 };
 
 /** Run compiled module `js` (a body ending in `return { ... }`), its imports bound to `modules`. */
@@ -427,6 +430,77 @@ describe("lists", () => {
     expect(shown(q.root)).toBe("<main>x</main>");
     expect(String(warn.mock.calls[1]![0])).toContain('the page has the text "y" where a slot renders something else');
     warn.mockRestore();
+  });
+});
+
+describe("stores and props given JSX", () => {
+  test("what is made of a store, a store passed as a prop and JSX passed as a prop are the server's nodes, and update", () => {
+    // List and Card are called only here: the file sees what they are passed. Tag is used as a
+    // value too, so its callers cannot all be seen: its props are taken for maybe a store and
+    // maybe JSX, as an exported component's are in a file compiled alone.
+    const p = page<{ App: () => unknown; setStore: (f: (s: any) => void) => void }>(`
+      import { For } from "@reactre/core";
+      import { createStore } from "@reactre/core/features/store";
+      const [store, setStore] = createStore({ todos: [{ id: 1, title: "a" }, { id: 2, title: "b" }], user: { name: "Ann" } });
+      const todos = store.todos;
+      function useUser() { return store.user; }
+      function List(props) { return <ul><For each={props.todos} key={(t) => t.id}>{(t) => <li>{t.title}</li>}</For></ul>; }
+      function Card(props) { return <section>{props.header}<p>{useUser().name}</p></section>; }
+      function Tag(props) { return <ol><For each={props.items} key={(t) => t.id}>{(t) => <li>{t.title}</li>}</For>{props.label}</ol>; }
+      const App = () => (
+        <div><b>{todos.length}</b><List todos={store.todos} /><Card header={<h1>Hi</h1>} /><Tag items={store.todos} label={<em>e</em>} /></div>
+      );
+      return { App, setStore, Tag };
+    `);
+    const { root, before, app } = p;
+    const html =
+      "<div><b>2</b><ul><li>a</li><li>b</li></ul><section><h1>Hi</h1><p>Ann</p></section><ol><li>a</li><li>b</li><em>e</em></ol></div>";
+    expect(shown(root)).toBe(html);
+    expect(kept(root, before)).toBe(true);
+    const tag = (name: string): FakeNode => before.find((n) => n instanceof FakeElement && n.tagName === name)!;
+    app.setStore((s) => {
+      s.todos.push({ id: 3, title: "c" });
+      s.todos[0].title = "A";
+      s.user.name = "Bo";
+    });
+    expect(shown(root)).toBe(
+      "<div><b>3</b><ul><li>A</li><li>b</li><li>c</li></ul><section><h1>Hi</h1><p>Bo</p></section><ol><li>A</li><li>b</li><li>c</li><em>e</em></ol></div>",
+    );
+    // The server's nodes for the JSX passed as props are kept through the update.
+    expect(find(root, "h1") as FakeNode).toBe(tag("H1"));
+    expect(find(root, "em") as FakeNode).toBe(tag("EM"));
+  });
+
+  test("a list that is a component's whole view, or whose rows are not one element, over a store passed as a prop or a local of one", () => {
+    // Each list is features/for's `__each` (hydrate/for here): List's is its whole view, its rows
+    // fragments; Tag is used as a value, so its props may be stores.
+    const p = page<{ App: () => unknown; setStore: (f: (s: any) => void) => void }>(`
+      import { For } from "@reactre/core";
+      import { createStore } from "@reactre/core/features/store";
+      const [store, setStore] = createStore({ todos: [{ id: 1, title: "a" }, { id: 2, title: "b" }] });
+      const todos = store.todos;
+      function List(props) { return <For each={props.todos} key={(t) => t.id}>{(t) => <><i>{t.title}</i>!</>}</For>; }
+      function Tag(props) { return <For each={props.items} key={(t) => t.id}>{(t) => <u>{t.title}</u>}</For>; }
+      const App = () => (
+        <div><p><List todos={store.todos} /></p><p><Tag items={store.todos} /></p><p><b /><For each={todos} key={(t) => t.id}>{(t) => <s>{t.title}</s>}</For></p></div>
+      );
+      return { App, setStore, Tag };
+    `);
+    const { root, before, app } = p;
+    expect(shown(root)).toBe(
+      "<div><p><i>a</i>!<i>b</i>!</p><p><u>a</u><u>b</u></p><p><b></b><s>a</s><s>b</s></p></div>",
+    );
+    expect(kept(root, before)).toBe(true);
+    const first = find(root, "u");
+    app.setStore((s) => {
+      s.todos.push({ id: 3, title: "c" });
+      s.todos[0].title = "A";
+    });
+    expect(shown(root)).toBe(
+      "<div><p><i>A</i>!<i>b</i>!<i>c</i>!</p><p><u>A</u><u>b</u><u>c</u></p><p><b></b><s>A</s><s>b</s><s>c</s></p></div>",
+    );
+    // The server's rows are kept, and written in place.
+    expect(find(root, "u")).toBe(first);
   });
 });
 

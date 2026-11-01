@@ -549,6 +549,74 @@ describe("stores across a program", () => {
     const info = scanModule(js(`${STORE} const [s] = createStore({}); import { t } from "./x";`));
     expect([...info.stores]).toEqual(["s"]);
   });
+
+  test("a hydrate build and a server build see the same: what a store is made of, and props passed a store or JSX", () => {
+    const list = `
+      import { For } from "@reactre/core";
+      export function List(props) { return <ul><For each={props.todos} key={(t) => t.id}>{(t) => <li>{t.title}</li>}</For>{props.header}</ul>; }
+    `;
+    const main = `${STORE} import { List } from "./list";
+      const [s] = createStore({ todos: [], n: 0 });
+      const box = { s };
+      export const A = () => <div><b>{box.s.n}</b><List todos={s.todos} header={<h1 />} /></div>;
+      export const B = () => <List todos={[]} header="plain" />;`;
+    const p = program({ list, main });
+    const plain = program({
+      list,
+      main: `import { List } from "./list"; export const B = () => <List todos={[]} header="x" />;`,
+    });
+    const hyd = (o: object) => compileJs(js(list), { ...o, hydrate: true });
+    const ssr = (o: object) => compileJs(js(list), { ...o, server: true });
+    // The program sees A pass a store's array and JSX: the list is copied and its rows bound, the
+    // header inserted, on the client and on the server.
+    expect(hyd({ props: p.factsOf("list") })).toContain("each: () => ([...(props.todos)])");
+    expect(hyd({ props: p.factsOf("list") })).toContain("__rrhI(__n[1], () => (props.header))");
+    expect(ssr({ props: p.factsOf("list") })).toContain("__rrsS(props.header)");
+    // Seen alone, an exported component may be passed a store or JSX in any prop: the list is
+    // copied, and the header is a slot, text or nodes.
+    expect(hyd({})).toContain("each: () => ([...(props.todos)])");
+    expect(hyd({})).toContain("__rrhS(__n[1], () => (props.header))");
+    expect(ssr({})).toContain("__rrsS(__rrsL(() => __rrsI(props.header)))");
+    // A program whose callers pass neither: the list is read as it is, the header is text.
+    expect(hyd({ props: plain.factsOf("list") })).toContain("each: () => (props.todos)");
+    expect(hyd({ props: plain.factsOf("list") })).not.toContain("(props.header))");
+    expect(ssr({ props: plain.factsOf("list") })).toContain("__rrsT((props.header), 0)");
+    // What a store is made of is followed in both: bound on the client, between markers on the server.
+    const a = (mode: object) => compileJs(js(main), { props: p.factsOf("main"), ...mode });
+    expect(a({ hydrate: true })).toContain("__rrBind(__rrT1, 0, __n[0], () => (box.s.n))");
+    expect(a({ server: true })).toContain("__rrsL(() => __rrsT((box.s.n), 0))");
+  });
+
+  test("a list on features/for's `__each` path follows a prop passed a store and a local of one, in every mode", () => {
+    // A list that is the component's whole view, with rows that are fragments.
+    const list = `
+      import { For } from "@reactre/core";
+      export function List(props) { return <For each={props.todos} key={(t) => t.id}>{(t) => <>{t.title}<b /></>}</For>; }
+    `;
+    const main = `${STORE} import { For } from "@reactre/core"; import { List } from "./list";
+      const [s] = createStore({ todos: [] });
+      const todos = s.todos;
+      export const A = () => <div><List todos={s.todos} />{todos.length}<For each={todos} key={(t) => t.id}>{(t) => t.title}</For></div>;`;
+    const p = program({ list, main });
+    const plain = program({ list, main: `import { List } from "./list"; export const B = () => <List todos={[]} />;` });
+    const modes = [{}, { hydrate: true }, { server: true }];
+    for (const mode of modes) {
+      const out = (o: object) => compileJs(js(list), { ...o, ...mode });
+      // Passed a store's array, or seen alone: the list reads a copy, and its rows follow the item.
+      for (const o of [{ props: p.factsOf("list") }, {}]) {
+        expect(out(o)).toContain("[...(props.todos)]");
+        expect(out(o)).toContain("() => (t.title)");
+      }
+      // Passed a plain array: read as it is, its rows written once.
+      expect(out({ props: plain.factsOf("list") })).not.toContain("[...(props.todos)]");
+      expect(out({ props: plain.factsOf("list") })).not.toContain("() => (t.title)");
+      // A local made of a store, listed outside an element's own list of elements.
+      const a = compileJs(js(main), { props: p.factsOf("main"), ...mode });
+      expect(a).toContain("[...(todos)]");
+      expect(a).toContain("__rrFrag([() => (t.title)])");
+    }
+    expect(compileSource(list, "tsx", { hydrate: true })).toContain(`from "@reactre/core/hydrate/for"`);
+  });
 });
 
 // #endregion
