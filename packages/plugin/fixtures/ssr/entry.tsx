@@ -9,3 +9,5 @@ export { isServer, log, ran, resolve };
 export const html = (): string => renderToString(() => <App />);
 export const stream = (): ReadableStream<Uint8Array> => renderToStream(() => <App />);
 export const whole = (): Promise<string> => renderToStringAsync(() => <App />);
+// With the markers client.tsx hydrates.
+export const hydratable = (): string => renderToString(() => <App />, { hydrate: true });

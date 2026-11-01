@@ -4,7 +4,9 @@
 // control flow, a context, an <Errored> boundary, effects that do not run, and a <Loading> whose
 // content streams once its async data comes. The same app built for the browser has none of the
 // server's code, and without the option a Vite SSR build and the dev server's server environment
-// get the browser's code, as every build did before the option. The
+// get the browser's code, as every build did before the option. With `hydrate: true`, the
+// browser's build of fixtures/ssr/client.tsx (Vite, esbuild, Bun) hydrates the server's HTML,
+// keeping its nodes; without it, the browser's build has none of hydration's code. The
 // packages resolve to their dist builds, as an app's do once installed, so those are built first.
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -12,6 +14,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { FakeElement, type FakeNode, installFakeDocument } from "@reactre/testdom";
 import { build as esbuild } from "esbuild";
 import { build as vite, createServer } from "vite";
 
@@ -283,6 +286,171 @@ describe("the hooks", () => {
     expect(names({})).not.toContain("@reactre/plugin:server");
     expect(names({ ssr: true })).toContain("@reactre/plugin:server");
   });
+
+  test("the hydrate hook: what it points at features/hydrate and the hydrate builds, and what it leaves", () => {
+    const hydrate = hook("@reactre/plugin:hydrate", { hydrate: true })!;
+    const run = (code: string, id: string, ctx: unknown = {}) => hydrate.handler.call(ctx, code, id);
+    expect(run(`import { Loading } from "@reactre/core/features/async";`, "/app/state.ts")).toEqual({
+      code: `import { Loading } from "@reactre/core/hydrate/async";`,
+      map: null,
+    });
+    expect(run(`import { effect } from "@reactre/core";`, "/app/state.ts")).toBeNull();
+    expect(run(`import { __frag } from "@reactre/core";`, PACKAGES + "core/src/features/context.ts")).toEqual({
+      code: `import { __frag } from "@reactre/core/features/hydrate";`,
+      map: null,
+    });
+    // features/hydrate itself, the core's other modules, a module the plugin compiles.
+    expect(run(`import { __frag } from "@reactre/core";`, PACKAGES + "core/src/features/hydrate.ts")).toBeNull();
+    expect(run(`import { a } from "@reactre/core/features/async";`, PACKAGES + "core/src/hydrate/async.ts")).toBeNull();
+    expect(run(`import { a } from "@reactre/core/features/async";`, "/app/view.tsx")).toBeNull();
+    // With `ssr`, Vite's server environment is the server's.
+    const both = hook("@reactre/plugin:hydrate", { hydrate: true, ssr: true })!;
+    const server = { environment: { config: { consumer: "server" } } };
+    expect(
+      both.handler.call(server, `import { Loading } from "@reactre/core/features/async";`, "/app/s.ts"),
+    ).toBeNull();
+    // Without the option, no hook, and the dev server prebundles the core as before.
+    expect(hook("@reactre/plugin:hydrate")).toBeUndefined();
+    type Named = { name: string; config?: () => { optimizeDeps: Record<string, unknown> } };
+    const deps = (options: { hydrate?: boolean }) =>
+      ([vitePlugin(options)].flat() as Named[]).find((p) => p.name === "@reactre/plugin")!.config!().optimizeDeps;
+    expect(deps({})["exclude"]).toBeUndefined();
+    expect(deps({ hydrate: true })["exclude"]).toEqual(["@reactre/core"]);
+  });
+
+  test("`hydrate: true` where it cannot apply fails, naming the options", () => {
+    expect(() => vitePlugin({ hydrate: true, compat: true })).toThrow(
+      "@reactre/plugin: the `hydrate` option is core mode's, and `compat` is set",
+    );
+    expect(() => esbuildPlugin({ hydrate: true, ssr: true })).toThrow(
+      "@reactre/plugin: with `ssr: true`, every esbuild build is a server build, so `hydrate: true` would apply to none",
+    );
+    expect(() => vitePlugin({ hydrate: true, ssr: true })).not.toThrow();
+  });
+});
+
+// #endregion
+
+// #region Hydration
+
+describe("client builds with `hydrate: true` hydrate the server's HTML", () => {
+  /** What fixtures/ssr/client.tsx exports. */
+  interface Client {
+    start(root: Element): () => void;
+    resolve(v: string): void;
+    ran: string[];
+  }
+
+  let html: string;
+  beforeAll(async () => {
+    const r = await Bun.build({
+      entrypoints: [ENTRY],
+      outdir: join(out, "hydrate-server"),
+      target: "bun",
+      format: "esm",
+      plugins: [bunPlugin({ ssr: true })],
+    });
+    if (!r.success) throw new AggregateError(r.logs, "Bun.build failed");
+    html = ((await import(join(out, "hydrate-server/entry.js"))) as { hydratable(): string }).hydratable();
+  }, 60_000);
+
+  /** Every node under `n`. */
+  const all = (n: FakeNode): FakeNode[] => {
+    const nodes: FakeNode[] = [];
+    for (let c = n.firstChild; c !== null; c = c.nextSibling) nodes.push(c, ...all(c));
+    return nodes;
+  };
+
+  /** Hydrate the server's HTML with `client`, a build of client.tsx, checking what it keeps and does. */
+  async function hydrates(client: Client): Promise<void> {
+    installFakeDocument();
+    const root = new FakeElement("DIV");
+    root.innerHTML = html;
+    const before = all(root).filter((n) => n.nodeType !== 8);
+    client.start(root as unknown as Element);
+    // Every node is the server's but the fallback of the <Loading> that waited, which the client
+    // builds afresh, as it waits too.
+    const now = new Set(all(root));
+    expect(before.filter((n) => !now.has(n)).map((n) => n.textContent)).toEqual(["loading", "loading"]);
+    // Effects run in the browser: the themed label's.
+    expect(client.ran).toEqual(["themed"]);
+    expect(root.textContent).toBe("HellothemedABmanybrokenloading");
+    client.resolve("world");
+    await new Promise((ok) => setTimeout(ok, 0));
+    expect(root.textContent).toBe("HellothemedABmanybrokenworld");
+  }
+
+  test("Vite", async () => {
+    await vite({
+      configFile: false,
+      logLevel: "silent",
+      plugins: [vitePlugin({ ssr: true, hydrate: true })],
+      build: {
+        outDir: join(out, "hydrate-vite"),
+        emptyOutDir: false,
+        minify: false,
+        lib: { entry: FIXTURES + "ssr/client.tsx", formats: ["es"], fileName: () => "client.js" },
+      },
+    });
+    const code = await Bun.file(join(out, "hydrate-vite/client.js")).text();
+    // None of the server's code (its name is in hydrate's error for a page without markers).
+    expect(code).not.toMatch(/__ssr|function renderTo/);
+    // The development build's warnings are not in a production build.
+    expect(code).not.toContain("HYDRATION_MISMATCH");
+    await hydrates((await import(join(out, "hydrate-vite/client.js"))) as Client);
+  }, 60_000);
+
+  test("esbuild", async () => {
+    await esbuild({
+      entryPoints: [FIXTURES + "ssr/client.tsx"],
+      outfile: join(out, "hydrate-esbuild/client.js"),
+      bundle: true,
+      format: "esm",
+      logLevel: "silent",
+      plugins: [esbuildPlugin({ hydrate: true })],
+    });
+    await hydrates((await import(join(out, "hydrate-esbuild/client.js"))) as Client);
+  }, 60_000);
+
+  test("Bun", async () => {
+    const r = await Bun.build({
+      entrypoints: [FIXTURES + "ssr/client.tsx"],
+      outdir: join(out, "hydrate-bun"),
+      target: "browser",
+      format: "esm",
+      plugins: [bunPlugin({ hydrate: true })],
+    });
+    if (!r.success) throw new AggregateError(r.logs, "Bun.build failed");
+    await hydrates((await import(join(out, "hydrate-bun/client.js"))) as Client);
+  }, 60_000);
+
+  test("without the option, the browser's build has none of hydration's code, and hydrate throws naming it", async () => {
+    await vite({
+      configFile: false,
+      logLevel: "silent",
+      plugins: [vitePlugin()],
+      build: {
+        outDir: join(out, "hydrate-off"),
+        emptyOutDir: false,
+        minify: false,
+        lib: { entry: FIXTURES + "ssr/app.tsx", formats: ["es"], fileName: () => "app.js" },
+      },
+    });
+    const code = await Bun.file(join(out, "hydrate-off/app.js")).text();
+    expect(code).not.toMatch(/__hclone|claimTree|features\/hydrate|rr:e:/);
+    // The client entry, which imports hydrate, fails to compile without the option.
+    await expect(
+      vite({
+        configFile: false,
+        logLevel: "silent",
+        plugins: [vitePlugin()],
+        build: {
+          write: false,
+          lib: { entry: FIXTURES + "ssr/client.tsx", formats: ["es"], fileName: () => "client.js" },
+        },
+      }),
+    ).rejects.toThrow("@reactre/plugin's `hydrate: true` option");
+  }, 60_000);
 });
 
 // #endregion

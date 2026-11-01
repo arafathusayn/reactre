@@ -61,6 +61,8 @@ import {
   compileJsWithMap as compileCoreWithMap,
   CORE_FEATURE,
   factsFor,
+  HYDRATE_FILE,
+  hydrateImports,
   type PropFacts,
   ReactreCompileError,
   serverImports,
@@ -153,6 +155,15 @@ export interface ReactreOptions {
    * its client's environment stays the browser's; any other bundler's build is a server build.
    */
   readonly ssr?: boolean;
+  /**
+   * Core mode: build the browser's code to hydrate HTML that @reactre/core/server rendered with
+   * `hydrate: true`, with @reactre/core/features/hydrate's `hydrate`: the app's templates, slots
+   * and lists claim the page's nodes (@reactre/compiler's hydrate mode), and the core's feature
+   * modules claim it too. Off by default: an app that does not hydrate ships none of it. With
+   * `ssr` in Vite, the client's environment hydrates and the server's renders; in another
+   * bundler, where `ssr` makes every build a server build, give the client's build its own plugin.
+   */
+  readonly hydrate?: boolean;
 }
 
 // #endregion
@@ -227,6 +238,13 @@ export const reactre: UnpluginInstance<ReactreOptions | undefined, boolean> = cr
   boolean
 >((options = {}, meta) => {
   const compat = options.compat === true ? {} : options.compat === false ? undefined : options.compat;
+  if (options.hydrate === true && compat !== undefined)
+    throw new Error("@reactre/plugin: the `hydrate` option is core mode's, and `compat` is set: drop one of them.");
+  if (options.hydrate === true && options.ssr === true && meta.framework !== "vite")
+    throw new Error(
+      `@reactre/plugin: with \`ssr: true\`, every ${meta.framework} build is a server build, so \`hydrate: true\` ` +
+        "would apply to none: build the browser's code with a plugin of its own, with `hydrate: true` alone.",
+    );
   const compile = compat === undefined || compat.compile !== false;
   const pkg: CompatPackage = compat?.package ?? "@reactre/compat";
   // The APIs and behaviours that are on. All of them is @reactre/compat; anything off, class
@@ -310,7 +328,14 @@ export const reactre: UnpluginInstance<ReactreOptions | undefined, boolean> = cr
             if (compat === undefined && out.classic) {
               throw new ReactreCompileError(`reactre: ${path}: a key after {...spread} props cannot be compiled`);
             }
-            const server = compat === undefined && ssrOf(this, rest) ? { server: true } : undefined;
+            const server =
+              compat !== undefined
+                ? undefined
+                : ssrOf(this, rest)
+                  ? { server: true }
+                  : options.hydrate === true
+                    ? { hydrate: true }
+                    : undefined;
             const finish = (facts: PropFacts | undefined) => {
               const props = facts === undefined ? undefined : { props: facts };
               const opts = server === undefined ? props : { ...props, ...server };
@@ -366,10 +391,15 @@ export const reactre: UnpluginInstance<ReactreOptions | undefined, boolean> = cr
       };
     // Vite's dependency scanner compiles JSX on its own, for React's runtime, and would then fail
     // to find react/jsx-runtime. It needs only the imports, so it keeps JSX as written. With `ssr`,
-    // a server render bundles @reactre/core, so its feature modules reach the server's core.
+    // a server render bundles @reactre/core, so its feature modules reach the server's core. With
+    // `hydrate`, the dev server serves @reactre/core as it is, not prebundled, so its feature
+    // modules go through the hydrate build's transform.
     plugin.vite = {
       config: () => ({
-        optimizeDeps: { rolldownOptions: { transform: { jsx: "preserve" } } },
+        optimizeDeps: {
+          rolldownOptions: { transform: { jsx: "preserve" } },
+          ...(options.hydrate === true ? { exclude: ["@reactre/core"] } : {}),
+        },
         ...(options.ssr === true ? { ssr: { noExternal: [CORE_PACKAGE] } } : {}),
       }),
       configResolved(config) {
@@ -394,6 +424,27 @@ export const reactre: UnpluginInstance<ReactreOptions | undefined, boolean> = cr
             const feature = CORE_FEATURE.test(path) && isCore(path);
             if (!feature && (ofCore(path) || compiles(id))) return null;
             const out = serverImports(code, !feature);
+            return out === code ? null : { code: out, map: null };
+          },
+        },
+      });
+    // A hydrate build: @reactre/core's feature modules import the core from
+    // @reactre/core/features/hydrate, so a context's provider, an <Errored> or a <Loading> claims
+    // the page with its `__frag`, and the app's modules that are not compiled import the hydrate
+    // builds of features/async and /errors as compiled ones do. Only with the option, and only in
+    // the browser's builds.
+    if (options.hydrate === true)
+      servers.push({
+        name: "@reactre/plugin:hydrate",
+        enforce: "pre",
+        transform: {
+          filter: { id: { include: [SERVER_SCRIPT] } },
+          handler(code, id, ...rest: unknown[]) {
+            if (ssrOf(this, rest)) return null;
+            const path = id.replace(/[?#].*$/, "");
+            const feature = CORE_FEATURE.test(path) && isCore(path);
+            if (feature ? HYDRATE_FILE.test(path) : ofCore(path) || compiles(id)) return null;
+            const out = hydrateImports(code, !feature);
             return out === code ? null : { code: out, map: null };
           },
         },

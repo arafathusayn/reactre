@@ -1,6 +1,6 @@
 // A reactre app for test/ssr.test.ts, rendered on the server: control flow, a context, an
 // <Errored> boundary, an effect (which does not run there), and a <Loading> over async data, which
-// the test resolves. entry.tsx renders it with @reactre/core/server.
+// the test resolves. entry.tsx renders it with @reactre/core/server, and client.tsx hydrates that.
 
 import { effect, For, memo, Show, signal } from "@reactre/core";
 import { Loading, memo as asyncMemo } from "@reactre/core/features/async";
