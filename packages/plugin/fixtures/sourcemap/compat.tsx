@@ -5,7 +5,12 @@
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 
-function Rows({ rows }) {
+interface Row {
+  readonly id: number;
+  readonly label: string;
+}
+
+function Rows({ rows }: { readonly rows: readonly Row[] }) {
   return (
     <ul>
       {rows.map((row) => (
@@ -23,7 +28,7 @@ function Rows({ rows }) {
   );
 }
 
-export function mount(el) {
+export function mount(el: Element) {
   const root = createRoot(el);
   flushSync(() => root.render(<Rows rows={[{ id: 1, label: "one" }]} />));
   return root;

@@ -1,4 +1,4 @@
-// A React app for test/bundlers.test.ts: a class component, hooks and a TSX
+// A React app for test/bundlers.test.ts and test/dist.ts: a class component, hooks and a second
 // module, with react and react-dom resolved to @reactre/compat by the plugin.
 
 import { Component, useState } from "react";
@@ -7,7 +7,7 @@ import { createRoot } from "react-dom/client";
 
 import { Count } from "./count.tsx";
 
-class Title extends Component {
+class Title extends Component<{ text: string }> {
   render() {
     return <h1 className="title">{this.props.text}</h1>;
   }
@@ -24,7 +24,7 @@ function App() {
   );
 }
 
-export function mount(el) {
+export function mount(el: Element) {
   const root = createRoot(el);
   flushSync(() => root.render(<App />));
   return root;

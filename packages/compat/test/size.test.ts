@@ -8,7 +8,7 @@
 //   full  the default entry, React's whole client API with class components
 //   core  @reactre/compat/core, the same without the feature modules: class components,
 //         component stacks, React's handling of repeated keys and its render retry
-//   jfb   the js-framework-benchmark React app (apps/jfb/app/main.jsx) on core, compiled to
+//   jfb   the js-framework-benchmark React app (apps/jfb/app/main.tsx) on core, compiled to
 //         templates: the benchmark's explicit choice to leave out class components, component
 //         stacks, React's handling of repeated keys and its render retry (apps/jfb/prepare.ts
 //         resolves the same)
@@ -68,7 +68,7 @@ const profiles: Record<string, () => Promise<Bun.BuildOutput>> = {
     }),
   jfb: () =>
     Bun.build({
-      entrypoints: [Bun.fileURLToPath(new URL("../../../apps/jfb/app/main.jsx", import.meta.url))],
+      entrypoints: [Bun.fileURLToPath(new URL("../../../apps/jfb/app/main.tsx", import.meta.url))],
       // The packages' sources, as the repository's own builds resolve them: dist may not be built.
       conditions: ["reactre-source"],
       minify: true,

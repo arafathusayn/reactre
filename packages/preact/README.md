@@ -6,8 +6,6 @@ Preact's API and behaviour, with a JSX compiler that turns your HTML element tre
 bun add @reactre/preact
 ```
 
-Or with npm: `npm install @reactre/preact`. The compiler and the bundler plugin run on Bun and on Node 20.19 or 22.12 and later.
-
 ## Modules
 
 | Module                        | Stands in for            | What it is                                                                 |
@@ -58,7 +56,7 @@ export default {
 };
 ```
 
-`reactrePreact.rollup`, `.rolldown`, `.esbuild`, `.webpack` and `.rspack` are the others. It runs under Node as well as Bun.
+`reactrePreact.rollup`, `.rolldown`, `.esbuild`, `.webpack` and `.rspack` are the others.
 
 ## The compiler
 

@@ -12,8 +12,6 @@ A tiny, fast UI library for the web. You write components in TSX over signals.
 bun add @reactre/core
 ```
 
-Or with npm: `npm install @reactre/core`.
-
 ## A counter
 
 ```tsx
@@ -461,7 +459,7 @@ The checks are in the core's development build, `dist/dev`, and a production bui
 
 reactre runs in every modern browser. Where the browser has `moveBefore`, moved rows keep focus, selection and running animations.
 
-The package ships ES modules in `dist/` for browsers, bundlers and other runtimes, with their type declarations, and its TypeScript sources, which Bun runs directly. Editors and `tsc` read the declarations, so your compiler settings never type-check reactre's sources.
+The package ships ES modules in `dist/` for browsers, bundlers and other runtimes, with their type declarations, and its TypeScript sources, which Bun runs directly. Editors and type checkers read the declarations, so your compiler settings never type-check reactre's sources.
 
 ## License
 

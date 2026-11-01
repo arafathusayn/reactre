@@ -60,15 +60,15 @@ export interface Entry {
 
 /**
  * Our entries. `reactre` is app/reactre.tsx, compiled by reactre-compiler.
- * `reactre-compat` is the idiomatic React app (app/main.jsx) on
+ * `reactre-compat` is the idiomatic React app (app/main.tsx) on
  * reactre-compat, its JSX compiled to templates by @reactre/compat/compiler;
  * `react` is the same app on React 19. `reactre-dom` is app/dom.ts,
  * written by hand on @reactre/dom's templates and keyed list.
  */
 export const OURS: Record<string, Entry> = {
   reactre: { app: "reactre.tsx", compiler: "reactre" },
-  "reactre-compat": { app: "main.jsx", react: "reactre-compat", compiler: "reactre-compat" },
-  react: { app: "main.jsx", react: "react" },
+  "reactre-compat": { app: "main.tsx", react: "reactre-compat", compiler: "reactre-compat" },
+  react: { app: "main.tsx", react: "react" },
   "reactre-dom": { app: "dom.ts" },
 };
 

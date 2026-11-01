@@ -1,7 +1,7 @@
 // A small linked-list DOM for tests and profiling: just what @reactre/dom
 // touches (template parsing, cloneNode, sibling pointers, insertBefore,
 // removeChild, text data, classes, attributes). Bun ships no DOM and the
-// library takes no npm packages. Every operation is O(1) pointer work, so
+// library takes no dependencies. Every operation is O(1) pointer work, so
 // a CPU profile over it shows the library's own cost, not a browser's.
 //
 // Design decisions:

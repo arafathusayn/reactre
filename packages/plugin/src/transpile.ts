@@ -10,7 +10,7 @@
 // dropped and each name is renamed to that shape.
 //
 // Design decisions:
-//   - oxc, not Bun, so the plugin runs under Node as well. Its output compiles to the same code as
+//   - oxc, not Bun, so the plugin needs no Bun API. Its output compiles to the same code as
 //     Bun's: test/transpile.test.ts compiles every JSX source in the repository both ways and
 //     compares the results.
 //   - oxc keeps comments and Bun drops them. Inside a jsx call a comment would land in a prop

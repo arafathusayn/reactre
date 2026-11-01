@@ -1,8 +1,9 @@
 name: CI
 
 # Every push to main and every pull request: formatting, both type checks,
-# the unit tests with full coverage, the plugin under Node, and the React
-# compatibility check in headless Chrome.
+# the unit tests with full coverage, the plugin's dist build, a user's project
+# type-checked against the packed packages, and the React compatibility check
+# in headless Chrome. Every step runs on Bun.
 
 on:
   push:
@@ -39,14 +40,10 @@ jobs:
             fi
             (cd "packages/$dir" && bun pm pack --dry-run)
           done
-      # The plugin under Node, as most Vite users run it, from the dist builds made above.
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 24
-          package-manager-cache: false
-      - run: node packages/plugin/test/node.mjs
-      # A user's project, installed from the packed packages and type-checked with tsc against
-      # their dist/*.d.ts, skipLibCheck off.
+      # The plugin's dist build, as its users install it, in Vite builds and Vite's dev server.
+      - run: bun packages/plugin/test/dist.ts
+      # A user's project, installed from the packed packages and type-checked with `bun check`
+      # against their dist/*.d.ts, skipLibCheck off.
       - run: bun scripts/consumer.ts
 
   react-compat:

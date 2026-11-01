@@ -1,4 +1,4 @@
-// Scenarios with the React libraries ranked 51st to 75th by npm weekly downloads, chosen as the
+// Scenarios with the React libraries ranked 51st to 75th by registry weekly downloads, chosen as the
 // first 25 in ./libraries-1-25.tsx were: one package per project, libraries an app imports itself;
 // not dependencies of other libraries (react-popper), frameworks, renderers (@react-three/drei),
 // build or test tools. Libraries whose peer range leaves React 19 out (react-quill,

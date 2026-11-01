@@ -7,8 +7,6 @@ bun add @reactre/full-compat
 bun add -d @reactre/plugin
 ```
 
-Or with npm: `npm install @reactre/full-compat` and `npm install -D @reactre/plugin`.
-
 ```ts
 // vite.config.ts
 import reactre from "@reactre/plugin/vite";

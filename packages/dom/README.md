@@ -8,8 +8,6 @@ It is the layer [`@reactre/core`](https://www.npmjs.com/package/@reactre/core) r
 bun add @reactre/dom
 ```
 
-Or with npm: `npm install @reactre/dom`.
-
 ## A template
 
 ```ts
@@ -65,7 +63,7 @@ list.set([...todos].reverse()); // both rows are kept; one moves
 
 It runs in every modern browser. Where the browser has `moveBefore`, moved rows keep focus, selection and running animations.
 
-The package ships ES modules in `dist/` for browsers, bundlers and other runtimes, with their type declarations, and its TypeScript sources, which Bun runs directly. Editors and `tsc` read the declarations, so your compiler settings never type-check reactre's sources.
+The package ships ES modules in `dist/` for browsers, bundlers and other runtimes, with their type declarations, and its TypeScript sources, which Bun runs directly. Editors and type checkers read the declarations, so your compiler settings never type-check reactre's sources.
 
 ## License
 

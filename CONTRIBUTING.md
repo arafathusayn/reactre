@@ -2,6 +2,10 @@
 
 The repository is a Bun workspace. Dependency versions live in one catalog in the root `package.json`.
 
+## Tooling
+
+The repository is Bun and TypeScript only. It holds no `.js`, `.jsx`, `.mjs` or `.cjs` files: a test that needs a JavaScript input writes it to a temp folder at run time. Scripts, CI, the release and the docs use no Node.js, npm or npx. Type checking is `bun check`, never tsc or the typescript package; formatting is `bun fmt`, tests `bun test` and builds `bun build`. The packages still compile users' `.js` and `.jsx` files and run in their bundlers wherever those run.
+
 ```sh
 bun install
 bun test --coverage         # unit tests, on a small fake DOM; CI requires 100% of lines and functions
@@ -9,10 +13,11 @@ bun check                   # type check
 bun run check:strict        # the packages under the strictest settings
 bun fmt                     # format
 bun run compat              # React compatibility check, in headless Chrome
+bun packages/plugin/test/dist.ts  # the plugin's dist build in Vite (build the packages first)
 bun scripts/consumer.ts     # type-check a user's project against the packed packages (build them first)
 ```
 
-CI runs these from a fresh clone, with no `dist/` folders. Before a push, run them the same way: a working copy that has built output, or tests run in macOS's file order, can pass where CI fails. Bun runs every test file in one process, and on Linux in another order, so a test that sets a global or module state must undo it.
+CI runs these from a fresh clone, with no `dist/` folders, after building and packing each package (`bun run build`, then `bun pm pack --dry-run`). Before a push, run them the same way: a working copy that has built output, or tests run in macOS's file order, can pass where CI fails. Bun runs every test file in one process, and on Linux in another order, so a test that sets a global or module state must undo it.
 
 ```
 packages/dom            @reactre/dom: templates and keyed lists
@@ -28,7 +33,7 @@ apps/profiling          CPU profiles, trace windows and A/B proofs
 apps/react-compat       scenarios run against React 19 and @reactre/compat
 apps/preact-compat      scenarios run against Preact and @reactre/preact
 scripts/declarations.ts writes a package's .d.ts files into its dist/, after its build
-scripts/consumer.ts     installs the packed packages into a project outside the workspace and runs tsc on it
+scripts/consumer.ts     installs the packed packages into a project outside the workspace and runs bun check on it
 docs/roadmap.md         what is left to do
 ```
 
@@ -40,7 +45,7 @@ Commit messages follow [Conventional Commits](https://www.conventionalcommits.or
 
 ## Releasing
 
-The seven public packages (dom, core, compiler, compat, full-compat, plugin and preact) share one version. A release is a GitHub release tagged `v<version>`, matching every `packages/*/package.json` version, with a matching [CHANGELOG](CHANGELOG.md) entry. Its [workflow](.github/workflows/release.yml) runs the checks and tests, builds `dist/`, publishes each package to npm through npm's trusted publishing (no stored token, with provenance once the repository is public), and attaches the tarballs to the release.
+The seven public packages (dom, core, compiler, compat, full-compat, plugin and preact) share one version. A release is a GitHub release tagged `v<version>`, matching every `packages/*/package.json` version, with a matching [CHANGELOG](CHANGELOG.md) entry. Its [workflow](.github/workflows/release.yml) runs the checks and tests, builds `dist/`, publishes each package to npm through npm's trusted publishing (no stored token, with provenance once the repository is public), and attaches the tarballs to the release. It is the one place npm is still used: `bun publish` (Bun 1.4.4) has neither trusted publishing nor provenance, so moving it to Bun waits on a decision between those and a stored token.
 
 To cut one:
 

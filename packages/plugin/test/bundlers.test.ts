@@ -5,8 +5,8 @@
 // @reactre/compat/server and write React's HTML, through the entry for the build's target: in
 // Vite, a browser build's errors are React's minified codes and a Node SSR build's its full text.
 //
-// The bundlers resolve the workspace packages as an app resolves them from
-// npm, to their dist builds, so those are built first.
+// The bundlers resolve the workspace packages as an app resolves them once
+// installed, to their dist builds, so those are built first.
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -214,7 +214,7 @@ describe.each(Object.keys(bundlers))("%s", (name) => {
 
   test("compat: resolves react to the class build and compiles host trees", async () => {
     const file = join(out, `${name}-compat.js`);
-    await bundle(FIXTURES + "compat/main.jsx", file, { compat: { classes: true } });
+    await bundle(FIXTURES + "compat/main.tsx", file, { compat: { classes: true } });
     const code = await Bun.file(file).text();
     // A template made by @reactre/compat/compiler, and no copy of React.
     expect(code).toMatch(/"?className"?:\s*"count"/);
@@ -243,7 +243,7 @@ describe.each(Object.keys(bundlers))("%s", (name) => {
 
   test("compat: resolves react-dom/server to @reactre/compat/server, which renders React's HTML", async () => {
     const file = join(out, `${name}-server.js`);
-    await bundle(FIXTURES + "compat/server.jsx", file, { compat: { classes: true } });
+    await bundle(FIXTURES + "compat/server.tsx", file, { compat: { classes: true } });
     const code = await Bun.file(file).text();
     expect(code).not.toContain("react-dom-server");
     // React's own renderToString writes exactly this for the same app.
@@ -257,7 +257,7 @@ describe.each(Object.keys(bundlers))("%s", (name) => {
 
   test("compat: class support off keeps component stacks, and a class throws its clear error", async () => {
     const file = join(out, `${name}-no-classes.js`);
-    await bundle(FIXTURES + "compat/no-classes.jsx", file, { compat: { classes: false } });
+    await bundle(FIXTURES + "compat/no-classes.tsx", file, { compat: { classes: false } });
     installFakeDocument();
     const app = (await import(file)) as { reports(el: unknown): string[] };
     const [boom, stack, legacy] = app.reports(new FakeElement("DIV"));
@@ -269,7 +269,7 @@ describe.each(Object.keys(bundlers))("%s", (name) => {
 
   test("compat: switched-off APIs throw when called, and the rest runs", async () => {
     const file = join(out, `${name}-narrow.js`);
-    await bundle(FIXTURES + "compat/narrow.jsx", file, { compat: { exclude: ["useEffect", "@suspense"] } });
+    await bundle(FIXTURES + "compat/narrow.tsx", file, { compat: { exclude: ["useEffect", "@suspense"] } });
     installFakeDocument();
     const root = new FakeElement("DIV");
     const app = (await import(file)) as { mount(el: unknown): void; offByName(name: string): () => void };
@@ -286,7 +286,7 @@ describe.each(Object.keys(bundlers))("%s", (name) => {
   }, 60_000);
 
   test("compat: code that uses a switched-off API fails the build, naming it", async () => {
-    const failure = await bundle(FIXTURES + "compat/uses-off.jsx", join(out, `${name}-uses-off.js`), {
+    const failure = await bundle(FIXTURES + "compat/uses-off.tsx", join(out, `${name}-uses-off.js`), {
       compat: { exclude: ["useEffect"] },
     }).then(
       () => "(built)",
@@ -306,7 +306,7 @@ describe("vite: the server renderer's entry follows the build's target", () => {
 
   test("a browser build resolves react-dom/server to the browser entry: React's minified codes", async () => {
     const file = join(out, "vite-server-browser.js");
-    await bundlers["vite"]!(FIXTURES + "compat/server-errors.jsx", file, { compat: true });
+    await bundlers["vite"]!(FIXTURES + "compat/server-errors.tsx", file, { compat: true });
     const app = (await import(file)) as Errors;
     expect(app.message()).toBe(minified);
     expect(await app.streamMessage()).toBe(minified);
@@ -321,7 +321,7 @@ describe("vite: the server renderer's entry follows the build's target", () => {
       // Bundled whole, so the build resolves the server renderer itself, with Vite's SSR conditions.
       ssr: { noExternal: true },
       build: {
-        ssr: FIXTURES + "compat/server-errors.jsx",
+        ssr: FIXTURES + "compat/server-errors.tsx",
         outDir: out,
         emptyOutDir: false,
         minify: false,

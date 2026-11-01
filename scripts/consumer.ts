@@ -1,9 +1,9 @@
 // Type-checks a project that installs the published packages, as a user's project does: each
-// package packed from its build (run each package's build first, as CI does), installed with npm
-// into a folder outside the workspace, and checked by TypeScript's own tsc with skipLibCheck
-// false. The project imports every entry of every package, from a browser app (no Node or Bun
-// types) and from build tools (with them), each under moduleResolution bundler and node16, and
-// it compiles packages/core/test/jsx-types.tsx, the JSX types test, against the declarations.
+// package packed from its build (run each package's build first, as CI does), installed with
+// `bun install` into a folder outside the workspace, and checked by `bun check` with skipLibCheck
+// false. The project imports every entry of every package, from a browser app (no runtime types) and
+// from build tools (with them), each under moduleResolution bundler and node16, and it compiles
+// packages/core/test/jsx-types.tsx, the JSX types test, against the declarations.
 //
 //   bun scripts/consumer.ts          exits non-zero if any of the four checks fails
 //
@@ -18,7 +18,6 @@ const root = join(import.meta.dir, "..");
 const PACKAGES = ["dom", "core", "compiler", "compat", "full-compat", "plugin", "preact"];
 // The bundlers the plugin's declarations reach through unplugin's, which import each one's types.
 const TOOLS: Record<string, string> = {
-  typescript: "7.0.2",
   "@types/bun": "1.4.4",
   vite: "8.3.5",
   rollup: "4.67.2",
@@ -68,10 +67,11 @@ try {
     }
   }
 
-  run(["npm", "install", "--no-audit", "--no-fund", "--loglevel=error"], app);
+  // Hoisted, as a user's project installs them: each package and tool at the top of node_modules.
+  run(["bun", "install", "--linker", "hoisted", "--no-summary", "--no-progress"], app);
   let failed = 0;
   for (const config of configs) {
-    const { exitCode } = Bun.spawnSync(["./node_modules/.bin/tsc", "-p", config, "--pretty", "false"], {
+    const { exitCode } = Bun.spawnSync(["bun", "check", "-p", config, "--no-pretty"], {
       cwd: app,
       stdout: "inherit",
       stderr: "inherit",

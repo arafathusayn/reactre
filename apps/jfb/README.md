@@ -7,8 +7,8 @@ A replica of [js-framework-benchmark](https://github.com/krausest/js-framework-b
 | Entry            | App               | What it measures                                                 |
 | ---------------- | ----------------- | ---------------------------------------------------------------- |
 | `reactre`        | `app/reactre.tsx` | @reactre/core, compiled by @reactre/compiler                     |
-| `reactre-compat` | `app/main.jsx`    | An idiomatic React app on @reactre/compat, compiled to templates |
-| `react`          | `app/main.jsx`    | The same React app on React 19, for reference                    |
+| `reactre-compat` | `app/main.tsx`    | An idiomatic React app on @reactre/compat, compiled to templates |
+| `react`          | `app/main.tsx`    | The same React app on React 19, for reference                    |
 | `reactre-dom`    | `app/dom.ts`      | The app written by hand on @reactre/dom                          |
 
 The field is the official keyed top 5 of the Chrome 156 results: re, thane, vanillajs-lite, vanillajs and doohtml-dp.

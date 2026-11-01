@@ -17,9 +17,22 @@
 //
 // And the same app behaves the same on Vite's dev server, which compiles each file alone, as in
 // `vite build`, which reads the whole program.
+//
+// The fixture runs from a copy in a temp folder, where the test writes its two JavaScript
+// modules (the repository holds none): ./reexport.js and ./hidden/byhand.js, from the sources
+// below. The copy's node_modules is the plugin's, so its imports resolve as the fixture's do.
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import {
+  cpSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
@@ -41,20 +54,50 @@ import webpackPlugin from "../src/webpack.ts";
 
 const PACKAGES = new URL("../../", import.meta.url).pathname;
 const FIXTURES = new URL("../fixtures/", import.meta.url).pathname;
-const MISSED = FIXTURES + "missed/";
+
+/** ./reexport.js: a plain JavaScript module that re-exports the caller. */
+const REEXPORT = `export { Caller, setCount } from "./hidden/caller.tsx";\n`;
+/**
+ * ./hidden/byhand.js: Label called by hand, with no JSX: `text` passed reactively as a getter,
+ * from a JavaScript module the plugin does not compile.
+ */
+const BYHAND_SOURCE = `import { render, signal } from "@reactre/core";
+
+import { Label } from "../label.tsx";
+
+const [count, setCount] = signal(0);
+
+export function mount(el) {
+  render(
+    () =>
+      Label({
+        get text() {
+          return count();
+        },
+      }),
+    el,
+  );
+  return setCount;
+}
+`;
+
+// Named as coverage expects the bundles plugin tests build (bunfig.toml). The real path, as the
+// bundlers name modules by it.
+const out = realpathSync(mkdtempSync(join(tmpdir(), "reactre-plugin-missed-")));
+const MISSED = join(out, "missed/");
+cpSync(FIXTURES + "missed", MISSED, { recursive: true });
+symlinkSync(realpathSync(new URL("../node_modules", import.meta.url).pathname), join(out, "node_modules"));
+writeFileSync(MISSED + "reexport.js", REEXPORT);
+writeFileSync(MISSED + "hidden/byhand.js", BYHAND_SOURCE);
 const LABEL = MISSED + "label.tsx",
   CALLER = MISSED + "hidden/caller.tsx",
   BYHAND = MISSED + "hidden/byhand.js";
-
-let out: string;
 
 beforeAll(() => {
   for (const dir of ["dom", "core"]) {
     const r = Bun.spawnSync(["bun", "run", "build"], { cwd: PACKAGES + dir, stdout: "ignore", stderr: "pipe" });
     if (r.exitCode !== 0) throw new Error(`building ${dir} failed:\n${r.stderr.toString()}`);
   }
-  // Named as coverage expects the bundles plugin tests build (bunfig.toml).
-  out = mkdtempSync(join(tmpdir(), "reactre-plugin-missed-"));
 });
 
 afterAll(() => rmSync(out, { recursive: true, force: true }));
@@ -106,9 +149,10 @@ const listEsbuild: EsbuildPlugin = {
 
 /** `virtual:byhand`, a virtual module with ./hidden/byhand.js's code; it has no directory to resolve from. */
 const VIRTUAL_BYHAND = "\0virtual:byhand";
-const byhandSource = readFileSync(BYHAND, "utf8")
-  .replace('"../label.tsx"', JSON.stringify(LABEL))
-  .replace('"@reactre/core"', JSON.stringify(PACKAGES + "core/dist/index.js"));
+const byhandSource = BYHAND_SOURCE.replace('"../label.tsx"', JSON.stringify(LABEL)).replace(
+  '"@reactre/core"',
+  JSON.stringify(PACKAGES + "core/dist/index.js"),
+);
 
 /**
  * Adds caller `caller` as a chunk of its own at the build's start, and transforms it before Label

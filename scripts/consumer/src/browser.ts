@@ -27,7 +27,7 @@ import * as coreStore from "@reactre/core/features/store";
 import * as coreTiming from "@reactre/core/features/timing";
 import * as jsxDevRuntime from "@reactre/core/jsx-dev-runtime";
 import * as jsxRuntime from "@reactre/core/jsx-runtime";
-// Every runtime entry of the packages, for a browser app with no Node or Bun types.
+// Every runtime entry of the packages, for a browser app with no server runtime's types.
 import * as dom from "@reactre/dom";
 import * as full from "@reactre/full-compat";
 import * as fullCore from "@reactre/full-compat/core";

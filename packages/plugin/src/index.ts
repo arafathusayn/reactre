@@ -17,7 +17,7 @@
 //
 // Design decisions:
 //   - TypeScript and JSX go through oxc first (./transpile.ts), not Bun's transpiler, so the plugin
-//     runs under Node too. The compilers then read oxc's output as they read Bun's.
+//     needs no Bun API. The compilers then read oxc's output as they read Bun's.
 //   - The plugin runs before the bundler's own JSX transform (`enforce: "pre"`), so every bundler
 //     gets plain JavaScript.
 //   - Each bundler redirects `react` the way it resolves best: the plugin context's resolve for

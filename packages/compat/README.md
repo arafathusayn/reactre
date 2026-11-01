@@ -6,8 +6,6 @@ Run a React 19 app on [reactre](https://github.com/arafathusayn/reactre)'s templ
 bun add @reactre/compat
 ```
 
-Or with npm: `npm install @reactre/compat`.
-
 Alias `react`, `react-dom` and their subpaths to it at build time. [`@reactre/plugin`](https://www.npmjs.com/package/@reactre/plugin) does it for Vite, Rollup, Rolldown, esbuild, webpack, Rspack and Bun, and compiles your JSX's HTML element trees into templates as well.
 
 ## Vite

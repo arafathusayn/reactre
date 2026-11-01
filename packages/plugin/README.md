@@ -1,12 +1,10 @@
 # @reactre/plugin
 
-[reactre](https://github.com/arafathusayn/reactre)'s build step for Vite, Rollup, Rolldown, esbuild, webpack, Rspack and Bun, built on [unplugin](https://unplugin.unjs.io). It runs under Node and Bun.
+[reactre](https://github.com/arafathusayn/reactre)'s build step for Vite, Rollup, Rolldown, esbuild, webpack, Rspack and Bun, built on [unplugin](https://unplugin.unjs.io).
 
 ```sh
 bun add -d @reactre/plugin
 ```
-
-Or with npm: `npm install -D @reactre/plugin`.
 
 It has two modes:
 

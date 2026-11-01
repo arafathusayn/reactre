@@ -1,6 +1,6 @@
 import * as compatApi from "@reactre/compat/api";
 import * as compatCompiler from "@reactre/compat/compiler";
-// Every build-tool entry of the packages: they run under Node or Bun, so this project has their types.
+// Every build-tool entry of the packages: they run in a build tool's process, so this project has Bun's types.
 import * as compiler from "@reactre/compiler";
 import * as scan from "@reactre/compiler/scan";
 // The core's server renderer, and the feature modules a server build points the app's imports at.

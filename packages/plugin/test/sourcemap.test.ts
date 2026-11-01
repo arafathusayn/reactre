@@ -54,10 +54,10 @@ const FIXTURES = new URL("../fixtures/sourcemap/", import.meta.url).pathname;
 
 // #region Helpers
 
-/** The app's JSX sources: every .jsx and .tsx file of the apps and the packages. */
+/** The app's JSX sources: every .tsx file of the apps and the packages. */
 function corpus(): { id: string; source: string }[] {
   const out = [];
-  for (const id of new Bun.Glob("{apps,packages}/**/*.{jsx,tsx}").scanSync(ROOT)) {
+  for (const id of new Bun.Glob("{apps,packages}/**/*.tsx").scanSync(ROOT)) {
     if (!id.includes("node_modules")) out.push({ id: ROOT + id, source: readFileSync(ROOT + id, "utf8") });
   }
   return out;
@@ -199,9 +199,9 @@ describe("the compilers' maps", () => {
     // before them; the fixtures have none.
     for (const options of [{}, { compat: true }] as const) {
       const transform = transformOf(options);
-      for (const name of ["core.tsx", "compat.jsx"]) {
+      for (const name of ["core.tsx", "compat.tsx"]) {
         const source = readFileSync(FIXTURES + name, "utf8");
-        if (options.compat === undefined && name.endsWith(".jsx")) continue;
+        if (options.compat === undefined && name === "compat.tsx") continue;
         const out = transform.call({}, source, FIXTURES + name);
         expect(misplaced(out.code, out.map as EncodedSourceMap, source)).toEqual([]);
         const map = new TraceMap(out.map as EncodedSourceMap);
@@ -356,7 +356,7 @@ async function throwsOf(name: string): Promise<Thrown[]> {
   const core = join(out, `${name}-core.js`),
     compat = join(out, `${name}-compat.js`);
   await bundlers[name]!(FIXTURES + "core.tsx", core, {});
-  await bundlers[name]!(FIXTURES + "compat.jsx", compat, { compat: true });
+  await bundlers[name]!(FIXTURES + "compat.tsx", compat, { compat: true });
   installFakeDocument();
 
   const app = (await import(core)) as { mount(el: unknown, boom: boolean): void };
@@ -375,7 +375,7 @@ async function throwsOf(name: string): Promise<Thrown[]> {
   return [
     { error: component, file: core, fixture: "core.tsx", message: "boom: component" },
     { error: row, file: core, fixture: "core.tsx", message: "boom: row" },
-    { error: compatRow, file: compat, fixture: "compat.jsx", message: "boom: compat row" },
+    { error: compatRow, file: compat, fixture: "compat.tsx", message: "boom: compat row" },
   ];
 }
 

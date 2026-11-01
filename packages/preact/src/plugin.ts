@@ -14,7 +14,7 @@
 //     alias is needed. With `off`, `@reactre/preact/core` and `/compat` resolve to the switched
 //     module too, so an alias to them still switches.
 //   - Compiles the app's .jsx and .tsx files as the Bun plugin does. TypeScript and JSX go through
-//     oxc first (./transpile.ts), not Bun's transpiler, so it runs under Node too.
+//     oxc first (./transpile.ts), not Bun's transpiler, so it needs no Bun API.
 //   - With `off`, the Bun plugin's switch: `preact` and the rest resolve to a module whose
 //     switched-off names throw, every module bundled is scanned and one that uses a switched-off
 //     API fails the build, and with "Component" off the class-only code goes.

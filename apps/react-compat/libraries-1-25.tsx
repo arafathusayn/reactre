@@ -1,4 +1,4 @@
-// Scenarios with the first 25 of the React libraries npm downloads most (weekly downloads, one
+// Scenarios with the first 25 of the React libraries downloaded most (registry weekly downloads, one
 // package per project, libraries an app imports itself; not dependencies of other libraries,
 // frameworks, renderers, build or test tools):
 //

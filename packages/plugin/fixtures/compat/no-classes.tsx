@@ -16,9 +16,11 @@ class Legacy extends Component {
 }
 
 /** What an uncaught error in `<section><Boom /></section>` is reported with, and Legacy's error. */
-export function reports(el) {
-  const out = [];
-  const root = createRoot(el, { onUncaughtError: (e, info) => out.push(e.message, info.componentStack) });
+export function reports(el: Element) {
+  const out: unknown[] = [];
+  const root = createRoot(el, {
+    onUncaughtError: (e, info) => out.push((e as Error).message, info.componentStack),
+  });
   flushSync(() =>
     root.render(
       <section>

@@ -6,7 +6,7 @@ import { renderToReadableStream, renderToString } from "react-dom/server";
 
 import { Count } from "./count.tsx";
 
-class Title extends Component {
+class Title extends Component<{ text: string }> {
   render() {
     return <h1 className="title">{this.props.text}</h1>;
   }
@@ -30,7 +30,7 @@ function App() {
 
 export const html = () => renderToString(<App />);
 
-export async function stream() {
+export async function stream(): Promise<string> {
   const s = await renderToReadableStream(<App />);
   await s.allReady;
   return new Response(s).text();

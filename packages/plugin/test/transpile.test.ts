@@ -21,7 +21,7 @@ const ROOT = new URL("../../../", import.meta.url).pathname;
 /** Sources to compile both ways: whole files, and each JSX test source of the two compilers. */
 async function corpus(): Promise<{ name: string; id: string; source: string }[]> {
   const out = [];
-  for (const pattern of ["apps/*/*.{jsx,tsx}", "apps/*/app/*.{jsx,tsx}"]) {
+  for (const pattern of ["apps/*/*.tsx", "apps/*/app/*.tsx"]) {
     for (const id of new Bun.Glob(pattern).scanSync(ROOT)) {
       out.push({ name: id, id, source: await Bun.file(ROOT + id).text() });
     }

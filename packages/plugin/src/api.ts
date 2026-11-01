@@ -11,7 +11,7 @@
 //   - It imports only the names that are on, so a bundler can leave out what only the others
 //     reach. A switched-off name is still exported, as a function that throws: a library's
 //     `typeof React.x === "function"` check passes and the failure names the fix.
-//   - The scan parses with oxc (it runs under Node too) and reads what a module takes from
+//   - The scan parses with oxc (it needs no Bun API) and reads what a module takes from
 //     `react` and `react-dom`: named imports and re-exports, `React.x` through a default or
 //     namespace import, and `require("react")`. A use it cannot see still meets the throwing stub.
 

@@ -3,7 +3,7 @@
 // Bun (with `ssr: true`), then rendered with @reactre/core/server: control flow, a context, an
 // <Errored> boundary, effects that do not run, and a <Loading> whose content streams once its
 // async data comes. The same app built for the browser has none of the server's code. The
-// packages resolve to their dist builds, as an app's do from npm, so those are built first.
+// packages resolve to their dist builds, as an app's do once installed, so those are built first.
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";

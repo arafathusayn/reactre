@@ -1,4 +1,4 @@
-// Scenarios with the React libraries ranked 76th to 100th by npm weekly downloads, chosen as in
+// Scenarios with the React libraries ranked 76th to 100th by registry weekly downloads, chosen as in
 // ./libraries-51-75.tsx.
 //
 //   2026-10-29: lottie-react, react-phone-number-input, react-intl, react-image-crop,

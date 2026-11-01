@@ -6,8 +6,6 @@ The Bun plugin that compiles [reactre](https://github.com/arafathusayn/reactre) 
 bun add -d @reactre/compiler
 ```
 
-Or with npm: `npm install -D @reactre/compiler`.
-
 ```ts
 import { reactreCompiler } from "@reactre/compiler";
 
@@ -65,7 +63,7 @@ A file that binds no store and imports only from `@reactre` (or assets) compiles
 
 A construct the compiler does not handle, such as a `<For>` or `<Repeat>` outside an element, a row that is not one element, a `<Match>` outside a `<Switch>` or a `keyed` that is not written as a boolean, is a compile error that points at its source, never a silent fallback.
 
-For Vite, Rollup, Rolldown, esbuild, webpack or Rspack, use [`@reactre/plugin`](https://www.npmjs.com/package/@reactre/plugin), which runs this compiler under Node as well as Bun.
+For Vite, Rollup, Rolldown, esbuild, webpack or Rspack, use [`@reactre/plugin`](https://www.npmjs.com/package/@reactre/plugin), which runs this compiler inside each of them.
 
 ## License
 

@@ -6,8 +6,6 @@ A tiny, fast UI library for the web. You write components in TSX over signals. N
 bun add @reactre/core
 ```
 
-Or with npm: `npm install @reactre/core`.
-
 ```tsx
 import { render, signal } from "@reactre/core";
 
@@ -96,8 +94,6 @@ Keep your app as it is. `@reactre/compat` is React 19's API on reactre's templat
 bun add @reactre/compat
 bun add -d @reactre/plugin
 ```
-
-Or with npm: `npm install @reactre/compat` and `npm install -D @reactre/plugin`.
 
 Then let the plugin point `react` and `react-dom` at it when you build. With Vite:
 

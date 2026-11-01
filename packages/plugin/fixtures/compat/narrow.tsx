@@ -10,10 +10,10 @@ function Counter() {
   return <button onClick={() => setCount((c) => c + 1)}>{`Clicked ${count}`}</button>;
 }
 
-export function mount(el) {
+export function mount(el: Element) {
   const root = createRoot(el);
   flushSync(() => root.render(<Counter />));
 }
 
 /** A switched-off API, as a library that checks for it at run time would read it. */
-export const offByName = (name) => React[name];
+export const offByName = (name: string) => React[name as keyof typeof React];
