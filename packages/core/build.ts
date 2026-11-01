@@ -4,7 +4,8 @@
 //                    async, development and type blocks, as it was before any of them existed;
 //   dist/async/      index.ts with the async runtime that @reactre/core/features/async and
 //                    features/actions need, for production: without the development blocks;
-//   dist/dev/        index.ts as it is: the async runtime and the development diagnostics.
+//   dist/dev/        index.ts as it is: the async runtime and the development diagnostics; and
+//                    features/memo.ts as it is, with its checks (dist/features/memo.js has none).
 //
 // The feature modules import "@reactre/core", which resolves to one of the three: package.json's
 // "reactre-async" condition picks dist/async, "development" dist/dev, and @reactre/plugin picks
@@ -63,6 +64,11 @@ for (const r of [
     outdir: join(dir, "dist/async"),
     plugins: [without(...ASYNC_PRODUCTION)],
   }),
-  await Bun.build({ ...options, entrypoints: [join(dir, "src/index.ts")], outdir: join(dir, "dist/dev") }),
+  // With features/memo's development build, which holds its checks too.
+  await Bun.build({
+    ...options,
+    entrypoints: [join(dir, "src/index.ts"), join(dir, "src/features/memo.ts")],
+    outdir: join(dir, "dist/dev"),
+  }),
 ])
   if (!r.success) throw new AggregateError(r.logs, "@reactre/core: the build failed");

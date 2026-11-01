@@ -27,8 +27,9 @@
 //   dist/async/  without DEV and TYPES (`ASYNC_PRODUCTION`): the async runtime, for production;
 //   dist/dev/    the source as it is: the async runtime and the diagnostics, for dev servers.
 //
-// features/memo.ts has TYPES blocks too (the types of the options only the compiler can route):
-// the plugins strip them from the source as they strip index.ts's.
+// features/memo.ts has DEV and TYPES blocks too (its checks for options only the compiler can
+// give, and their types): dist/features/memo.js is built without them, dist/dev/features/memo.js
+// with them, and the plugins strip the source as they strip index.ts.
 //
 // As in @reactre/compat (see its withoutSlicing.ts), a define that turns the branches off would not
 // do: Bun's minifier names symbols by how often they are used, dead code included, so the
@@ -100,8 +101,8 @@ export function stripDev(source: string): string {
 }
 
 /**
- * A Bun plugin that loads @reactre/core's index.ts, and features/memo.ts (which has type blocks
- * of its own), without the blocks `names` (see `strip`).
+ * A Bun plugin that loads @reactre/core's index.ts, and features/memo.ts (which has development
+ * and type blocks of its own), without the blocks `names` (see `strip`).
  */
 export function without(...names: Block[]): BunPlugin {
   return {

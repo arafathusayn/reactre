@@ -1278,25 +1278,26 @@ function htmlScripts(file: string, html: string): string {
 // build that reads its program knows whether some module imports either feature module: if none
 // does, the app gets the core without that code, whatever the conditions resolved; and a
 // production build gets no diagnostics, a dev server the development build (`coreRuntime`).
-// The source of features/memo has type blocks of its own, stripped the same way. @reactre/plugin
-// does this for every bundler, the compiler's Bun plugin for Bun.build.
+// features/memo has development and type blocks of its own, and a development build
+// (dist/dev/features/memo.js), picked the same way. @reactre/plugin does this for every bundler,
+// the compiler's Bun plugin for Bun.build.
 
 /** The specifiers of @reactre/core's async feature modules. */
 const ASYNC_FEATURE: RegExp = /^@reactre\/core\/features\/(?:async|actions)$/;
 
 /**
  * The files of @reactre/core that hold or need its async runtime, by path: its three builds, its
- * source index.ts, and its async feature modules, built or source; and the source of
- * features/memo, which has type blocks too.
+ * source index.ts, and its async feature modules, built or source; and features/memo, whose
+ * source has development and type blocks too, and whose build has a development one.
  */
 export const CORE_RUNTIME: RegExp =
-  /[\\/]core[\\/](?:dist[\\/](?:(?:async|dev)[\\/])?index\.js|src[\\/](?:index|features[\\/]memo)\.ts|(?:dist|src)[\\/]features[\\/](?:async|actions)\.[jt]s)$/;
+  /[\\/]core[\\/](?:dist[\\/](?:(?:async|dev)[\\/])?index\.js|src[\\/]index\.ts|(?:dist|src)[\\/]features[\\/](?:async|actions|memo)\.[jt]s|dist[\\/]dev[\\/]features[\\/]memo\.js)$/;
 
 /** Of those, the feature modules. */
 const ASYNC_FEATURE_FILE: RegExp = /[\\/]features[\\/](?:async|actions)\.[jt]s$/;
 
-/** Of those, features/memo's source. */
-const MEMO_FILE: RegExp = /[\\/]features[\\/]memo\.ts$/;
+/** Of those, features/memo: its source, its build, and its development build. */
+const MEMO_FILE: RegExp = /[\\/]features[\\/]memo\.[jt]s$/;
 
 /** Of those, the source index.ts. */
 const CORE_SOURCE: RegExp = /[\\/]src[\\/]index\.ts$/;
@@ -1304,7 +1305,7 @@ const CORE_SOURCE: RegExp = /[\\/]src[\\/]index\.ts$/;
 /** Whether file `path` (a `CORE_RUNTIME` one) is @reactre/core's: its package is named so. By package, cached. */
 const cores = new Map<string, boolean>();
 export function isCore(path: string): boolean {
-  const dir = path.slice(0, path.search(/[\\/](?:dist|src)[\\/](?:(?:(?:async|dev)[\\/])?index\.[jt]s|features[\\/])/));
+  const dir = path.slice(0, path.search(/[\\/](?:dist|src)[\\/](?:(?:async|dev)[\\/])?(?:index\.[jt]s|features[\\/])/));
   let r = cores.get(dir);
   if (r === undefined) {
     try {
@@ -1366,8 +1367,9 @@ const BUILDS = { default: "index.js", async: "async/index.js", dev: "dev/index.j
  * async build where the build gets the core's async runtime (`on`), else the default build. A
  * build that is not the one becomes its re-export; the source index.ts is loaded stripped as
  * that build is made (`stripCore`), or as it is for the development build; an async feature
- * module, as it is; the source of features/memo, stripped of its type blocks, or as it is for a
- * dev server. Null: the file as it is.
+ * module, as it is. features/memo is its source stripped of its development and type blocks, or
+ * as it is for a dev server; its build, the one of its two (dist/features/memo.js, and
+ * dist/dev/features/memo.js with the checks) the build gets. Null: the file as it is.
  *
  * @param forced Whether `on` is the plugin's `async` option, not what the program imports.
  * @param dev Whether the build is a dev server's, which gets the development build; else
@@ -1385,8 +1387,14 @@ export async function coreRuntime(
 ): Promise<string | null> {
   if (CORE_SOURCE.test(path))
     return dev ? null : stripCore(path, read, on ? ["DEV", "TYPES"] : ["ASYNC", "DEV", "TYPES"]);
-  if (MEMO_FILE.test(path))
-    return dev ? null : stripCore(path, read, ["DEV", "TYPES"], join(dirname(path), "..", "withoutAsync.ts"));
+  if (MEMO_FILE.test(path)) {
+    if (path.endsWith(".ts"))
+      return dev ? null : stripCore(path, read, ["DEV", "TYPES"], join(dirname(path), "..", "withoutAsync.ts"));
+    const isDev = /[\\/]dev[\\/]features[\\/]/.test(path);
+    const other = isDev ? "../../features/memo.js" : "../dev/features/memo.js";
+    // A core built before the development build of features/memo existed has the one build.
+    return isDev === dev || !existsSync(join(dirname(path), other)) ? null : `export * from "${other}";\n`;
+  }
   if (!ASYNC_FEATURE_FILE.test(path)) {
     const is = /[\\/]dev[\\/]index\.js$/.test(path)
       ? "dev"

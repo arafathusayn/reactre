@@ -256,17 +256,34 @@ describe("coreRuntime: the development build for a dev server, a production one 
     }
   });
 
-  test("features/memo: its source stripped of its types, as it is for a dev server", async () => {
+  test("features/memo: its source stripped of its checks and types, its builds swapped as the core's are", async () => {
     const memo = join(core, "src/features/memo.ts");
     const readMemo = () => Bun.file(memo).text();
-    // A dev server: the source as it is.
+    // A dev server: the source as it is, with its checks.
     expect(await coreRuntime(memo, readMemo, true, false, true)).toBeNull();
-    // A production build: as features/memo was before its types were added.
+    // A production build: as features/memo was before its checks and types were added.
     const code = (await coreRuntime(memo, readMemo, false, false))!;
     expect(code).toBe(strip(await readMemo(), ["DEV", "TYPES"]));
+    expect(code).not.toContain("uncompiled");
     expect(code).not.toContain("readonly unobserved");
     expect(code).not.toContain("readonly lazy");
     expect(code).toContain("export function memo<T>(fn: (prev: T | undefined) => T, options?: SignalOptions<T>)");
+    // Its two builds, in a package that has both, and in one built before the second existed.
+    const at = mkdtempSync(join(tmpdir(), "reactre-core-memo-builds-"));
+    try {
+      mkdirSync(join(at, "dist/dev/features"), { recursive: true });
+      mkdirSync(join(at, "dist/features"));
+      const [prod, dev] = [join(at, "dist/features/memo.js"), join(at, "dist/dev/features/memo.js")];
+      for (const f of [prod, dev]) writeFileSync(f, "");
+      expect(await coreRuntime(prod, read, false, false)).toBeNull();
+      expect(await coreRuntime(prod, read, true, false, true)).toBe('export * from "../dev/features/memo.js";\n');
+      expect(await coreRuntime(dev, read, true, false, true)).toBeNull();
+      expect(await coreRuntime(dev, read, false, false)).toBe('export * from "../../features/memo.js";\n');
+      rmSync(dev);
+      expect(await coreRuntime(prod, read, true, false, true)).toBeNull();
+    } finally {
+      rmSync(at, { recursive: true, force: true });
+    }
   });
 
   test("a core whose stripper knows only async blocks: stripped of those, else as it is", async () => {
@@ -298,6 +315,11 @@ describe("the package's build", () => {
     expect(prod).not.toContain("drainAsync");
     expect(async).toContain("drainAsync");
     expect(dev).toContain("drainAsync");
+    // features/memo's checks for options only the compiler can give: in its development build alone.
+    const [memo, devMemo] = ["features/memo.js", "dev/features/memo.js"].map(text) as [string, string];
+    expect(memo).not.toContain("needs @reactre/plugin");
+    expect(devMemo).toContain("needs @reactre/plugin");
+    for (const m of [memo, devMemo]) expect(m).toContain("function __observedMemo(");
   }, 30_000);
 });
 

@@ -17,11 +17,12 @@
 //     passes either option there, or one whose options it cannot read (its observed.ts). `memo`
 //     and `signal` stay as they were, so an app that passes neither option bundles the code it
 //     did, byte for byte, with the same minified names: ../observed.ts is a file of its own, and
-//     the types added here since are between `// #if TYPES` markers, which production builds strip
-//     (../withoutAsync.ts), as Bun's minifier names locals by the letters of every file in a
-//     bundle, types included.
+//     the types and checks added here since are between `// #if TYPES` and `// #if DEV` markers,
+//     which production builds strip (../withoutAsync.ts), as Bun's minifier names locals by the
+//     letters of every file in a bundle, types included.
 //   - A call the compiler does not compile (in a .ts file, in a dependency, or through `memo` kept
-//     in a namespace object) reaches `memo` and `signal` themselves, which do not count readers.
+//     in a namespace object) reaches `memo` and `signal` themselves. The development build throws
+//     there for either option, naming the fix; the production build has no check, and ignores them.
 
 import { effect, type Setter, signal as coreSignal } from "@reactre/core";
 
@@ -45,6 +46,21 @@ export interface SignalOptions<T> {
 }
 
 const inc = (n: number): number => n + 1;
+// #if DEV
+
+/**
+ * Throw for `option`, given to `fn` where the compiler did not see the call: only the
+ * reader-counting entry it would have called keeps the count the option needs.
+ */
+function uncompiled(fn: string, option: string): never {
+  throw new Error(
+    `reactre: ${fn}'s \`${option}\` option needs @reactre/plugin to compile this call, which sends it to the ` +
+      `reader-counting implementation: the call is in code the plugin does not compile (a .ts file, a ` +
+      `dependency), or reaches ${fn} through a namespace object. Make the call in a .tsx or .jsx file the ` +
+      `plugin compiles, or add its file to the plugin's \`include\` option (the compiler's Bun plugin's \`filter\`).`,
+  );
+}
+// #endif
 
 /**
  * A signal, as `signal` from @reactre/core, with options; or, given a function, a writable
@@ -65,6 +81,9 @@ const inc = (n: number): number => n + 1;
 export function signal<T>(fn: (prev: T | undefined) => T, options?: SignalOptions<T>): [() => T, Setter<T>];
 export function signal<T>(value: T, options?: SignalOptions<T>): [() => T, Setter<T>];
 export function signal<T>(init: T | ((prev: T | undefined) => T), options?: SignalOptions<T>): [() => T, Setter<T>] {
+  // #if DEV
+  if (options?.unobserved !== undefined) uncompiled("signal", "unobserved");
+  // #endif
   const eq = options?.equals ?? ((a: T, b: T) => a === b),
     derived = typeof init === "function",
     [version, bump] = coreSignal(0);
@@ -109,6 +128,10 @@ export function memo<T>(
     readonly lazy?: boolean;
   },
 ): () => T {
+  // #if DEV
+  if (options?.lazy === true || options?.unobserved !== undefined)
+    uncompiled("memo", options.lazy === true ? "lazy" : "unobserved");
+  // #endif
   // #else
   // export function memo<T>(fn: (prev: T | undefined) => T, options?: SignalOptions<T>): () => T {
   // #endif

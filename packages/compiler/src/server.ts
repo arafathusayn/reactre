@@ -59,7 +59,7 @@ const NAMED = /\bimport\s*\{([^}]*)\}\s*from\s*(["'])(@reactre\/core(?:\/feature
  * A feature module of @reactre/core (its sources' or its build's): a server build loads it with
  * `serverImports(code, false)`, so its core is @reactre/core/server. Check `isCore` too.
  */
-export const CORE_FEATURE: RegExp = /[\\/]core[\\/](?:src|dist)[\\/]features[\\/][a-zA-Z]+\.[jt]s$/;
+export const CORE_FEATURE: RegExp = /[\\/]core[\\/](?:src|dist(?:[\\/]dev)?)[\\/]features[\\/][a-zA-Z]+\.[jt]s$/;
 
 /**
  * Module `js`'s imports of @reactre/core, as a server build makes them: the core and its

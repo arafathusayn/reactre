@@ -3,7 +3,9 @@
 // reader-counting entries, `__observedMemo` and `__observedSignal` (its observed.ts), so these
 // tests call them as compiled code does: `memo(fn, { lazy: true })` in a .tsx file is
 // `__observedMemo(fn, { lazy: true })`. A signal's readers are counted only for those options:
-// `unobserved` runs in a microtask after the last reader stopped reading, if none came back.
+// `unobserved` runs in a microtask after the last reader stopped reading, if none came back. A
+// call the compiler did not see reaches `memo` and `signal` themselves, whose development build
+// (the sources, as `bun test` runs them) throws for either option.
 
 import { describe, expect, test } from "bun:test";
 
@@ -210,5 +212,31 @@ describe("signal with unobserved", () => {
     r.dispose();
     await tick();
     expect(gone).toBe(1);
+  });
+});
+
+describe("a call the compiler did not see", () => {
+  test("the development build throws for lazy and unobserved, naming the plugin and the fix", () => {
+    const [a] = coreSignal(1);
+    const thrown = (fn: () => unknown) => {
+      try {
+        fn();
+      } catch (e) {
+        return (e as Error).message;
+      }
+      return "";
+    };
+    expect(thrown(() => memo(() => a(), { lazy: true }))).toStartWith(
+      "reactre: memo's `lazy` option needs @reactre/plugin to compile this call",
+    );
+    expect(thrown(() => memo(() => a(), { unobserved: () => {} }))).toStartWith(
+      "reactre: memo's `unobserved` option needs @reactre/plugin",
+    );
+    expect(thrown(() => signal(1, { unobserved: () => {} }))).toStartWith(
+      "reactre: signal's `unobserved` option needs @reactre/plugin",
+    );
+    expect(thrown(() => signal(() => a(), { unobserved: () => {} }))).toContain("the plugin's `include` option");
+    // Neither option: nothing to throw for.
+    expect(memo(() => a(), { lazy: false })()).toBe(1);
   });
 });
