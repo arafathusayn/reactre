@@ -1,6 +1,6 @@
 {
   "name": "@reactre/full-compat",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "@reactre/compat with React's time slicing: a transition's render yields to the page every 5 ms, as React's concurrent render does.",
   "keywords": [
     "reactre",

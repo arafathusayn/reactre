@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.0.3] - 2026-11-01
+
 ### Every package
 
 - Changed: each export's `types` condition names a declaration file in `dist/` (`dist/index.d.ts`, `dist/features/*.d.ts`, ...), written by the build, not the TypeScript source. A project that imports reactre type-checks its declarations under its own settings, `skipLibCheck: false` included, with `moduleResolution` `bundler`, `node16` or `nodenext`; before, its compiler read reactre's sources and failed on their `.ts` imports unless it set `allowImportingTsExtensions`. Bun still runs the sources, through the `bun` condition.
@@ -39,7 +41,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### @reactre/full-compat
 
-- Added: a new package, @reactre/compat with React's time slicing. A transition's render yields to the page every 5 ms: events, timers and paints run between slices, an urgent update made meanwhile commits first and the transition renders again from the start, and one that has waited 5 seconds renders the rest at once, as React's concurrent render does. Between slices the render is undone, so the page shows the last commit. The check before each component costs on every render, so only this package's builds compile it in. About 1 KB gzipped more than @reactre/compat. Its development build (`dist/dev`, the `development` export condition) has Fast Refresh, as @reactre/compat's does.
+- Added: a new package, @reactre/compat with React's time slicing. (npm also has a 0.0.2 of it, published after v0.0.2 was tagged; 0.0.3 is its first release with the other packages.) A transition's render yields to the page every 5 ms: events, timers and paints run between slices, an urgent update made meanwhile commits first and the transition renders again from the start, and one that has waited 5 seconds renders the rest at once, as React's concurrent render does. Between slices the render is undone, so the page shows the last commit. The check before each component costs on every render, so only this package's builds compile it in. About 1 KB gzipped more than @reactre/compat. Its development build (`dist/dev`, the `development` export condition) has Fast Refresh, as @reactre/compat's does.
 
 ### @reactre/compat
 
@@ -249,6 +251,7 @@ First release.
 
 All packages ship ES modules for browsers and bundlers, and TypeScript sources for types.
 
-[Unreleased]: https://github.com/arafathusayn/reactre/compare/v0.0.2...HEAD
+[Unreleased]: https://github.com/arafathusayn/reactre/compare/v0.0.3...HEAD
+[0.0.3]: https://github.com/arafathusayn/reactre/releases/tag/v0.0.3
 [0.0.2]: https://github.com/arafathusayn/reactre/releases/tag/v0.0.2
 [0.0.1]: https://github.com/arafathusayn/reactre/releases/tag/v0.0.1
