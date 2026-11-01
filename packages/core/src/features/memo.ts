@@ -10,10 +10,15 @@
 //   - Built from the public API alone: the value lives in a closure, and a core signal of a
 //     version number, bumped when the value changes, is what readers subscribe to. So `equals`
 //     decides alone whether readers re-run, and `equals: false` re-runs them on every write.
-//   - Solid 2.0's `lazy` and `unobserved` options are left out: both need to know when a memo
-//     gains or loses its last reader, and core's signals keep no count of their readers.
+//   - Solid 2.0's `lazy` and `unobserved` options are in `createMemo` and `createSignal`, Solid
+//     2.0's names, from ../observed.ts: both need to know when a memo loses its last reader,
+//     which core's signals do not count, so only the signals made with them are counted, and
+//     `memo` and `signal` stay as they are. In a file of their own, so an app that imports only
+//     `memo` and `signal` bundles the code it did, with the same minified names.
 
 import { effect, type Setter, signal as coreSignal } from "@reactre/core";
+
+export * from "../observed.ts";
 
 /** Options of `signal` and `memo`. */
 export interface SignalOptions<T> {

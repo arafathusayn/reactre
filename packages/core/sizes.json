@@ -47,6 +47,10 @@
     "min": 6555,
     "gzip": 2954
   },
+  "lazyMemo": {
+    "min": 7712,
+    "gzip": 3388
+  },
   "context": {
     "min": 7813,
     "gzip": 3368
