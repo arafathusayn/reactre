@@ -66,6 +66,7 @@ describe("imports", () => {
     expect(serverImports(`import { effect, memo as m, signal } from "@reactre/core";`)).toBe(
       `import { signal } from "@reactre/core/server";import { __ssrEffect as effect, __ssrMemo as m } from "@reactre/core/server";`,
     );
+    // features/errors points at the server's, whose <Errored> marks a fallback for hydration.
     expect(serverImports(`import { effect as e } from "@reactre/core/features/errors";`)).toBe(
       `import "@reactre/core/server/errors";import { __ssrEffect as e } from "@reactre/core/server";`,
     );

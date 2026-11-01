@@ -143,7 +143,9 @@ type Mode = "string" | "stream" | "async";
 const SWAP =
   'self.$rr||(self.$rr=function(i){var d=document,t=d.getElementById("rr:t"+i),w=d.createTreeWalker(d,128),s,e,n;' +
   'while(n=w.nextNode()){if(n.data==="rr:b"+i)s=n;else if(n.data==="/rr:b"+i){e=n;break}}' +
-  "var p=s.parentNode;while(s.nextSibling!==e)p.removeChild(s.nextSibling);p.replaceChild(t.content,s);p.removeChild(e);t.remove()})";
+  "var p=s.parentNode;while(s.nextSibling!==e)p.removeChild(s.nextSibling);p.replaceChild(t.content,s);p.removeChild(e);t.remove();" +
+  // A page that hydrates (@reactre/core/hydrate/async) hydrates the boundary's content now.
+  "self.$rrh&&self.$rrh(i)})";
 
 /** One render of an app. */
 class Render {
@@ -191,6 +193,9 @@ class Render {
         x.id = this.ids++;
         this.waiting.add(x);
         s += `<!--rr:b${x.id}-->${this.html(x.fallback)}<!--/rr:b${x.id}-->`;
+      } else if (this.hydrate) {
+        // A fallback whose content is not coming: the client builds the content itself.
+        s += `<!--rr:b-->${this.html(x.fallback)}<!--/rr:b-->`;
       } else s += this.html(x.fallback);
     }
     return s;
@@ -625,6 +630,18 @@ export function __ssrLoading(props: { fallback?: unknown; children?: unknown }):
   // The fallback is outside the boundary: what it waits for, the boundary above waits for.
   b.fallback = __frag([() => props.fallback]).p;
   return new Html([b]);
+}
+
+/**
+ * Internal (@reactre/core/server/errors): what an `<Errored>` that shows its fallback writes
+ * before it, in a render with `hydrate`: a marker with the error's name and message, so that
+ * hydration shows the fallback too, with that error (@reactre/core/hydrate/errors). Nothing
+ * without `hydrate`.
+ */
+export function __ssrErrored(err: unknown): Html | null {
+  if (R === null || !R.hydrate) return null;
+  const e = err instanceof Error ? err : new Error(String(err));
+  return new Html([`<!--rr:e:${encodeURIComponent(e.name)}:${encodeURIComponent(e.message)}-->`]);
 }
 
 /**

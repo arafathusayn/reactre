@@ -186,7 +186,11 @@ export class ServerEmit {
   /** `c.call` on the server: a jsx call that is not a child of a host element compiled with it. */
   call(x: Call): string {
     const c = this.c;
-    if (x.type.startsWith('"')) return this.host(x);
+    // A key that may change makes the element a one-slot fragment on the client: its slot here.
+    if (x.type.startsWith('"'))
+      return x.key !== undefined && c.changes(x.key)
+        ? `__rrsS(${this.host({ ...x, key: undefined, keyAt: -1 })})`
+        : this.host(x);
     const f = c.kind(x.type);
     if (f === "For" || f === "Repeat") throw new ReactreCompileError(`reactre: <${f}> must be the child of an element`);
     if (f !== null) {
