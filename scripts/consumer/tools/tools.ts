@@ -3,6 +3,10 @@ import * as compatCompiler from "@reactre/compat/compiler";
 // Every build-tool entry of the packages: they run under Node or Bun, so this project has their types.
 import * as compiler from "@reactre/compiler";
 import * as scan from "@reactre/compiler/scan";
+// The core's server renderer, and the feature modules a server build points the app's imports at.
+import * as server from "@reactre/core/server";
+import * as serverAsync from "@reactre/core/server/async";
+import * as serverDynamic from "@reactre/core/server/dynamic";
 import * as plugin from "@reactre/plugin";
 import bun from "@reactre/plugin/bun";
 import esbuild from "@reactre/plugin/esbuild";
@@ -16,6 +20,8 @@ import * as preactPlugin from "@reactre/preact/plugin";
 
 const js: string = compiler.compileJs("const a = 1;");
 const p = vite({ compat: { classes: false } });
+const html: string = server.renderToString(() => "hi", { hydrate: true });
+const stream: ReadableStream<Uint8Array> = server.renderToStream(() => "hi");
 
 export const all: unknown[] = [
   compiler,
@@ -34,4 +40,9 @@ export const all: unknown[] = [
   preactPlugin,
   js,
   p,
+  server,
+  serverAsync,
+  serverDynamic,
+  html,
+  stream,
 ];

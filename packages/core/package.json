@@ -53,6 +53,23 @@
       "types": "./dist/features/*.d.ts",
       "bun": "./src/features/*.ts",
       "default": "./dist/features/*.js"
+    },
+    "./server": {
+      "reactre-source": "./src/server.ts",
+      "types": "./dist/server.d.ts",
+      "workerd": "./dist/server.js",
+      "edge-light": "./dist/server.js",
+      "worker": "./dist/server.js",
+      "deno": "./dist/server.js",
+      "browser": "./dist/server.browser.js",
+      "bun": "./src/server.ts",
+      "default": "./dist/server.js"
+    },
+    "./server/*": {
+      "reactre-source": "./src/server/*.ts",
+      "types": "./dist/server/*.d.ts",
+      "bun": "./src/server/*.ts",
+      "default": "./dist/server/*.js"
     }
   },
   "files": [

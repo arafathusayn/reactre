@@ -59,9 +59,11 @@ import { compileJs as compileCompat, compileJsWithMap as compileCompatWithMap } 
 import {
   compileJs as compileCore,
   compileJsWithMap as compileCoreWithMap,
+  CORE_FEATURE,
   factsFor,
   type PropFacts,
   ReactreCompileError,
+  serverImports,
 } from "@reactre/compiler";
 import type { SourceMapV3 } from "@reactre/compiler/map";
 import {
@@ -142,6 +144,14 @@ export interface ReactreOptions {
    * module that imports either feature module fails the build, naming this option.
    */
   readonly async?: boolean;
+  /**
+   * Core mode: build for the server, to render with @reactre/core/server: the app's JSX compiles
+   * to HTML strings (@reactre/compiler's server mode), and its imports of @reactre/core and of
+   * the core's feature modules point at the server's versions. Unset: Vite's SSR builds and its
+   * dev server's server renders are server builds (an environment whose consumer is the server),
+   * and no other bundler's build is; `true` or `false` decides for every build.
+   */
+  readonly ssr?: boolean;
 }
 
 // #endregion
@@ -162,6 +172,24 @@ const SCRIPT = /\.[cm]?[jt]sx?(?:$|\?)/;
 
 /** A dependency's files, which cannot reach the app's own modules. */
 const NODE_MODULES = /[\\/]node_modules[\\/]/;
+
+/** What a server build's imports are pointed in: the app's scripts, and @reactre/core's feature modules. */
+const SERVER_SCRIPT =
+  /^(?![^]*[\\/]node_modules[\\/])[^]*\.[cm]?[jt]sx?(?:$|\?)|[\\/]core[\\/](?:src|dist)[\\/]features[\\/][a-zA-Z]+\.[jt]s(?:$|\?)/;
+
+/** @reactre/core and its subpaths, which a Vite server render bundles. */
+const CORE_PACKAGE = /^@reactre\/core(?:\/|$)/;
+
+/** Whether `path` is a file of @reactre/core's sources or builds (by its package's name). */
+function ofCore(path: string): boolean {
+  const m = /^([^]*)[\\/](?:src|dist)[\\/]/.exec(path);
+  return m !== null && isCore(join(m[1]!, "src", "index.ts"));
+}
+
+/** What `ssr` reads of a transform's context: Vite's environment. */
+interface SsrContext {
+  readonly environment?: { readonly config?: { readonly consumer?: string } };
+}
 
 /** Files that import no code: styles, data, images, fonts, media; a virtual one's too (`\0x.css`). */
 const ASSET =
@@ -241,6 +269,8 @@ export const reactre: UnpluginInstance<ReactreOptions | undefined, boolean> = cr
   };
   const include = toArray(options.include ?? /\.[jt]sx$/);
   const exclude = toArray(options.exclude ?? /[\\/]node_modules[\\/]/);
+  /** Whether the plugin compiles module `id`. */
+  const compiles = (id: string): boolean => include.some((r) => r.test(id)) && !exclude.some((r) => r.test(id));
   // Core mode's whole program, read at each build's start (./program.ts), by Vite environment:
   // the program and the resolver that read it. Null: each file is seen alone.
   const programs = new Map<string, Promise<{ program: Program; host: Host } | null>>();
@@ -255,6 +285,12 @@ export const reactre: UnpluginInstance<ReactreOptions | undefined, boolean> = cr
   };
   let serve = false;
   const envOf = (ctx: unknown) => (ctx as { environment?: { name?: string } } | undefined)?.environment?.name ?? "";
+  /** Whether a transform builds for the server: the `ssr` option, else Vite's environment or `ssr` flag. */
+  const ssrOf = (ctx: unknown, args: readonly unknown[]): boolean => {
+    if (options.ssr !== undefined) return options.ssr;
+    const consumer = (ctx as SsrContext | undefined)?.environment?.config?.consumer;
+    return consumer !== undefined ? consumer === "server" : (args[0] as { ssr?: boolean } | undefined)?.ssr === true;
+  };
 
   const plugin: UnpluginOptions = {
     name: "@reactre/plugin",
@@ -262,15 +298,17 @@ export const reactre: UnpluginInstance<ReactreOptions | undefined, boolean> = cr
     transform: compile
       ? {
           filter: { id: { include, exclude } },
-          handler(code, id) {
+          handler(code, id, ...rest: unknown[]) {
             const path = id.replace(/[?#].*$/, "");
             const maps = wantsMaps(this);
             const out = transpile(path, code, compat === undefined ? "@reactre/core" : "react", maps);
             if (compat === undefined && out.classic) {
               throw new ReactreCompileError(`reactre: ${path}: a key after {...spread} props cannot be compiled`);
             }
-            const finish = (props: PropFacts | undefined) => {
-              const opts = props === undefined ? undefined : { props };
+            const server = compat === undefined && ssrOf(this, rest) ? { server: true } : undefined;
+            const finish = (facts: PropFacts | undefined) => {
+              const props = facts === undefined ? undefined : { props: facts };
+              const opts = server === undefined ? props : { ...props, ...server };
               try {
                 if (!maps)
                   return {
@@ -322,13 +360,39 @@ export const reactre: UnpluginInstance<ReactreOptions | undefined, boolean> = cr
         await build;
       };
     // Vite's dependency scanner compiles JSX on its own, for React's runtime, and would then fail
-    // to find react/jsx-runtime. It needs only the imports, so it keeps JSX as written.
+    // to find react/jsx-runtime. It needs only the imports, so it keeps JSX as written. A server
+    // render bundles @reactre/core, so its feature modules reach the server's core (`server`).
     plugin.vite = {
-      config: () => ({ optimizeDeps: { rolldownOptions: { transform: { jsx: "preserve" } } } }),
+      config: () => ({
+        optimizeDeps: { rolldownOptions: { transform: { jsx: "preserve" } } },
+        ...(options.ssr === false ? {} : { ssr: { noExternal: [CORE_PACKAGE] } }),
+      }),
       configResolved(config) {
         serve = config.command === "serve";
       },
     };
+    // A server build: @reactre/core's feature modules import @reactre/core/server for the core, so
+    // a context's provider or an <Errored> renders on the server's `__frag`, and the app's modules
+    // that are not compiled (a .ts file) import the server's core as compiled ones do.
+    // Only where a build may be for the server: with the option, or in Vite, where the environment
+    // says. Elsewhere the hook is not there, so a client build loads every module as before.
+    const servers: UnpluginOptions[] = [];
+    if (options.ssr === true || (options.ssr === undefined && meta.framework === "vite"))
+      servers.push({
+        name: "@reactre/plugin:server",
+        enforce: "pre",
+        transform: {
+          filter: { id: { include: [SERVER_SCRIPT] } },
+          handler(code, id, ...rest: unknown[]) {
+            if (!ssrOf(this, rest)) return null;
+            const path = id.replace(/[?#].*$/, "");
+            const feature = CORE_FEATURE.test(path) && isCore(path);
+            if (!feature && (ofCore(path) || compiles(id))) return null;
+            const out = serverImports(code, !feature);
+            return out === code ? null : { code: out, map: null };
+          },
+        },
+      });
     // @reactre/core's build: whichever of its three builds the bundler resolved (its export
     // conditions pick the development one for "development"), each becomes the one the build
     // gets (the development build on Vite's dev server), so that every module has the same core;
@@ -348,7 +412,7 @@ export const reactre: UnpluginInstance<ReactreOptions | undefined, boolean> = cr
         },
       },
     };
-    if (options.wholeProgram === false) return [plugin, runtime];
+    if (options.wholeProgram === false) return [plugin, runtime, ...servers];
     // Every other module of the app joins the program too, though it is not compiled: a script
     // the plugin does not compile (a .js or .ts file, a file `exclude` names) or a virtual module
     // may call a component by hand, passing a prop as a getter. One the program read already is
@@ -363,7 +427,7 @@ export const reactre: UnpluginInstance<ReactreOptions | undefined, boolean> = cr
         filter: { id: { include: [SCRIPT, /^\0/], exclude: [NODE_MODULES] } },
         async handler(code, id) {
           const path = id.replace(/[?#].*$/, "");
-          const compiled = include.some((r) => r.test(id)) && !exclude.some((r) => r.test(id));
+          const compiled = compiles(id);
           // The core's builds call no component: the one `@reactre/plugin:runtime` swaps in (in a
           // workspace, outside node_modules) is no module of the app's.
           if (compiled || ASSET.test(path) || (CORE_RUNTIME.test(path) && isCore(path))) return null;
@@ -387,7 +451,7 @@ export const reactre: UnpluginInstance<ReactreOptions | undefined, boolean> = cr
     joiner.rollup = { moduleParsed: parsed };
     joiner.rolldown = { moduleParsed: parsed } as UnpluginOptions["rolldown"];
     joiner.vite = { moduleParsed: parsed };
-    return [plugin, joiner, runtime];
+    return [plugin, joiner, runtime, ...servers];
   }
 
   switch (meta.framework) {

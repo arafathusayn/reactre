@@ -123,8 +123,10 @@ import {
   walk,
 } from "./program.ts";
 import { isIdent, literal, NOT_LITERAL, skipToken, splitAt, trimAt, until } from "./scan.ts";
+import { CORE_FEATURE, SERVER_HELPERS, ServerEmit, serverImports } from "./server.ts";
 
 export type { PropFacts } from "./program.ts";
+export { CORE_FEATURE, serverImports } from "./server.ts";
 
 /** Options for compiling one file. */
 export interface CompileOptions {
@@ -138,6 +140,11 @@ export interface CompileOptions {
    * import from outside @reactre (but an asset's) may be a store, and is taken for one.
    */
   readonly props?: PropFacts;
+  /**
+   * Compile for a server build (./server.ts): JSX builds HTML strings for @reactre/core/server's
+   * render functions, and the file's imports of @reactre/core point at the server. Default false.
+   */
+  readonly server?: boolean;
 }
 
 // #region Plugin
@@ -162,6 +169,11 @@ export interface ReactreCompilerOptions {
    * naming this option.
    */
   readonly async?: boolean;
+  /**
+   * Compile for a server build (`CompileOptions.server`), and point @reactre/core's feature
+   * modules at @reactre/core/server, so the app renders with its render functions. Default false.
+   */
+  readonly server?: boolean;
 }
 
 /** A Bun loader for a script's path: tsx, ts, jsx or js. */
@@ -217,12 +229,23 @@ export function reactreCompiler(options: ReactreCompilerOptions = {}): BunPlugin
         const out = await coreRuntime(path, () => Bun.file(path).text(), await keep, options.async === false);
         return out === null ? undefined : { contents: out, loader: path.endsWith(".ts") ? "ts" : "js" };
       });
+      // A server build: the core's feature modules import @reactre/core/server for the core.
+      if (options.server === true)
+        build.onLoad({ filter: CORE_FEATURE }, async ({ path }) =>
+          isCore(path)
+            ? {
+                contents: serverImports(await Bun.file(path).text(), false),
+                loader: path.endsWith(".ts") ? "ts" : "js",
+              }
+            : undefined,
+        );
+      const server = options.server === true ? { server: true } : {};
       build.onLoad({ filter }, async ({ path }) => {
         if (path.includes("/node_modules/")) return undefined;
         const js = transpileSource(await Bun.file(path).text(), path.endsWith(".tsx") ? "tsx" : "jsx");
         const props = await factsFor(await program, path, js, host);
         // The output is plain JavaScript: TypeScript and JSX are already gone.
-        return { contents: compileJs(js, props === undefined ? {} : { props }), loader: "js" };
+        return { contents: compileJs(js, props === undefined ? server : { props, ...server }), loader: "js" };
       });
     },
   };
@@ -296,19 +319,26 @@ const M_TEXT = -1,
   M_EVENT = 0;
 
 /** Elements that have no closing tag and take no children. */
-const VOID = new Set("area base br col embed hr img input link meta source track wbr".split(" "));
+export const VOID: ReadonlySet<string> = new Set(
+  "area base br col embed hr img input link meta source track wbr".split(" "),
+);
 /** React prop names whose attribute has another name. */
-const ALIASES: Record<string, string> = { className: "class", htmlFor: "for" };
+export const ALIASES: Record<string, string> = { className: "class", htmlFor: "for" };
 /** Props set as properties, not attributes, when their value is not a literal: what the user changes. */
-const PROPERTIES = new Set(["value", "checked", "selected"]);
+export const PROPERTIES: ReadonlySet<string> = new Set(["value", "checked", "selected"]);
 /**
  * Props that are properties only, set even when their value is a literal: each reflects another
  * attribute (`defaultValue` is `value`'s, or a textarea's text), so there is none of its name.
  */
-const DEFAULTS = new Set(["defaultValue", "defaultChecked", "defaultSelected", "defaultMuted"]);
+export const DEFAULTS: ReadonlySet<string> = new Set([
+  "defaultValue",
+  "defaultChecked",
+  "defaultSelected",
+  "defaultMuted",
+]);
 /** The elements @reactre/core's control flow compiles, by their exported names. */
 const FLOW = ["For", "Show", "Switch", "Match", "Repeat", "Portal", "Dynamic"] as const;
-type Flow = (typeof FLOW)[number];
+export type Flow = (typeof FLOW)[number];
 /**
  * Tags that exist only in SVG. A template whose root is one is parsed inside an `<svg>`, so it
  * gets the SVG namespace (`a`, `title`, `style` and `script` are HTML ones too, so they are not here).
@@ -325,7 +355,7 @@ const SVG_TAGS = new Set(
 );
 
 /** One jsx call's arguments, as source text. */
-interface Call {
+export interface Call {
   /** The element type: a quoted tag name for a host element, else a component expression. */
   readonly type: string;
   /** The props object literal. */
@@ -405,6 +435,8 @@ export class ReactreCompileError extends Error {}
  *   a call in a place the compiler does not reach).
  */
 export function compileJs(js: string, options?: CompileOptions): string {
+  // A server build compiles the module with its imports pointed at the server.
+  if (options?.server === true) return compile(serverImports(js), false, options, flowNames(js));
   return compile(js, false, options);
 }
 
@@ -416,14 +448,22 @@ export function compileJs(js: string, options?: CompileOptions): string {
  * @throws ReactreCompileError as `compileJs` does.
  */
 export function compileJsWithMap(js: string, options?: CompileOptions): { code: string; map: SourceMapV3 | null } {
-  if (hasMarks(js)) return { code: compileJs(js, options), map: null };
-  const marked = compile(js, true, options);
-  if (marked === js) return { code: js, map: null };
-  return unmark(marked, js);
+  // A server build maps back to the module with its imports pointed at the server: the lines
+  // after its imports are the module's own.
+  const src = options?.server === true ? serverImports(js) : js;
+  if (hasMarks(src)) return { code: compileJs(js, options), map: null };
+  const marked = compile(src, true, options, flowNames(js));
+  if (marked === src) return { code: src, map: null };
+  return unmark(marked, src);
 }
 
-/** `compileJs`, with marks for a source map in the code when `map` is set. */
-function compile(js: string, map: boolean, options: CompileOptions = {}): string {
+/**
+ * `compileJs`, with marks for a source map in the code when `map` is set.
+ *
+ * @param flow The control flow the module imports: a server build's are read before its imports
+ *   are pointed at the server.
+ */
+function compile(js: string, map: boolean, options: CompileOptions = {}, flow = flowNames(js)): string {
   // Bun's transpiler names the runtime's helpers with a hash suffix (jsx_w77yafs4, ...); those
   // names are what the compiler looks for.
   const helpers = new Set<string>();
@@ -441,13 +481,22 @@ function compile(js: string, map: boolean, options: CompileOptions = {}): string
   // The stores the file binds, and those it imports: the program's, or seen alone, any import that
   // may be one (`moduleFacts`).
   for (const s of props.stores ?? []) stores.add(s);
-  const c = new Compiler(helpers, fragments, map, flowNames(js), defs, props, stores);
+  const c = new Compiler(helpers, fragments, map, flow, defs, props, stores);
+  if (options.server === true) c.server = new ServerEmit(c);
   const body = c.rewrite(js, 0);
   // Nothing may fall back to a JSX runtime, since reactre has none.
   for (const m of body.matchAll(/\b(jsxs|jsx|jsxDEV|Fragment)_[a-z0-9]{8}\b/g)) {
     throw new ReactreCompileError(`reactre: ${m[1]} left uncompiled (in a place the compiler does not reach)`);
   }
   const code = c.templates.join("\n") + "\n" + body;
+  if (c.server !== null) {
+    // The server's helpers, only where used.
+    const used = SERVER_HELPERS.filter(([, alias]) => new RegExp(`\\b${alias}\\b`).test(code));
+    return (
+      `import { ${used.map(([name, alias]) => `${name} as ${alias}`).join(", ")} } from "@reactre/core/server";\n` +
+      code
+    );
+  }
   // The helpers every file has imported since the start, then those newer constructs use, only
   // where used: a file without them compiles to the same code as before they existed.
   let names = `__template as __rrT, __for as __rrFor, __insert as __rrInsert, __bind as __rrBind, __slot as __rrSlot, untrack as __rrUntrack`;
@@ -495,9 +544,15 @@ function flowNames(js: string): Map<string, Flow> {
 
 /**
  * Compiles the jsx calls of one file. It collects the hoisted template declarations in
- * `templates` and returns the rewritten code from `rewrite`.
+ * `templates` and returns the rewritten code from `rewrite`. In a server build, `server` emits
+ * each jsx call (./server.ts), with the parsing here.
+ *
+ * Internal: exported, with the constants and helpers ./server.ts shares, for the server mode
+ * alone. It is not part of the package's API, and may change in any release.
  */
-class Compiler {
+export class Compiler {
+  /** The server build's emitter; null for the client's. */
+  server: ServerEmit | null = null;
   /** The file's local names of jsx, jsxs and jsxDEV. */
   readonly helpers: Set<string>;
   /** The file's local names of Fragment. */
@@ -513,7 +568,7 @@ class Compiler {
   /** The control flow the file imports, by the type its jsx calls name (see `flowNames`). */
   private readonly flow: ReadonlyMap<string, Flow>;
   /** Numbers the names control flow declares (`__rrC0`), so nested ones are told apart. */
-  private uid = 0;
+  uid = 0;
   /** The file's components, and the props each may be passed reactively (see `CompileOptions`). */
   private readonly defs: readonly Def[];
   private readonly props: PropFacts;
@@ -546,7 +601,7 @@ class Compiler {
    * Whether an expression may change: it calls something (a signal read), or its member reads
    * read what may change (`readsChanging`).
    */
-  private changes(expr: string): boolean {
+  changes(expr: string): boolean {
     return reactive(expr) || this.readsChanging(expr);
   }
 
@@ -573,7 +628,7 @@ class Compiler {
    * `{children}` from a pattern, `{p.children}` from a local made of the props): content, which
    * may be nodes, so it is inserted, not text.
    */
-  private readsChildren(expr: string): boolean {
+  readsChildren(expr: string): boolean {
     for (const d of this.scope) {
       if (d.param.kind === "pattern") {
         for (const [local, key] of d.param.locals) if (key === "children" && readsOf(expr, local) !== null) return true;
@@ -592,7 +647,7 @@ class Compiler {
   }
 
   /** The control flow element a jsx call's type names, or null: `For` by its name too. */
-  private kind(type: string): Flow | null {
+  kind(type: string): Flow | null {
     return this.flow.get(type) ?? (type === "For" ? "For" : null);
   }
 
@@ -685,6 +740,7 @@ class Compiler {
 
   /** A jsx call that is not a child of a host element compiled with it. */
   call(c: Call): string {
+    if (this.server !== null) return this.server.call(c);
     // Bun quotes a host element's tag name; a component's type is an expression.
     if (c.type.startsWith('"')) {
       // A keyed element stands alone in a one-slot fragment, which rebuilds it when the key changes.
@@ -720,7 +776,7 @@ class Compiler {
    * document fragment (`__frag`). A child that may change is passed as a function, which `__frag`
    * makes a slot.
    */
-  private fragment(c: Call): string {
+  fragment(c: Call): string {
     return this.frag(this.childrenOf(c.props, c.propsAt));
   }
 
@@ -750,7 +806,7 @@ class Compiler {
   }
 
   /** The children in a props object literal, one source each, with where each starts. */
-  private childrenOf(props: string, at: number): [string, number][] {
+  childrenOf(props: string, at: number): [string, number][] {
     for (const [name, value, vAt] of this.object(props, true, at)) {
       // Several children come as one array literal (jsxs); split it into one child each.
       if (name === "children") return this.items(value, vAt);
@@ -759,7 +815,7 @@ class Compiler {
   }
 
   /** A children value's children: an array literal's items (jsxs), else the value itself. */
-  private items(value: string, at: number): [string, number][] {
+  items(value: string, at: number): [string, number][] {
     if (!(value.startsWith("[") && value.endsWith("]"))) return [[value, at]];
     return splitAt(value, 1, value.length - 1).map(([s, i]) => [s, at < 0 ? -1 : at + i]);
   }
@@ -786,7 +842,7 @@ class Compiler {
    * merged by `__props`, which keeps their getters. Null when every prop is a value and there is
    * no spread: the props are written as they are.
    */
-  private passProps(entries: readonly [string, string, number][]): string | null {
+  passProps(entries: readonly [string, string, number][]): string | null {
     const kinds = entries.map(([k, v]) => {
       if (k === "...") return "spread";
       const use = propUse(v, this.helpers, this.scope, this.stores);
@@ -992,7 +1048,7 @@ class Compiler {
    * are expressions into `toggles`. False when some part of it is known only at runtime: an
    * expression that is not an object or array literal, a spread, or a computed key.
    */
-  private classParts(v: string, at: number, tokens: string[], toggles: Toggle[]): boolean {
+  classParts(v: string, at: number, tokens: string[], toggles: Toggle[]): boolean {
     const lit = literal(v);
     const names = (s: string) => s.split(/\s+/).filter(Boolean);
     if (lit !== NOT_LITERAL) {
@@ -1073,7 +1129,7 @@ class Compiler {
   }
 
   /** Whether src holds a jsx call anywhere, so it must be a slot rather than a text hole. */
-  private hasJsx(src: string): boolean {
+  hasJsx(src: string): boolean {
     for (const h of this.helpers) if (src.includes(h + "(")) return true;
     return false;
   }
@@ -1560,7 +1616,7 @@ class Compiler {
    *   one that may be a function (a name, which calls nothing) is called when it is one. Null when
    *   the children are content only.
    */
-  private content(children: readonly [string, number][], arg: (() => string) | null): string {
+  content(children: readonly [string, number][], arg: (() => string) | null): string {
     const kept = children.filter(([x]) => !isNothing(x));
     if (kept.length === 0) return "null";
     if (kept.length === 1) {
@@ -1577,7 +1633,7 @@ class Compiler {
   }
 
   /** A control flow element's props, checked against those it takes. */
-  private flowProps(c: Call, name: Flow, takes: readonly string[]): Map<string, readonly [string, number]> {
+  flowProps(c: Call, name: Flow, takes: readonly string[]): Map<string, readonly [string, number]> {
     if (c.key !== undefined) throw new ReactreCompileError(`reactre: <${name}> takes no key`);
     const p = new Map<string, readonly [string, number]>();
     for (const [k, v, at] of this.object(c.props, false, c.propsAt)) {
@@ -1588,13 +1644,13 @@ class Compiler {
   }
 
   /** The children in control flow props, one source each. */
-  private kids(p: ReadonlyMap<string, readonly [string, number]>): [string, number][] {
+  kids(p: ReadonlyMap<string, readonly [string, number]>): [string, number][] {
     const ch = p.get("children");
     return ch === undefined ? [] : this.items(ch[0], ch[1]);
   }
 
   /** The compiled `fallback` of control flow props: null when there is none. */
-  private fallback(p: ReadonlyMap<string, readonly [string, number]>): string {
+  fallback(p: ReadonlyMap<string, readonly [string, number]>): string {
     const f = p.get("fallback");
     return f === undefined ? "null" : `(${this.rewrite(f[0], f[1])})`;
   }
@@ -1607,12 +1663,12 @@ class Compiler {
 // #region Helpers
 
 /** Whether src is one literal opened by `open` (`{` or `[`) and closed at its end. */
-function isLiteral(src: string, open: "{" | "["): boolean {
+export function isLiteral(src: string, open: "{" | "["): boolean {
   return src.startsWith(open) && until(src, 1, "") === src.length - 1;
 }
 
 /** Whether a child is a literal that renders nothing: null, undefined or a boolean. */
-function isNothing(src: string): boolean {
+export function isNothing(src: string): boolean {
   const lit = literal(src);
   return lit === null || lit === undefined || typeof lit === "boolean";
 }
@@ -1622,21 +1678,25 @@ function isNothing(src: string): boolean {
  * a class object or array literal is made its string, a ref array literal a function that gives
  * each ref the element.
  */
-function spreadValue(k: string, v: string): string {
+export function spreadValue(k: string, v: string): string {
   if ((ALIASES[k] ?? k) === "class" && (isLiteral(v, "{") || isLiteral(v, "["))) return `__rrClass(${v})`;
   if (k === "ref" && isLiteral(v, "[")) return `(__rrE) => ${v}.forEach((__rrR) => __rrRef(__rrE, __rrR))`;
   return v;
 }
 
 /** A control flow prop that must be there. */
-function need(p: ReadonlyMap<string, readonly [string, number]>, k: string, name: Flow): readonly [string, number] {
+export function need(
+  p: ReadonlyMap<string, readonly [string, number]>,
+  k: string,
+  name: Flow,
+): readonly [string, number] {
   const v = p.get(k);
   if (v === undefined) throw new ReactreCompileError(`reactre: <${name}> needs ${k}`);
   return v;
 }
 
 /** Whether control flow props have `keyed`, which must be written as a boolean: it decides what compiles. */
-function keyedOf(p: ReadonlyMap<string, readonly [string, number]>, name: Flow): boolean {
+export function keyedOf(p: ReadonlyMap<string, readonly [string, number]>, name: Flow): boolean {
   const k = p.get("keyed");
   if (k === undefined) return false;
   const lit = literal(k[0]);
@@ -1652,7 +1712,7 @@ function keyedOf(p: ReadonlyMap<string, readonly [string, number]>, name: Flow):
  * @throws ReactreCompileError for `keyed` beside `key`, or written as anything else: it decides
  *   what compiles.
  */
-function forIndex(p: ReadonlyMap<string, readonly [string, number]>, keyArg: string | undefined): boolean {
+export function forIndex(p: ReadonlyMap<string, readonly [string, number]>, keyArg: string | undefined): boolean {
   const k = p.get("keyed");
   if (k === undefined) return false;
   if (keyArg !== undefined || p.has("key"))
@@ -1746,8 +1806,8 @@ const NO_BUBBLE = new Set(
 );
 
 /** Text escaped for markup between tags. */
-const text = (s: string): string => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+export const text = (s: string): string => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 /** Text escaped for a double-quoted attribute value. */
-const attrText = (s: string): string => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+export const attrText = (s: string): string => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
 
 // #endregion

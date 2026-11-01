@@ -394,6 +394,28 @@ Writes apply at once: a signal's write re-runs its readers before it returns. In
 
 In a component, the view is in the page either way. `fn` runs under the component's owner, and not at all if the owner goes first (a slot replaced the content); a function it returns runs when the owner goes.
 
+## Server rendering
+
+```tsx
+// server.tsx, built for the server
+import { renderToStream, renderToString } from "@reactre/core/server";
+
+import { App } from "./app.tsx";
+
+const html = renderToString(() => <App />); // at once: a <Loading> that waits shows its fallback
+const res = new Response(renderToStream(() => <App />), { headers: { "content-type": "text/html" } });
+```
+
+`@reactre/core/server` renders an app to HTML. The app's files are compiled for the server, where JSX builds strings: an element is its markup with its holes escaped, a component runs once, and control flow (`<Show>`, `<Switch>`, `<For>`, `<Repeat>`, `<Dynamic>`) is evaluated once. Signals, memos, stores, context and `<Errored>` work as they do in the browser (a boundary renders its fallback when its children throw); effects do not run, and a memo computes when it is first read. `<Portal>` renders nothing: its children belong to another part of the page. `isServer` is true there, and false in a browser bundle, which gets a stub of the module.
+
+- `renderToString(app, options?)` returns the HTML at once. A `<Loading>` whose children read async data that has not come renders its fallback.
+- `renderToStream(app, options?)` returns a `ReadableStream` of the HTML. The shell comes once what it reads outside every `<Loading>` is ready, with each `<Loading>` that still waits showing its fallback; then each one's content as its data comes, in a `<template>` with a small script that swaps it in for the fallback (the first such chunk defines the script, `self.$rr`). Nested and sibling boundaries stream in the order their data comes. An error while the shell renders errors the stream; a later one goes to an `<Errored>` inside the boundary, or else to `onError`, and errors the stream. Cancelling the stream stops the render.
+- `renderToStringAsync(app, options?)` waits for everything and returns the whole page, with no script.
+
+Options: `hydrate: true` writes comment markers for a hydration step to claim the page by (`<!--[-->`…`<!--]-->` around what may change, `<!---->` between a text hole and the text beside it); `nonce` is set on the stream's scripts, for a Content Security Policy; `onError` gets an error thrown after the shell was sent. Hydration itself is not here yet: the client renders the page afresh (`render` replaces the container's content). [plans/core-hydration.md](../../plans/core-hydration.md) is its design.
+
+Builds: [@reactre/plugin](https://www.npmjs.com/package/@reactre/plugin) compiles for the server in Vite's SSR builds and its dev server's `ssrLoadModule` (Vite's environment says which), and with its `ssr: true` option in the other bundlers (a separate build for the server). The compiler's option is `compileJs(js, { server: true })`, and its Bun plugin's `reactreCompiler({ server: true })`. A server build points the app's imports of `@reactre/core` and its feature modules at the server's versions. The browser build of the same app is what it is without SSR, byte for byte.
+
 ## What an app ships
 
 An app ships only what it uses. With a bundler that tree-shakes (all of the plugin's do), two parts of the runtime come only when the app needs them:

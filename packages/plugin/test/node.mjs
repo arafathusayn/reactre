@@ -117,6 +117,38 @@ try {
     console.log(`ok - vite build, react-dom/server for the ${target === "ssr" ? "Node SSR" : "browser"} target`);
   }
 
+  // A Vite SSR build of a core app: the plugin compiles it for the server, as the environment is
+  // the server's, and @reactre/core/server renders it under Node, its <Loading> streamed after the
+  // shell.
+  await build({
+    configFile: false,
+    logLevel: "silent",
+    plugins: [reactre()],
+    build: {
+      ssr: fixtures + "ssr/entry.tsx",
+      outDir: out,
+      emptyOutDir: false,
+      minify: false,
+      rolldownOptions: { output: { entryFileNames: "ssr.js" } },
+    },
+  });
+  {
+    const app = await import(join(out, "ssr.js"));
+    assert.equal(app.isServer, true, "ssr: isServer");
+    assert.match(app.html(), /^<main><h1>Hello<\/h1>.*<i>loading<\/i><\/main>$/, "ssr: renderToString");
+    const reader = app.stream().getReader(),
+      dec = new TextDecoder();
+    assert.match(dec.decode((await reader.read()).value), /<!--rr:b0--><i>loading<\/i><!--\/rr:b0--><\/main>$/);
+    app.resolve("world");
+    assert.match(
+      dec.decode((await reader.read()).value),
+      /<template id="rr:t0"><p class="word">world<\/p><\/template>/,
+    );
+    assert.equal((await reader.read()).done, true, "ssr: the stream did not end");
+    assert.deepEqual(app.ran, [], "ssr: an effect ran on the server");
+    console.log("ok - vite build, SSR with @reactre/core/server");
+  }
+
   // The dev server: the dependency scan finds the app's imports without errors, the transformed
   // module has the compiled templates, and imports of react (compat) go to @reactre/compat through
   // Vite's dependency optimizer.

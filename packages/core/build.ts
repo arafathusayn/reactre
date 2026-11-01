@@ -43,9 +43,17 @@ rmSync(join(dir, "dist"), { recursive: true, force: true });
 for (const r of [
   await Bun.build({
     ...options,
-    entrypoints: ["index.ts", "jsx-runtime.ts", "jsx-dev-runtime.ts", ...features.map((f) => `features/${f}.ts`)].map(
-      (f) => join(dir, "src", f),
-    ),
+    entrypoints: [
+      "index.ts",
+      "jsx-runtime.ts",
+      "jsx-dev-runtime.ts",
+      ...features.map((f) => `features/${f}.ts`),
+      // Server rendering (@reactre/core/server), which imports the core as the feature modules do.
+      "server.ts",
+      "server.browser.ts",
+      "server/async.ts",
+      "server/dynamic.ts",
+    ].map((f) => join(dir, "src", f)),
     outdir: join(dir, "dist"),
     plugins: [withoutAsync],
   }),
