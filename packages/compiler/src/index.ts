@@ -97,6 +97,14 @@ import { dirname, resolve } from "node:path";
 
 import type { BunPlugin } from "bun";
 
+import {
+  HYDRATE_CORE,
+  HYDRATE_FILE,
+  HYDRATE_HELPERS,
+  hydrateImports,
+  importsHydrate,
+  NEEDS_HYDRATE,
+} from "./hydrate.ts";
 import { hasMarks, mark, remark, type SourceMapV3, unmark } from "./map.ts";
 import { observedCalls } from "./observed.ts";
 import {
@@ -127,6 +135,7 @@ import { isIdent, literal, NOT_LITERAL, skipToken, splitAt, trimAt, until } from
 import { CORE_FEATURE, SERVER_HELPERS, ServerEmit, serverImports } from "./server.ts";
 
 export type { PropFacts } from "./program.ts";
+export { HYDRATE_FILE, hydrateImports } from "./hydrate.ts";
 export { CORE_FEATURE, serverImports } from "./server.ts";
 
 /** Options for compiling one file. */
@@ -146,6 +155,13 @@ export interface CompileOptions {
    * render functions, and the file's imports of @reactre/core point at the server. Default false.
    */
   readonly server?: boolean;
+  /**
+   * Compile for a client build that hydrates server-rendered HTML (./hydrate.ts): templates,
+   * slots and lists claim the page's nodes while @reactre/core/features/hydrate's `hydrate` runs,
+   * and the file's imports of @reactre/core point at that module. Default false: the output is
+   * the client's as before. A server build ignores it.
+   */
+  readonly hydrate?: boolean;
 }
 
 // #region Plugin
@@ -175,6 +191,12 @@ export interface ReactreCompilerOptions {
    * modules at @reactre/core/server, so the app renders with its render functions. Default false.
    */
   readonly server?: boolean;
+  /**
+   * Compile for a client build that hydrates server-rendered HTML (`CompileOptions.hydrate`), and
+   * point @reactre/core's feature modules at @reactre/core/features/hydrate, so their content
+   * claims the page too. Default false. A server build ignores it.
+   */
+  readonly hydrate?: boolean;
 }
 
 /** A Bun loader for a script's path: tsx, ts, jsx or js. */
@@ -242,7 +264,19 @@ export function reactreCompiler(options: ReactreCompilerOptions = {}): BunPlugin
               }
             : undefined,
         );
-      const server = options.server === true ? { server: true } : {};
+      // A hydrate build: the core's feature modules import the core from
+      // @reactre/core/features/hydrate, whose `__frag` claims the page.
+      const hydrate = options.hydrate === true && options.server !== true;
+      if (hydrate)
+        build.onLoad({ filter: CORE_FEATURE }, async ({ path }) =>
+          isCore(path) && !HYDRATE_FILE.test(path)
+            ? {
+                contents: hydrateImports(await Bun.file(path).text(), false),
+                loader: path.endsWith(".ts") ? "ts" : "js",
+              }
+            : undefined,
+        );
+      const server = options.server === true ? { server: true } : hydrate ? { hydrate: true } : {};
       build.onLoad({ filter }, async ({ path }) => {
         if (path.includes("/node_modules/")) return undefined;
         // A .ts file a filter of the caller's takes (for features/memo's options) is TypeScript without JSX.
@@ -441,7 +475,8 @@ export class ReactreCompileError extends Error {}
  */
 export function compileJs(js: string, options?: CompileOptions): string {
   // A server build compiles the module with its imports pointed at the server.
-  const src = options?.server === true ? serverImports(js) : js;
+  // A hydrate build, with its imports of features/async and /errors pointed at the hydrate builds.
+  const src = options?.server === true ? serverImports(js) : options?.hydrate === true ? hydrateImports(js) : js;
   // Calls of features/memo's `memo` and `signal` that pass `lazy` or `unobserved` go to the
   // reader-counting entry (./observed.ts); a file without them is compiled as it was.
   const observed = observedCalls(src);
@@ -458,7 +493,7 @@ export function compileJs(js: string, options?: CompileOptions): string {
 export function compileJsWithMap(js: string, options?: CompileOptions): { code: string; map: SourceMapV3 | null } {
   // A server build maps back to the module with its imports pointed at the server: the lines
   // after its imports are the module's own.
-  const src = options?.server === true ? serverImports(js) : js;
+  const src = options?.server === true ? serverImports(js) : options?.hydrate === true ? hydrateImports(js) : js;
   if (hasMarks(src)) return { code: compileJs(js, options), map: null };
   // The marks of a compile of the rewritten calls are moved back to `src` (see `observedCalls`).
   const observed = observedCalls(src);
@@ -486,6 +521,9 @@ function compile(
   // names are what the compiler looks for.
   const helpers = new Set<string>();
   for (const m of js.matchAll(/\b(jsxs|jsx|jsxDEV)_[a-z0-9]{8}\b/g)) helpers.add(m[0]);
+  const hydrate = options.hydrate === true && options.server !== true;
+  // `hydrate` over templates that clone would build the page again: the file says it hydrates.
+  if (!hydrate && options.server !== true && importsHydrate(js)) throw new ReactreCompileError(NEEDS_HYDRATE);
   if (helpers.size === 0)
     return rewritten && map
       ? new Compiler(helpers, helpers, true, new Map(), [], new Map(), helpers).rewrite(js, 0)
@@ -504,6 +542,7 @@ function compile(
   for (const s of props.stores ?? []) stores.add(s);
   const c = new Compiler(helpers, fragments, map, flow, defs, props, stores);
   if (options.server === true) c.server = new ServerEmit(c);
+  c.hydrate = hydrate;
   const body = c.rewrite(js, 0);
   // Nothing may fall back to a JSX runtime, since reactre has none.
   for (const m of body.matchAll(/\b(jsxs|jsx|jsxDEV|Fragment)_[a-z0-9]{8}\b/g)) {
@@ -526,6 +565,12 @@ function compile(
   const features =
     (c.selectors ? `import "@reactre/core/features/selectors";\n` : "") +
     (c.index ? `import { __index as __rrIndex } from "@reactre/core/features/index";\n` : "");
+  if (hydrate) {
+    // The core from the module that re-exports it with a `__frag` that claims, with its helpers.
+    for (const [name, alias] of HYDRATE_HELPERS)
+      if (new RegExp(`\\b${alias}\\b`).test(code)) names += `, ${name} as ${alias}`;
+    return `${features}import { ${names} } from "${HYDRATE_CORE}";\n` + code;
+  }
   return `${features}import { ${names} } from "@reactre/core";\n` + code;
 }
 
@@ -574,6 +619,8 @@ function flowNames(js: string): Map<string, Flow> {
 export class Compiler {
   /** The server build's emitter; null for the client's. */
   server: ServerEmit | null = null;
+  /** Whether the client's code claims the page while hydrating (./hydrate.ts). */
+  hydrate = false;
   /** The file's local names of jsx, jsxs and jsxDEV. */
   readonly helpers: Set<string>;
   /** The file's local names of Fragment. */
@@ -804,6 +851,14 @@ export class Compiler {
   /** `fragment`'s array of nodes, for a list of children. */
   private frag(children: readonly [string, number][]): string {
     const kids: string[] = [];
+    // Hydrating, a child built at once is passed as a function called in its turn, so that it
+    // claims the page's nodes in order: these are their indexes.
+    const lazy: number[] = [];
+    const now = (code: string): string => {
+      if (!this.hydrate) return code;
+      lazy.push(kids.length);
+      return `() => (${code})`;
+    };
     for (const [child, at] of children) {
       const lit = literal(child);
       if (lit === null || lit === undefined || typeof lit === "boolean") continue;
@@ -818,12 +873,12 @@ export class Compiler {
       // A slot of control flow joins the fragment's slots, not a fragment of its own.
       const flow = inner !== null && f !== null ? this.flowOf(inner, f, false) : null;
       if (flow !== null)
-        kids.push(this.m(at) + ("fn" in flow ? flow.fn : "host" in flow ? this.call(flow.host) : flow.expr));
-      else if (inner !== null) kids.push(this.m(at) + this.call(inner));
+        kids.push(this.m(at) + ("fn" in flow ? flow.fn : now("host" in flow ? this.call(flow.host) : flow.expr)));
+      else if (inner !== null) kids.push(this.m(at) + now(this.call(inner)));
       else if (this.hasJsx(child) || this.changes(child)) kids.push(`() => (${this.rewrite(child, at)})`);
-      else kids.push(`(${this.rewrite(child, at)})`);
+      else kids.push(now(`(${this.rewrite(child, at)})`));
     }
-    return `__rrFrag([${kids.join(", ")}])`;
+    return `__rrFrag([${kids.join(", ")}]${lazy.length ? `, ${JSON.stringify(lazy)}` : ""})`;
   }
 
   /** The children in a props object literal, one source each, with where each starts. */
@@ -1175,9 +1230,17 @@ export class Compiler {
               ? M_ATTR
               : M_SLOT,
     );
-    this.templates.push(
-      `const ${id} = __rrT(${JSON.stringify(t.strings)}, ${JSON.stringify(markers)}${t.svg ? ", true" : ""});`,
-    );
+    let tpl = `__rrT(${JSON.stringify(t.strings)}, ${JSON.stringify(markers)}${t.svg ? ", true" : ""})`;
+    if (this.hydrate) {
+      // A list with a fallback is two pairs of markers on the page: the list's and the fallback's.
+      const two: number[] = [];
+      t.holes.forEach((h, i) => {
+        if (h.kind === "slot" && h.slot === "for" && this.object(h.expr, false, -1).some(([k]) => k === "fallback"))
+          two.push(i);
+      });
+      if (two.length) tpl = `__rrhT(${tpl}, ${JSON.stringify(two)})`;
+    }
+    this.templates.push(`const ${id} = ${tpl};`);
     return id;
   }
 
@@ -1225,12 +1288,20 @@ export class Compiler {
         else after.push(stmt);
         return;
       }
-      if (h.slot === "comp") after.push(`__rrInsert(__n[${i}], ${h.expr}, null);`);
-      else if (h.slot === "expr") after.push(`__rrSlot(__n[${i}], () => (${h.expr}));`);
-      else if (h.slot === "fn") after.push(`__rrSlot(__n[${i}], ${h.expr});`);
+      const slot = this.hydrate ? "__rrhS" : "__rrSlot";
+      if (h.slot === "comp")
+        after.push(this.hydrate ? `__rrhI(__n[${i}], () => (${h.expr}));` : `__rrInsert(__n[${i}], ${h.expr}, null);`);
+      else if (h.slot === "expr") after.push(`${slot}(__n[${i}], () => (${h.expr}));`);
+      else if (h.slot === "fn") after.push(`${slot}(__n[${i}], ${h.expr});`);
       else after.push(this.forList(h.expr, h.at, h.key, h.keyAt ?? -1, `__n[${i}]`, h.only, h.repeat));
     });
     after.push(...late);
+    if (this.hydrate) {
+      // While hydrating, the page's element, claimed; else a clone.
+      const vs = `[${vals.join(", ")}]`;
+      if (after.length === 0) return `__rrhC(${id}, ${vs})`;
+      return `(() => { const __n = [], __r = __rrhC(${id}, ${vs}, __n); ${after.join(" ")} return __r; })()`;
+    }
     const locate = after.length ? `const __n = []; ${id}.locate(__r, __n); ` : "";
     return `(() => { const __r = ${id}.clone([${vals.join(", ")}]); ${locate}${after.join(" ")} return __r; })()`;
   }
@@ -1355,12 +1426,13 @@ export class Compiler {
       }
       if (h.kind === "slot") {
         // A nested list never owns its parent here: a new item rebuilds it before the same anchor.
+        const slot = this.hydrate ? "__rrhS" : "__rrSlot";
         const stmt =
           h.slot === "for"
             ? this.forList(h.expr, h.at, h.key, h.keyAt ?? -1, "__m", false, h.repeat)
             : h.slot === "fn"
-              ? `__rrSlot(__m, ${h.expr});`
-              : `__rrSlot(__m, () => (${h.expr}));`;
+              ? `${slot}(__m, ${h.expr});`
+              : `${slot}(__m, () => (${h.expr}));`;
         mounts.push(`[${i}, (${param}, __m) => { ${stmt} }]`);
         return;
       }
@@ -1403,6 +1475,13 @@ export class Compiler {
     // Only a row with mounts takes the list that runs them: a row of host elements and values
     // costs what it always has.
     const call = mounts.length ? "__rrForM" : "__rrFor";
+    if (this.hydrate) {
+      // The core's list, through `__hfor`, which claims its rows while hydrating.
+      const list = (mode: number) => `__rrhF(${call}, ${anchor}, ${spec}, ${mode});`;
+      if (fallback === undefined) return list(only ? 1 : 0);
+      const shown = `__rrhS(${anchor}, () => (__rrE${n}() ? (${this.rewrite(fallback[0], fallback[1])}) : null));`;
+      return `{ const [__rrE${n}, __rrS${n}] = __rrSignal(true); ${list(2)} ${shown} }`;
+    }
     if (fallback !== undefined) {
       // The list's first run writes the signal, before the slot first reads it.
       const shown = `__rrSlot(${anchor}, () => (__rrE${n}() ? (${this.rewrite(fallback[0], fallback[1])}) : null));`;
@@ -1568,11 +1647,12 @@ export class Compiler {
     const kids = this.kids(p);
     if (kids.length === 1 && isFunction(kids[0]![0]))
       throw new ReactreCompileError(`reactre: <Portal>'s children are content, not a function: ${kids[0]![0]}`);
-    return (
+    const portal =
       `__rrUntrack(() => { const __rrA = ${into}.appendChild(document.createTextNode("")), ` +
       `__rrN = __rrInsert(__rrA, ${this.content(kids, null)}, null); ` +
-      `__rrOnCleanup(() => { __rrInsert(__rrA, null, __rrN); __rrA.parentNode.removeChild(__rrA); }); return null; })`
-    );
+      `__rrOnCleanup(() => { __rrInsert(__rrA, null, __rrN); __rrA.parentNode.removeChild(__rrA); }); return null; })`;
+    // Hydrating, its children are built afresh in its mount: the server rendered none.
+    return this.hydrate ? `__rrhP(() => ${portal})` : portal;
   }
 
   /**
@@ -1615,13 +1695,19 @@ export class Compiler {
         : attrs.some(([, v]) => this.changes(v))
           ? `__rrApply(__rrE, __rrSpread, () => (${obj})); `
           : `__rrSpread(__rrE, ${obj}, undefined); `;
+    const content = kids === undefined ? "" : this.content(this.items(kids[1], kids[2]), null);
     const put =
       kids === undefined
         ? ""
-        : `__rrInsert(__rrE.appendChild(document.createTextNode("")), ${this.content(this.items(kids[1], kids[2]), null)}, null); `;
-    const create = svg
-      ? `document.createElementNS("http://www.w3.org/2000/svg", __rrD)`
-      : "document.createElement(__rrD)";
+        : this.hydrate
+          ? `__rrhK(__rrE, () => (${content})); `
+          : `__rrInsert(__rrE.appendChild(document.createTextNode("")), ${content}, null); `;
+    // Hydrating, the page's element, claimed.
+    const create = this.hydrate
+      ? `__rrhE(__rrD${svg ? ", 1" : ""})`
+      : svg
+        ? `document.createElementNS("http://www.w3.org/2000/svg", __rrD)`
+        : "document.createElement(__rrD)";
     const build =
       `((__rrD) => __rrUntrack(() => typeof __rrD === "function" ? __rrD(${props}) : ` +
       `__rrD ? ((__rrE) => { ${set}${put}return __rrE; })(${create}) : null))(${this.rewrite(comp[1], comp[2])})`;

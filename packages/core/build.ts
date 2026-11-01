@@ -34,6 +34,8 @@ const features = [
   "index",
   "effects",
   "lists",
+  // Its development blocks are stripped too (`without`); dist/dev/features/hydrate.js keeps them.
+  "hydrate",
 ];
 const options = {
   root: join(dir, "src"),
@@ -60,6 +62,9 @@ for (const r of [
       "server/errors.ts",
       "server/reaction.ts",
       "server/timing.ts",
+      // Hydration's <Loading> and <Errored>, which import the feature modules as an app does.
+      "hydrate/async.ts",
+      "hydrate/errors.ts",
     ].map((f) => join(dir, "src", f)),
     outdir: join(dir, "dist"),
     plugins: [withoutAsync],
@@ -70,10 +75,11 @@ for (const r of [
     outdir: join(dir, "dist/async"),
     plugins: [without(...ASYNC_PRODUCTION)],
   }),
-  // With features/memo's development build, which holds its checks too.
+  // With the development builds of features/memo, which holds its checks too, and of
+  // features/hydrate, which holds its mismatch warnings.
   await Bun.build({
     ...options,
-    entrypoints: [join(dir, "src/index.ts"), join(dir, "src/features/memo.ts")],
+    entrypoints: [join(dir, "src/index.ts"), join(dir, "src/features/memo.ts"), join(dir, "src/features/hydrate.ts")],
     outdir: join(dir, "dist/dev"),
   }),
 ])

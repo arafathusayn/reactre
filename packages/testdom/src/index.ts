@@ -721,6 +721,7 @@ export function installFakeDocument(): void {
   g.document = {
     createElement: (tag: string) => new FakeElement(tag.toUpperCase()),
     createTextNode: (data: string) => new FakeText(data),
+    createComment: (data: string) => new FakeComment(data),
     createDocumentFragment: () => new FakeFragment(),
   };
   g.Node = FakeNode;

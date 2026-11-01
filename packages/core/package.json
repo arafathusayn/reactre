@@ -28,7 +28,9 @@
     "./dist/features/*.js",
     "./dist/dev/features/*.js",
     "./src/server/*.ts",
-    "./dist/server/*.js"
+    "./dist/server/*.js",
+    "./src/hydrate/*.ts",
+    "./dist/hydrate/*.js"
   ],
   "exports": {
     ".": {
@@ -57,6 +59,19 @@
       "bun": "./src/features/memo.ts",
       "development": "./dist/dev/features/memo.js",
       "default": "./dist/features/memo.js"
+    },
+    "./features/hydrate": {
+      "reactre-source": "./src/features/hydrate.ts",
+      "types": "./dist/features/hydrate.d.ts",
+      "bun": "./src/features/hydrate.ts",
+      "development": "./dist/dev/features/hydrate.js",
+      "default": "./dist/features/hydrate.js"
+    },
+    "./hydrate/*": {
+      "reactre-source": "./src/hydrate/*.ts",
+      "types": "./dist/hydrate/*.d.ts",
+      "bun": "./src/hydrate/*.ts",
+      "default": "./dist/hydrate/*.js"
     },
     "./features/*": {
       "reactre-source": "./src/features/*.ts",
