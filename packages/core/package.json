@@ -88,6 +88,7 @@
       "deno": "./dist/server.js",
       "browser": "./dist/server.browser.js",
       "bun": "./src/server.ts",
+      "development": "./dist/dev/server.js",
       "default": "./dist/server.js"
     },
     "./server/*": {

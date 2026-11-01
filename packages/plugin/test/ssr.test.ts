@@ -45,6 +45,7 @@ interface Entry {
   html(): string;
   stream(): ReadableStream<Uint8Array>;
   whole(): Promise<string>;
+  hydratable(): string;
   resolve(v: string): void;
   ran: string[];
   log: string[];
@@ -55,8 +56,12 @@ const page = (loading: string) =>
   '<main><h1>Hello</h1><b class="dark">themed</b><ul><li>A</li><li>B</li></ul><p>many</p>' +
   `<p class="error">broken</p>${loading}</main>`;
 
-/** Render the built entry every way, checking each. */
-async function renders(app: Entry): Promise<void> {
+/**
+ * Render the built entry every way, checking each. With `dev`, it has @reactre/core/server's
+ * development build, whose <Errored> hydration marker names the error; a production build's does
+ * not.
+ */
+async function renders(app: Entry, dev = false): Promise<void> {
   expect(app.isServer).toBe(true);
   expect(app.html()).toBe(page("<i>loading</i>"));
   const reader = app.stream().getReader(),
@@ -72,6 +77,7 @@ async function renders(app: Entry): Promise<void> {
   // Effects do not run on the server, in a compiled module or in a module of plain TypeScript.
   expect(app.ran).toEqual([]);
   expect(app.log).toEqual([]);
+  expect(app.hydratable()).toContain(dev ? "<!--rr:e:Error:broken--><p" : "<!--rr:e--><p");
 }
 
 describe("server builds", () => {
@@ -106,7 +112,8 @@ describe("server builds", () => {
       plugins: [vitePlugin({ ssr: true })],
     });
     try {
-      await renders((await server.ssrLoadModule("/entry.tsx")) as Entry);
+      // A dev server's render has the development build of the server.
+      await renders((await server.ssrLoadModule("/entry.tsx")) as Entry, true);
       // The client's environment compiles the same module to templates.
       const client = await server.transformRequest("/app.tsx");
       expect(client!.code).toContain("__rrT(");
@@ -341,6 +348,10 @@ describe("client builds with `hydrate: true` hydrate the server's HTML", () => {
     ran: string[];
   }
 
+  /** What the client's fallback gets for an error the production server kept out of the page. */
+  const HIDDEN =
+    "reactre: the server's <Errored> showed its fallback, and its production build keeps the error out of the page; its development build shows it";
+
   let html: string;
   beforeAll(async () => {
     const r = await Bun.build({
@@ -374,11 +385,18 @@ describe("client builds with `hydrate: true` hydrate the server's HTML", () => {
     expect(before.filter((n) => !now.has(n)).map((n) => n.textContent)).toEqual(["loading", "loading"]);
     // Effects run in the browser: the themed label's.
     expect(client.ran).toEqual(["themed"]);
-    expect(root.textContent).toBe("HellothemedABmanybrokenloading");
+    // The production server's <Errored> marker names no error, so the client's fallback, which
+    // shows the error's message, shows the one it gets: an Error saying it was kept out.
+    expect(root.textContent).toBe(`HellothemedABmany${HIDDEN}loading`);
     client.resolve("world");
     await new Promise((ok) => setTimeout(ok, 0));
-    expect(root.textContent).toBe("HellothemedABmanybrokenworld");
+    expect(root.textContent).toBe(`HellothemedABmany${HIDDEN}world`);
   }
+
+  test("the production server's HTML: an <Errored>'s marker names no error", () => {
+    expect(html).toContain("<!--rr:e--><p");
+    expect(html).not.toMatch(/<!--rr:e:/);
+  });
 
   test("Vite", async () => {
     await vite({

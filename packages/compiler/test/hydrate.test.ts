@@ -190,6 +190,28 @@ describe("reactreCompiler({ hydrate: true })", () => {
     expect(hooks({ hydrate: true, server: true }).length).toBe(3);
   });
 
+  test("the core's runtime: the server without its development block in a production build, so an <Errored>'s marker names no error", async () => {
+    const src = join(ROOT, "packages/core/src/server.ts");
+    const code = await Bun.file(src).text();
+    expect(code).toContain("encodeURIComponent(e.message)");
+    const prod = (await coreRuntime(src, () => code, false, false))!;
+    expect(prod).not.toContain("encodeURIComponent(e.message)");
+    expect(prod).toContain(`return new Html(["<!--rr:e-->"]);`);
+    expect(await coreRuntime(src, () => code, false, false, true)).toBeNull();
+    const at = mkdtempSync(join(tmpdir(), "reactre-compiler-hydrate-server-"));
+    dirs.push(at);
+    const dist = join(at, "core/dist/server.js"),
+      dev = join(at, "core/dist/dev/server.js");
+    // A core with one build of it: as it is.
+    await Bun.write(dist, "");
+    expect(await coreRuntime(dist, () => "", false, false, true)).toBeNull();
+    await Bun.write(dev, "");
+    expect(await coreRuntime(dist, () => "", false, false)).toBeNull();
+    expect(await coreRuntime(dist, () => "", false, false, true)).toBe(`export * from "./dev/server.js";\n`);
+    expect(await coreRuntime(dev, () => "", false, false, true)).toBeNull();
+    expect(await coreRuntime(dev, () => "", true, false)).toBe(`export * from "../server.js";\n`);
+  });
+
   test("the core's runtime: features/hydrate without its development blocks in a production build, the development build's in a dev server's", async () => {
     const src = join(ROOT, "packages/core/src/features/hydrate.ts");
     const code = await Bun.file(src).text();

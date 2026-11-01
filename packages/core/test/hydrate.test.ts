@@ -15,6 +15,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, spyOn, te
 
 import { compileSource, ReactreCompileError, reactreCompiler } from "@reactre/compiler";
 import { FakeComment, FakeElement, FakeEvent, type FakeNode, FakeText, installFakeDocument } from "@reactre/testdom";
+import type { BunPlugin } from "bun";
 
 import * as asyncApi from "../src/features/async.ts";
 import { __hooks } from "../src/features/async.ts";
@@ -720,6 +721,18 @@ describe("the hydrate builds of <Loading> and <Errored>", () => {
     );
     expect(shown(other)).toContain("no");
     fail = false;
+    // A production server's marker, bare: the fallback gets an Error saying it was kept out.
+    const bare = rooted("<!--[--><!--rr:e--><p>failed</p><!--]-->");
+    let got: unknown;
+    hydrateApi.hydrate(
+      () => E({ fallback: (e: Error) => ((got = e), para("failed")()), children: para("ok") }),
+      bare as unknown as Element,
+    );
+    expect(shown(bare)).toBe("<p>failed</p>");
+    expect([(got as Error).name, (got as Error).message]).toEqual([
+      "Error",
+      "reactre: the server's <Errored> showed its fallback, and its production build keeps the error out of the page; its development build shows it",
+    ]);
   });
 });
 
@@ -730,7 +743,12 @@ describe("built apps: a context, <Errored> and <Loading>", () => {
    * Bundle `entry` (a module body, with `app.tsx` of `APP` beside it) as the compiler's Bun plugin
    * bundles it with `options`, then run it: it sets what the test drives on `globalThis`.
    */
-  async function run(name: string, entry: string, options: { server?: boolean; hydrate?: boolean }): Promise<void> {
+  async function run(
+    name: string,
+    entry: string,
+    options: { server?: boolean; hydrate?: boolean },
+    dev = false,
+  ): Promise<void> {
     await Bun.write(`${scratch}/app.tsx`, APP);
     await Bun.write(`${scratch}/${name}.tsx`, entry);
     const r = await Bun.build({
@@ -738,13 +756,29 @@ describe("built apps: a context, <Errored> and <Loading>", () => {
       format: "iife",
       target: "browser",
       conditions: ["reactre-source"],
-      plugins: [reactreCompiler(options)],
+      // With `dev`, the server as its development build is (Bun loads a file with the first
+      // plugin's onLoad that returns it); else stripped, as a production build gets it.
+      plugins: dev ? [serverAsIs, reactreCompiler(options)] : [reactreCompiler(options)],
     });
     if (!r.success) throw new Error(r.logs.join("\n"));
     new Function(await r.outputs[0]!.text())();
   }
 
-  /** The app: a provider, an <Errored> whose child throws until it is fixed, and two <Loading>s. */
+  /** Loads @reactre/core's server.ts as it is: its development build. */
+  const serverAsIs: BunPlugin = {
+    name: "server-as-is",
+    setup(b) {
+      b.onLoad({ filter: /[\\/]core[\\/]src[\\/]server\.ts$/ }, async (a) => ({
+        contents: await Bun.file(a.path).text(),
+        loader: "ts",
+      }));
+    },
+  };
+
+  /**
+   * The app: a provider, an <Errored> whose child throws until it is fixed (an error whose message
+   * holds markup), and two <Loading>s. The fallback shows none of the error, and keeps it.
+   */
   const APP = `
     import { signal } from "@reactre/core";
     import { Loading, memo } from "@reactre/core/features/async";
@@ -761,15 +795,16 @@ describe("built apps: a context, <Errored> and <Loading>", () => {
     export const [n, setN] = signal(1);
     export const [broken, setBroken] = signal(true);
     export const resets = [];
+    export const errors = [];
     const Label = () => <b class={useContext(Theme)}>{n()}</b>;
     const Maybe = () => {
-      if (broken()) throw new TypeError("bad: thing");
+      if (broken()) throw new TypeError("bad: </script><script>alert(1)</script>");
       return <s>fixed</s>;
     };
     export const App = () => (
       <main>
         <Theme value="dark"><Label /></Theme>
-        <Errored fallback={(err, reset) => (resets.push(reset), <p class="error">{err.name} {err.message}</p>)}>
+        <Errored fallback={(err, reset) => (resets.push(reset), errors.push(err), <p class="error">failed</p>)}>
           <Maybe />
         </Errored>
         <Loading fallback={<i>wait</i>}><p>sync {n()}</p></Loading>
@@ -791,25 +826,26 @@ describe("built apps: a context, <Errored> and <Loading>", () => {
     setN(n: number): void;
     setBroken(b: boolean): void;
     resets: (() => void)[];
+    errors: Error[];
   }
 
-  let srv: Server;
+  /** The server's entry: its render functions, for `srv` (or `dev` for its development build). */
+  const SERVER = (name: string) => `
+    import { renderToStream, renderToString, renderToStringAsync } from "@reactre/core/server";
+    import { App, resolve } from "./app.tsx";
+    globalThis.${name} = {
+      html: () => renderToString(App, { hydrate: true }),
+      stream: () => renderToStream(App, { hydrate: true }),
+      whole: () => renderToStringAsync(App, { hydrate: true }),
+      resolve,
+    };
+  `;
+
+  let srv: Server, dev: Server;
   beforeAll(async () => {
-    await run(
-      "server",
-      `
-      import { renderToStream, renderToString, renderToStringAsync } from "@reactre/core/server";
-      import { App, resolve } from "./app.tsx";
-      globalThis.srv = {
-        html: () => renderToString(App, { hydrate: true }),
-        stream: () => renderToStream(App, { hydrate: true }),
-        whole: () => renderToStringAsync(App, { hydrate: true }),
-        resolve,
-      };
-      `,
-      { server: true },
-    );
-    srv = (globalThis as unknown as { srv: Server }).srv;
+    await run("server", SERVER("srv"), { server: true });
+    await run("server-dev", SERVER("dev"), { server: true }, true);
+    ({ srv, dev } = globalThis as unknown as { srv: Server; dev: Server });
   });
 
   /** A root in the body with `html`, hydrated by a fresh client bundle. */
@@ -823,9 +859,9 @@ describe("built apps: a context, <Errored> and <Loading>", () => {
       "client",
       `
       import { hydrate } from "@reactre/core/features/hydrate";
-      import { App, resets, resolve, setBroken, setN } from "./app.tsx";
+      import { App, errors, resets, resolve, setBroken, setN } from "./app.tsx";
       hydrate(App, globalThis.root);
-      globalThis.cli = { resolve, resets, setBroken, setN };
+      globalThis.cli = { errors, resolve, resets, setBroken, setN };
       `,
       { hydrate: true },
     );
@@ -836,20 +872,19 @@ describe("built apps: a context, <Errored> and <Loading>", () => {
 
   test("renderToString: the provider's content, <Errored>'s fallback and a ready <Loading> are claimed; one that waited builds afresh", async () => {
     const html = srv.html();
-    expect(html).toContain("<!--rr:e:TypeError:bad%3A%20thing-->");
     expect(html).toContain("<!--rr:b--><!--[--><i>loading</i><!--]--><!--/rr:b-->");
     const { root, before, cli } = await hydrated(html);
     const [b, error, sync] = [find(root, "b"), find(root, "p"), all(root).filter((x) => x instanceof FakeElement)[3]];
     expect([b, error, sync].every((x) => before.includes(x!))).toBe(true);
     expect(shown(root)).toBe(
-      '<main><b class="dark">1</b><p class="error">TypeError bad: thing</p><p>sync 1</p><i>loading</i></main>',
+      '<main><b class="dark">1</b><p class="error">failed</p><p>sync 1</p><i>loading</i></main>',
     );
     // The waiting boundary's fallback is the client's own.
     expect(before.includes(find(root, "i"))).toBe(false);
     cli.resolve("word");
     await settle();
     expect(shown(root)).toBe(
-      '<main><b class="dark">1</b><p class="error">TypeError bad: thing</p><p>sync 1</p><p class="word">word</p></main>',
+      '<main><b class="dark">1</b><p class="error">failed</p><p>sync 1</p><p class="word">word</p></main>',
     );
     cli.setN(2);
     expect(shown(root)).toContain('<b class="dark">2</b>');
@@ -859,6 +894,27 @@ describe("built apps: a context, <Errored> and <Loading>", () => {
     cli.setBroken(false);
     cli.resets[0]!();
     expect(shown(root)).toBe('<main><b class="dark">2</b><s>fixed</s><p>sync 2</p><p class="word">word</p></main>');
+  });
+
+  test("<Errored>'s marker: a production server writes none of the error, and the fallback gets a generic one; a development server names it", async () => {
+    const prod = srv.html();
+    expect(prod).toContain("<!--[--><!--rr:e--><p");
+    for (const s of ["alert", "script", "%3C", "TypeError", "bad"]) expect(prod).not.toContain(s);
+    let { cli } = await hydrated(prod);
+    expect(cli.errors.length).toBe(1);
+    expect(cli.errors[0]!.name).toBe("Error");
+    expect(cli.errors[0]!.message).toBe(
+      "reactre: the server's <Errored> showed its fallback, and its production build keeps the error out of the page; its development build shows it",
+    );
+    const html = dev.html();
+    expect(html).toContain("<!--rr:e:TypeError:bad%3A%20%3C%2Fscript%3E%3Cscript%3Ealert(1)%3C%2Fscript%3E--><p");
+    expect(html).not.toContain("</script>");
+    ({ cli } = await hydrated(html));
+    expect(cli.errors.length).toBe(1);
+    expect([cli.errors[0]!.name, cli.errors[0]!.message]).toEqual([
+      "TypeError",
+      "bad: </script><script>alert(1)</script>",
+    ]);
   });
 
   test("renderToStringAsync: every boundary's children are claimed, and keep the server's text until the client's data comes", async () => {

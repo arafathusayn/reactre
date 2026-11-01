@@ -1,9 +1,10 @@
 // @reactre/core/hydrate/errors: @reactre/core/features/errors in a hydrate build, where an app's
 // imports of that module point (@reactre/compiler's hydrate mode). Everything is the module's own
 // but `<Errored>`: where the server showed its fallback (@reactre/core/server/errors writes a
-// marker with the error before it), hydration shows the fallback too, claiming the server's
-// nodes, with an error of that name and message; `reset` builds the children afresh. Elsewhere
-// it is features/errors' own.
+// marker before it), hydration shows the fallback too, claiming the server's nodes, with an error
+// of the name and message the marker gives (the server's development build writes them), or else
+// an Error saying the server kept it out of the page; `reset` builds the children afresh.
+// Elsewhere it is features/errors' own.
 
 import { Errored as errored, type ErroredFallback } from "@reactre/core/features/errors";
 import { __claim, __close, __cursor } from "@reactre/core/features/hydrate";
@@ -11,8 +12,15 @@ import type { Child } from "@reactre/core/jsx-runtime";
 
 export * from "@reactre/core/features/errors";
 
-/** The marker the server writes before a fallback it showed: the error's name and message. */
-const MARK = /^rr:e:([^:]*):(.*)$/;
+/**
+ * The marker the server writes before a fallback it showed: with the error's name and message
+ * from the server's development build, bare from a production one.
+ */
+const MARK = /^rr:e(?::([^:]*):(.*))?$/;
+
+/** What the fallback gets for an error a production server did not write into the page. */
+const HIDDEN =
+  "reactre: the server's <Errored> showed its fallback, and its production build keeps the error out of the page; its development build shows it";
 
 /**
  * `<Errored>` in a hydrate build. Hydrating where the server showed the fallback, its first build
@@ -24,8 +32,8 @@ export function Errored(props: { fallback: ErroredFallback; children?: Child | (
     marker = c !== null && c.nodeType === 8 && (c as Comment).data === "[" ? c.nextSibling : null,
     m = marker !== null && marker.nodeType === 8 ? MARK.exec((marker as Comment).data) : null;
   if (m === null) return errored(props);
-  const err = new Error(decodeURIComponent(m[2]!));
-  err.name = decodeURIComponent(m[1]!);
+  const err = new Error(m[1] === undefined ? HIDDEN : decodeURIComponent(m[2]!));
+  if (m[1] !== undefined) err.name = decodeURIComponent(m[1]);
   // The server's fallback, out of the boundary's pair until the fallback claims it.
   const p = marker!.parentNode!,
     end = __close(c!),

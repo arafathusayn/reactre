@@ -14,7 +14,8 @@
 //          waiting for a value, holding an update for a transition).
 //   DEV    the development build's diagnostics: warnings that name a code and a fix, and guards
 //          that throw where the production build would loop. features/hydrate.ts has them too
-//          (its mismatch warning): its builds are made as index.ts's are.
+//          (its mismatch warning), and server.ts (the error an `<Errored>`'s hydration marker
+//          writes into the page): their builds are made as index.ts's are.
 //   TYPES  type declarations added since a release (a function's overloads), which ship no code.
 //          Bun's minifier names locals by the letters of the whole source, types included, so
 //          they are stripped from the builds whose bytes the size budgets hold.
@@ -102,17 +103,21 @@ export function stripDev(source: string): string {
 }
 
 /**
- * A Bun plugin that loads @reactre/core's index.ts, and features/memo.ts and features/hydrate.ts
- * (which have development and type blocks of their own), without the blocks `names` (see `strip`).
+ * A Bun plugin that loads @reactre/core's index.ts, and features/memo.ts, features/hydrate.ts and
+ * server.ts (which have development and type blocks of their own), without the blocks `names`
+ * (see `strip`).
  */
 export function without(...names: Block[]): BunPlugin {
   return {
     name: "reactre-core-without-" + names.join("-").toLowerCase(),
     setup(build) {
-      build.onLoad({ filter: /[\\/]core[\\/]src[\\/](?:index|features[\\/](?:memo|hydrate))\.ts$/ }, async (args) => ({
-        contents: strip(await Bun.file(args.path).text(), names),
-        loader: "ts",
-      }));
+      build.onLoad(
+        { filter: /[\\/]core[\\/]src[\\/](?:index|server|features[\\/](?:memo|hydrate))\.ts$/ },
+        async (args) => ({
+          contents: strip(await Bun.file(args.path).text(), names),
+          loader: "ts",
+        }),
+      );
     },
   };
 }

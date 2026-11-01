@@ -1292,7 +1292,10 @@ const ASYNC_FEATURE: RegExp = /^@reactre\/core\/features\/(?:async|actions)$/;
  * development one.
  */
 export const CORE_RUNTIME: RegExp =
-  /[\\/]core[\\/](?:dist[\\/](?:(?:async|dev)[\\/])?index\.js|src[\\/]index\.ts|(?:dist|src)[\\/]features[\\/](?:async|actions|memo|hydrate)\.[jt]s|dist[\\/]dev[\\/]features[\\/](?:memo|hydrate)\.js)$/;
+  /[\\/]core[\\/](?:dist[\\/](?:(?:async|dev)[\\/])?index\.js|src[\\/](?:index|server)\.ts|(?:dist|src)[\\/]features[\\/](?:async|actions|memo|hydrate)\.[jt]s|dist[\\/]dev[\\/]features[\\/](?:memo|hydrate)\.js|dist[\\/](?:dev[\\/])?server\.js)$/;
+
+/** Of those, the server entry (@reactre/core/server): its source, its build, and its development build. */
+const SERVER_FILE: RegExp = /[\\/](?:src|dist(?:[\\/]dev)?)[\\/]server\.[jt]s$/;
 
 /** Of those, the feature modules. */
 const ASYNC_FEATURE_FILE: RegExp = /[\\/]features[\\/](?:async|actions)\.[jt]s$/;
@@ -1306,7 +1309,10 @@ const CORE_SOURCE: RegExp = /[\\/]src[\\/]index\.ts$/;
 /** Whether file `path` (a `CORE_RUNTIME` one) is @reactre/core's: its package is named so. By package, cached. */
 const cores = new Map<string, boolean>();
 export function isCore(path: string): boolean {
-  const dir = path.slice(0, path.search(/[\\/](?:dist|src)[\\/](?:(?:async|dev)[\\/])?(?:index\.[jt]s|features[\\/])/));
+  const dir = path.slice(
+    0,
+    path.search(/[\\/](?:dist|src)[\\/](?:(?:async|dev)[\\/])?(?:index\.[jt]s|server\.[jt]s|features[\\/])/),
+  );
   let r = cores.get(dir);
   if (r === undefined) {
     try {
@@ -1389,6 +1395,15 @@ export async function coreRuntime(
 ): Promise<string | null> {
   if (CORE_SOURCE.test(path))
     return dev ? null : stripCore(path, read, on ? ["DEV", "TYPES"] : ["ASYNC", "DEV", "TYPES"]);
+  if (SERVER_FILE.test(path)) {
+    // The server's development block (the error an <Errored>'s marker names): its development
+    // build's, or none.
+    if (path.endsWith(".ts")) return dev ? null : stripCore(path, read, ["DEV", "TYPES"]);
+    const isDev = /[\\/]dev[\\/]server\.js$/.test(path);
+    const other = isDev ? "../server.js" : "./dev/server.js";
+    // A core built before the server's development build existed has the one build.
+    return isDev === dev || !existsSync(join(dirname(path), other)) ? null : `export * from "${other}";\n`;
+  }
   const feature = MEMO_FILE.exec(path);
   if (feature !== null) {
     if (path.endsWith(".ts"))

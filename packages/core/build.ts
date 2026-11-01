@@ -5,8 +5,9 @@
 //   dist/async/      index.ts with the async runtime that @reactre/core/features/async and
 //                    features/actions need, for production: without the development blocks;
 //   dist/dev/        index.ts as it is: the async runtime and the development diagnostics; and
-//                    features/memo.ts and features/hydrate.ts as they are, with their checks and
-//                    warnings (dist/features/memo.js and dist/features/hydrate.js have none).
+//                    features/memo.ts, features/hydrate.ts and server.ts as they are, with their
+//                    checks, warnings and the error an <Errored>'s hydration marker names
+//                    (dist/features/memo.js, dist/features/hydrate.js and dist/server.js have none).
 //
 // dist/hydrate/ holds hydration's <Loading> and <Errored> (src/hydrate/*.ts), and dist/server/ the
 // server's versions of the feature modules.
@@ -79,11 +80,12 @@ for (const r of [
     outdir: join(dir, "dist/async"),
     plugins: [without(...ASYNC_PRODUCTION)],
   }),
-  // With the development builds of features/memo, which holds its checks too, and of
-  // features/hydrate, which holds its mismatch warnings.
+  // With the development builds of features/memo, which holds its checks too, of
+  // features/hydrate, which holds its mismatch warnings, and of server.ts, whose <Errored>
+  // marker names the error.
   await Bun.build({
     ...options,
-    entrypoints: [join(dir, "src/index.ts"), join(dir, "src/features/memo.ts"), join(dir, "src/features/hydrate.ts")],
+    entrypoints: ["index.ts", "features/memo.ts", "features/hydrate.ts", "server.ts"].map((f) => join(dir, "src", f)),
     outdir: join(dir, "dist/dev"),
   }),
 ])

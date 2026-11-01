@@ -636,14 +636,20 @@ export function __ssrLoading(props: { fallback?: unknown; children?: unknown }):
 
 /**
  * Internal (@reactre/core/server/errors): what an `<Errored>` that shows its fallback writes
- * before it, in a render with `hydrate`: a marker with the error's name and message, so that
- * hydration shows the fallback too, with that error (@reactre/core/hydrate/errors). Nothing
- * without `hydrate`.
+ * before it, in a render with `hydrate`: a marker, so that hydration shows the fallback too
+ * (@reactre/core/hydrate/errors). The development build's names the error and gives its message,
+ * which the client's fallback then gets; a production build's says only that the boundary
+ * errored, so the page's source holds nothing of the server's error. Nothing without `hydrate`.
  */
 export function __ssrErrored(err: unknown): Html | null {
   if (R === null || !R.hydrate) return null;
+  // #if DEV
   const e = err instanceof Error ? err : new Error(String(err));
   return new Html([`<!--rr:e:${encodeURIComponent(e.name)}:${encodeURIComponent(e.message)}-->`]);
+  // #else
+  // void err;
+  // return new Html(["<!--rr:e-->"]);
+  // #endif
 }
 
 /**
