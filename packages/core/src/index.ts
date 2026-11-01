@@ -48,7 +48,9 @@
 //   - Solid 2.0's owner and timing APIs are feature modules, since they are runtime functions
 //     and not compiled away: @reactre/core/features/owner (`createRoot`, `getOwner`,
 //     `runWithOwner`), features/timing (`onSettled`, `flush`) and features/reaction. They build
-//     on the `__` internals below and hook into nothing that runs without them.
+//     on the `__` internals below and hook into nothing that runs without them. So do
+//     features/context (`createContext`, `useContext`) and features/errors (`<Errored>`), which
+//     wrap methods of the owned effect class as they load (see "Ownership").
 //   - Control flow (<Show>, <Switch>/<Match>, <Repeat>, <Portal>, <Dynamic>) is in ./flow.ts,
 //     compiled away as <For> is. `dynamic()`, which runs, is @reactre/core/features/dynamic.
 //
@@ -459,8 +461,14 @@ export function __swapOwner(o: Owner | null): Owner | null {
 /**
  * Internal: the current owner, the root owner class, and ownership itself (`Owned.within`), for
  * @reactre/core/features/owner. Only what uses `__Owned` brings ownership.
+ *
+ * @reactre/core/features/context and features/errors wrap methods of `__Owned` (`once`, and the
+ * static `within`) as they load, and features/errors those of `__RowObserver` (`read`, `stale`,
+ * see "Lists"), the row observer class, which brings no list with it: owners then take the
+ * scope they were made in, and what an effect or a row throws finds its boundary. Nothing here
+ * checks for them.
  */
-export { owner as __owner, Root as __Root, Owned as __Owned };
+export { owner as __owner, Root as __Root, Owned as __Owned, RowObserver as __RowObserver };
 
 /**
  * Run `fn` now and again whenever a signal it read changes. Each run records
@@ -546,7 +554,7 @@ class Selector<K> {
   // Rows of lists that asked: by list, the rows remember their key themselves.
   readonly lists: ForList<unknown, unknown>[] = [];
   // Anything else that asked, by key.
-  readonly byKey = new Map<K, Source>();
+  readonly byKey: Map<K, Source> = new Map<K, Source>();
   /** Record that reader `o` asked about key `k`. */
   watch(o: Reader, k: K): void {
     if (o === rowContext) {

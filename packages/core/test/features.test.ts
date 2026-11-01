@@ -28,6 +28,10 @@
 //   stores and Solid 2.0's stores (@reactre/core/features/store) and memo and signal options
 //   memo       (features/memo), built from the public API: each comes only with its import.
 //   options
+//   context    @reactre/core/features/context (`createContext`, `useContext`) and
+//   and errors features/errors (`<Errored>`, `effect(fn, { error })`, `configureClientErrors`).
+//              Loading one wraps methods of the owned effect class (and, for errors, of the list
+//              class); an app that does not import them ships the core's code unchanged.
 //
 // The size profiles (../sizes.json), one app each:
 //   jfb       the js-framework-benchmark app (apps/jfb/app/reactre.tsx): no opt-in at all.
@@ -41,6 +45,8 @@
 //   show      a <Show> whose child reads an accessor, a <For> with a fallback, a class list.
 //   store     a store's array in a <For>, written through its setter and `reconcile`.
 //   memo      a memo with `equals`, and a writable derived signal of it.
+//   context   a provider, and lookups in its children and in a slot's content made later.
+//   errors    an <Errored> whose child's hole throws on an update, and its reset.
 //
 // The size budgets live in ../sizes.json. When a change is worth its bytes, record the new sizes:
 //
@@ -262,6 +268,50 @@ const apps = {
     render(() => <p>{(runs++, current().name)}:{label()}</p>, root);
     globalThis.api = { setUser, setLabel, runs: () => runs };
   `,
+  /**
+   * A provider whose children read it, in its body and in a slot's content made later. The
+   * provider gets its children as a getter, as lazy children compile.
+   */
+  context: `
+    import { render, signal } from "@reactre/core";
+    import { createContext, useContext } from "@reactre/core/features/context";
+    const Theme = createContext("light");
+    const Required = createContext();
+    const [more, setMore] = signal(false);
+    const Label = () => <b>{useContext(Theme)}</b>;
+    function App() {
+      return (
+        <div>
+          <Label />
+          {Theme({ value: "dark", get children() { return <p><Label />{more() ? <Label /> : null}</p>; } })}
+        </div>
+      );
+    }
+    render(App, root);
+    const missing = () => { try { useContext(Required); } catch (e) { return e.name; } };
+    globalThis.api = { setMore, missing };
+  `,
+  /** A boundary whose child's hole throws on an update; its reset builds the child again. */
+  errors: `
+    import { render, signal } from "@reactre/core";
+    import { Errored } from "@reactre/core/features/errors";
+    const [n, setN] = signal(0);
+    const fail = () => { throw new Error("bad " + n()); };
+    const Count = () => <b>{n() === 1 ? fail() : n()}</b>;
+    let retry;
+    render(
+      () => (
+        <div>
+          {Errored({
+            fallback: (err, reset) => ((retry = reset), <i>{err.message}</i>),
+            get children() { return <Count />; },
+          })}
+        </div>
+      ),
+      root,
+    );
+    globalThis.api = { setN, retry: () => retry() };
+  `,
 };
 
 describe("ownership", () => {
@@ -436,6 +486,35 @@ describe("stores and memo options", () => {
   });
 });
 
+describe("context and errors", () => {
+  test("off: an app that does not import them ships none of their code", async () => {
+    for (const name of ["plain", "slot", "attach", "show"] as const) {
+      const code = await bundle(name, apps[name], false);
+      for (const s of ["ContextNotFoundError", "function Errored(", "prototype.once", ".within =", "prototype.refresh"])
+        expect(code).not.toContain(s);
+    }
+  });
+
+  test("context: a provider's value reaches its children, and content a slot makes later", async () => {
+    const { root, api } = run(await bundle("context", apps.context));
+    expect(text(root)).toBe("lightdark");
+    api.setMore!(true);
+    expect(text(root)).toBe("lightdarkdark");
+    expect(api.missing!()).toBe("ContextNotFoundError");
+  });
+
+  test("errors: a throw on an update shows the fallback; reset builds the children again", async () => {
+    const { root, api } = run(await bundle("errors", apps.errors));
+    expect(text(root)).toBe("0");
+    api.setN!(1);
+    expect(text(root)).toBe("bad 1");
+    api.setN!(2);
+    expect(text(root)).toBe("bad 1");
+    api.retry!();
+    expect(text(root)).toBe("2");
+  });
+});
+
 describe("sizes", () => {
   test("each profile stays within its gzip budget", async () => {
     const jfb = Bun.fileURLToPath(new URL("../../../apps/jfb/app/reactre.tsx", import.meta.url));
@@ -455,6 +534,8 @@ describe("sizes", () => {
       "show",
       "store",
       "memo",
+      "context",
+      "errors",
     ] as const)
       measure(name, await bundle(name, apps[name]));
     if (process.env.UPDATE_SIZES) {

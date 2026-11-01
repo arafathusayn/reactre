@@ -201,23 +201,28 @@ The template is parsed once. `mount` clones it with values for its holes, in ord
 
 `@reactre/core` itself holds what the compiler makes free. Runtime APIs beyond it are feature modules, imported by path: an app that does not import one ships none of its code, and its updates run as before.
 
-| Import                            | Export                     | What it does                                                                                                                                  |
-| --------------------------------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `@reactre/core/features/owner`    | `createRoot(fn)`           | Runs `fn(dispose)` under a new owner; `dispose` stops what it made. It goes with the owner it was made in.                                    |
-|                                   | `getOwner()`               | The current owner, or null.                                                                                                                   |
-|                                   | `runWithOwner(o, fn)`      | Runs `fn`, untracked, with `o` as the owner of what it makes; null makes it belong to nothing.                                                |
-| `@reactre/core/features/timing`   | `onSettled(fn)`            | Runs `fn` once, untracked, when the work under way has finished and the DOM shows it ([timing](#timing)). A function it returns is a cleanup. |
-|                                   | `flush(fn?)`               | `flush(fn)` runs `fn` and applies its writes before it returns, inside a batch too. `flush()` applies what the current batch has queued.      |
-| `@reactre/core/features/reaction` | `reaction(compute, apply)` | An effect in two halves: `compute` is tracked, `apply(value, prev)` runs untracked when the value changes, and may return a cleanup.          |
-| `@reactre/core/features/dynamic`  | `dynamic(source)`          | A component that renders what `source` returns, as `<Dynamic>` does.                                                                          |
-| `@reactre/core/features/store`    | `createStore(value)`       | `[store, setStore]`: a deep reactive proxy, whose reads subscribe per property (arrays by index and `length`), and a setter given a draft.    |
-|                                   | `createStore(fn, seed)`    | A derived store that can be written: `fn(draft)` runs tracked; a write holds until it runs again. `{ shallow: true }` for a one-layer store.  |
-|                                   | `createProjection(fn, s)`  | A read-only derived store: what `fn(draft)` returns is reconciled into it by `key` ("id" by default).                                         |
-|                                   | `reconcile(value, key?)`   | A setter's function that writes only what differs, keeping items of the same key ("id"; null for by index).                                   |
-|                                   | `snapshot(s)`, `deep(s)`   | A plain deep copy, untracked; `deep` subscribes to every property first.                                                                      |
-|                                   | `merge(...s)`, `omit(o,…)` | Props helpers whose properties are getters of their sources, so reactive props stay reactive. In `merge`, a later `undefined` overrides.      |
-| `@reactre/core/features/memo`     | `memo(fn, { equals })`     | `memo` with `prev` and an equality of its own; `equals: false` re-runs readers each time.                                                     |
-|                                   | `signal(fn)`               | A writable derived signal: `fn(prev)` recomputes it when its sources change; a write sets it until then. `signal(v, { equals })` too.         |
+| Import                            | Export                               | What it does                                                                                                                                  |
+| --------------------------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@reactre/core/features/owner`    | `createRoot(fn)`                     | Runs `fn(dispose)` under a new owner; `dispose` stops what it made. It goes with the owner it was made in.                                    |
+|                                   | `getOwner()`                         | The current owner, or null.                                                                                                                   |
+|                                   | `runWithOwner(o, fn)`                | Runs `fn`, untracked, with `o` as the owner of what it makes; null makes it belong to nothing.                                                |
+| `@reactre/core/features/timing`   | `onSettled(fn)`                      | Runs `fn` once, untracked, when the work under way has finished and the DOM shows it ([timing](#timing)). A function it returns is a cleanup. |
+|                                   | `flush(fn?)`                         | `flush(fn)` runs `fn` and applies its writes before it returns, inside a batch too. `flush()` applies what the current batch has queued.      |
+| `@reactre/core/features/reaction` | `reaction(compute, apply)`           | An effect in two halves: `compute` is tracked, `apply(value, prev)` runs untracked when the value changes, and may return a cleanup.          |
+| `@reactre/core/features/dynamic`  | `dynamic(source)`                    | A component that renders what `source` returns, as `<Dynamic>` does.                                                                          |
+| `@reactre/core/features/store`    | `createStore(value)`                 | `[store, setStore]`: a deep reactive proxy, whose reads subscribe per property (arrays by index and `length`), and a setter given a draft.    |
+|                                   | `createStore(fn, seed)`              | A derived store that can be written: `fn(draft)` runs tracked; a write holds until it runs again. `{ shallow: true }` for a one-layer store.  |
+|                                   | `createProjection(fn, s)`            | A read-only derived store: what `fn(draft)` returns is reconciled into it by `key` ("id" by default).                                         |
+|                                   | `reconcile(value, key?)`             | A setter's function that writes only what differs, keeping items of the same key ("id"; null for by index).                                   |
+|                                   | `snapshot(s)`, `deep(s)`             | A plain deep copy, untracked; `deep` subscribes to every property first.                                                                      |
+|                                   | `merge(...s)`, `omit(o,…)`           | Props helpers whose properties are getters of their sources, so reactive props stay reactive. In `merge`, a later `undefined` overrides.      |
+| `@reactre/core/features/memo`     | `memo(fn, { equals })`               | `memo` with `prev` and an equality of its own; `equals: false` re-runs readers each time.                                                     |
+|                                   | `signal(fn)`                         | A writable derived signal: `fn(prev)` recomputes it when its sources change; a write sets it until then. `signal(v, { equals })` too.         |
+| `@reactre/core/features/context`  | `createContext(default?)`            | A context, which is a component: `<Ctx value={v}>` provides `v` to what its children make, then and later.                                    |
+|                                   | `useContext(ctx)`                    | The nearest provider's value, else the default; with no default, it throws `ContextNotFoundError`.                                            |
+| `@reactre/core/features/errors`   | `<Errored fallback>`                 | Its children, or `fallback` (an element, or `(err, reset) => ...`) once something they made throws. `reset()` builds them again.              |
+|                                   | `effect(fn, { error })`              | The core's `effect`, with a handler for what its runs throw.                                                                                  |
+|                                   | `configureClientErrors({ onError })` | Gets what an effect, a slot or a row throws outside any boundary.                                                                             |
 
 ```tsx
 import { createRoot } from "@reactre/core/features/owner";
@@ -225,6 +230,8 @@ import { flush, onSettled } from "@reactre/core/features/timing";
 import { dynamic } from "@reactre/core/features/dynamic";
 import { createStore, reconcile } from "@reactre/core/features/store";
 import { memo, signal } from "@reactre/core/features/memo";
+import { createContext, useContext } from "@reactre/core/features/context";
+import { Errored } from "@reactre/core/features/errors";
 ```
 
 `onSettled`, `flush`, `createRoot`, `getOwner` and `runWithOwner` are Solid 2.0's, and `reaction` is its `createEffect(compute, apply)`, under MobX's name. `<Dynamic>` stays in `@reactre/core`, since it is compiled away; `dynamic()` is the runtime function beside it. Rows with several selector keys are a feature module too (see [What an app ships](#what-an-app-ships)).
@@ -240,6 +247,34 @@ The store APIs are Solid 2.0's, under its names: setters are draft-first (`setSt
 ```
 
 `each={store.todos}` renders the array once and then only when `store.todos` is given a new array, since a `<For>` reads the array it is given untracked and needs a new one for each render; spread it. A row's hole that reads only its item is compared when the row gets a new item, and a store's items change in place, keeping their proxies, so such a hole is written once: make it call something.
+
+### Context and error boundaries
+
+```tsx
+import { createContext, useContext } from "@reactre/core/features/context";
+import { Errored } from "@reactre/core/features/errors";
+
+const Theme = createContext("light");
+const Label = () => <b>{useContext(Theme)}</b>;
+
+const App = () => (
+  <Errored fallback={(err, reset) => <button onClick={reset}>{String(err)}: retry</button>}>
+    <Theme value="dark">
+      <Label />
+    </Theme>
+  </Errored>
+);
+```
+
+A context is a component, as in Solid 2.0: there is no `.Provider`. What its children make finds its value then and later: a slot's next content, a `<For>`'s next row, an effect's next run, a `createRoot` or a `runWithOwner` with an owner kept from under it. `value` is read once, when the provider runs; to share something that changes, provide a signal's read function. A provider of `undefined` is no provider. A function child renders as a slot under the provider.
+
+`<Errored>` catches what is thrown while its children are built (a component's body, an effect's first run, a row's creation) and while they update (an effect's or a slot's later run, a row's reactive holes). What the children made is disposed, and the fallback shows once the run that threw, and every run around it, has ended, before the write that caused it returns. The first error is the one shown, and what the fallback throws goes to the boundary above. Event handlers, timers and promises throw to their caller, as in Solid. A row's hole that a selector's change re-runs throws in the selector's effect, so its error goes to the boundary around the `selector()` call.
+
+A provider and a boundary read their children inside themselves, so they need them unbuilt: as a getter (`get children()`, the compiler's lazy children), or as a function child.
+
+An effect's own handler is an option of the effect, as Solid 2.0's `createEffect` has it: `effect(fn, { error })` from this module hands what a run of `fn` throws to `error` (untracked), and the effect keeps following what the run read before it threw. Without a boundary or `onError`, an error is thrown on to the write or the `render` that caused it, as without the module.
+
+Each module installs itself as it loads: context makes every owner keep the scope it was made in, and errors puts a try around every effect's run and a row's re-run. Neither is in the code of an app that does not import it: the size profiles without them are the same code as before, byte for byte with local names left unminified. With them, [`sizes.json`](sizes.json)'s `context` profile (a provider and its lookups) is 3,358 bytes gzipped, and `errors` (a boundary and its reset) 3,472: about 0.45 KB and 0.57 KB over the `slot` profile, an app with ownership alone.
 
 ## Timing
 
