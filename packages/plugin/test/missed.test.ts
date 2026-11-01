@@ -24,13 +24,16 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 
+import { reactreCompiler } from "@reactre/compiler";
 import { FakeElement, FakeEvent, installFakeDocument } from "@reactre/testdom";
 import { nodeResolve } from "@rollup/plugin-node-resolve";
+import type { BunPlugin } from "bun";
 import { build as esbuild, type Plugin as EsbuildPlugin } from "esbuild";
 import { type Plugin as RollupPlugin, rollup } from "rollup";
 import { build as vite, createServer, type Plugin as VitePlugin } from "vite";
 import webpack from "webpack";
 
+import bunPlugin from "../src/bun.ts";
 import esbuildPlugin from "../src/esbuild.ts";
 import rollupPlugin from "../src/rollup.ts";
 import vitePlugin from "../src/vite.ts";
@@ -325,6 +328,44 @@ describe("a caller that joins at its transform, as a chunk another plugin adds",
         (e: unknown) => String((e as Error).message ?? e),
       );
       expect(failure).toContain(`${list} was not in the program read before the build, and it is not a script`);
+    }, 60_000);
+});
+
+describe("bun: a virtual module another plugin serves, which calls Label by hand", () => {
+  /** `virtual:callers` as a Bun plugin serves it: Caller calls Label with a getter, no JSX. */
+  const virtualBun: BunPlugin = {
+    name: "virtual-callers",
+    setup(build) {
+      build.onResolve({ filter: /^virtual:callers$/ }, () => ({ path: "callers", namespace: "virtual" }));
+      build.onLoad({ filter: /.*/, namespace: "virtual" }, () => ({
+        contents:
+          `import { signal } from ${JSON.stringify(PACKAGES + "core/src/index.ts")};\n` +
+          `import { Label } from ${JSON.stringify(LABEL)};\n` +
+          "const [count, setCount] = signal(0);\n" +
+          "export { setCount };\n" +
+          "export const Caller = () => Label({ get text() { return count(); } });\n",
+        loader: "js",
+      }));
+    },
+  };
+  const plugins: [string, () => BunPlugin][] = [
+    ["@reactre/plugin", () => bunPlugin()],
+    ["@reactre/compiler's own plugin", () => reactreCompiler()],
+  ];
+  for (const [name, plugin] of plugins)
+    test(`${name}: Bun cannot resolve it, so the program gives up, and Label's hole is bound`, async () => {
+      const dir = fresh("bun");
+      const r = await Bun.build({
+        entrypoints: [MISSED + "virtual.tsx"],
+        conditions: ["reactre-source"],
+        outdir: dir,
+        naming: "main.js",
+        target: "browser",
+        format: "esm",
+        plugins: [virtualBun, plugin()],
+      });
+      if (!r.success) throw new AggregateError(r.logs, "Bun.build failed");
+      expect(await updates(dir)).toMatch(BOUND);
     }, 60_000);
 });
 

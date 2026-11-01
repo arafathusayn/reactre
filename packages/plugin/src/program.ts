@@ -26,7 +26,7 @@
 
 import { dirname, resolve } from "node:path";
 
-import type { Host, Resolved } from "@reactre/compiler/program";
+import { type Host, isExternal, type Resolved } from "@reactre/compiler/program";
 
 import { transpile } from "./transpile.ts";
 
@@ -164,7 +164,9 @@ export async function readBuild(ctx: unknown, input: unknown, serve: boolean): P
     return { entries: entries as string[], host };
   }
   if (native.framework === "bun") {
-    const points = (native as { build: { config?: { entrypoints?: readonly string[] } } }).build.config?.entrypoints;
+    const config = (native as { build: { config?: { entrypoints?: readonly string[]; external?: string[] } } }).build
+      .config;
+    const points = config?.entrypoints;
     if (points === undefined) return null;
     const { Bun } = globalThis as unknown as { Bun: { resolveSync(id: string, from: string): string } };
     return {
@@ -175,7 +177,9 @@ export async function readBuild(ctx: unknown, input: unknown, serve: boolean): P
           try {
             return Bun.resolveSync(spec, dirname(importer));
           } catch {
-            return false;
+            // Bun cannot tell another plugin's virtual module from a missing one: unknown, unless
+            // the build names it external.
+            return isExternal(spec, config?.external) ? false : null;
           }
         },
       },

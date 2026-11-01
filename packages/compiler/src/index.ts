@@ -84,6 +84,7 @@ import {
   type Def,
   findDefs,
   type Host,
+  isExternal,
   isFunction,
   moduleFacts,
   type Program,
@@ -144,13 +145,15 @@ export function reactreCompiler(options: ReactreCompilerOptions = {}): BunPlugin
   return {
     name: "@reactre/compiler",
     setup(build) {
+      const external = (build.config as { external?: string[] } | undefined)?.external;
       const host: Host = {
         resolve(spec, importer) {
           try {
             return Bun.resolveSync(spec, dirname(importer));
           } catch {
-            // What Bun cannot resolve fails the build, or is left to the runtime: not bundled.
-            return false;
+            // Left to the runtime when the build says so; else another plugin may serve it (a
+            // virtual module), whose code the program cannot read.
+            return isExternal(spec, external) ? false : null;
           }
         },
         transpile: (file, source) => transpileSource(source, loaderOf(file)),

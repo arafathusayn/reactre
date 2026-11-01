@@ -924,6 +924,21 @@ export interface Host {
   read?(file: string): string | Promise<string>;
 }
 
+/**
+ * Whether `spec` is one of a Bun build's `external` patterns (a name, its subpaths, or a pattern
+ * with `*`): a module Bun leaves to the runtime. Bun's resolver cannot tell another plugin's
+ * virtual module from a missing one, so a specifier it cannot resolve is known to be outside the
+ * program only when the build names it external; any other is unknown (null), and the program
+ * gives up, as for a virtual module elsewhere.
+ */
+export function isExternal(spec: string, external: readonly string[] = []): boolean {
+  return external.some((p) => p === spec || spec.startsWith(p + "/") || (p.includes("*") && glob(p).test(spec)));
+}
+
+/** A pattern with `*` (any characters) as a regular expression. */
+const glob = (p: string): RegExp => new RegExp(`^${p.split("*").map(escape).join(".*")}$`);
+const escape = (s: string): string => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
+
 /** Scripts, read for what they import and call. */
 const SCRIPT = /\.(?:[cm]?[jt]sx?)$/;
 /** Files that import no modules: styles, data, images, fonts, media. */

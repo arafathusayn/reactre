@@ -15,6 +15,7 @@ import {
   callsOutsideJsx,
   findDefs,
   type Host,
+  isExternal,
   moduleFacts,
   Program,
   readsOf,
@@ -438,6 +439,37 @@ describe("reactreCompiler's whole program", () => {
     };
     expect(await build()).toContain("clone([props.t])");
     expect(await build(false)).toContain("() => props.t");
+  });
+
+  test("what Bun cannot resolve and the build does not name external may be a virtual module: it gives up", async () => {
+    writeFileSync(
+      join(dir, "virtual.tsx"),
+      `import { Label } from "./label.tsx"; import "virtual:x"; export const A = () => <div><Label t="x" /></div>;`,
+    );
+    const r = await Bun.build({
+      entrypoints: [join(dir, "virtual.tsx")],
+      external: ["@reactre/core"],
+      plugins: [
+        {
+          name: "virtual",
+          setup(b) {
+            b.onResolve({ filter: /^virtual:x$/ }, () => ({ path: "x", namespace: "virtual" }));
+            b.onLoad({ filter: /.*/, namespace: "virtual" }, () => ({ contents: "", loader: "js" }));
+          },
+        },
+        reactreCompiler(),
+      ],
+    });
+    expect(await r.outputs[0]!.text()).toContain("() => props.t");
+  });
+
+  test("isExternal: a name, its subpaths, and patterns with *", () => {
+    expect(isExternal("react", ["react"])).toBe(true);
+    expect(isExternal("react/jsx-runtime", ["react"])).toBe(true);
+    expect(isExternal("react-dom", ["react"])).toBe(false);
+    expect(isExternal("@scope/a.b", ["@scope/*"])).toBe(true);
+    expect(isExternal("@scopex/a", ["@scope/*"])).toBe(false);
+    expect(isExternal("virtual:x")).toBe(false);
   });
 });
 

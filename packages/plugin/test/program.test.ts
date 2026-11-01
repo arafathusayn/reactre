@@ -100,7 +100,10 @@ describe("readBuild", () => {
     const b = (await readBuild(ctx({ entrypoints: [entry] }), undefined, false))!;
     expect(b.entries).toEqual([entry]);
     expect(await b.host.resolve("./l.tsx", entry)).toBe(join(dir, "l.tsx"));
-    expect(await b.host.resolve("no-such-package", entry)).toBe(false);
+    // What Bun cannot resolve may be another plugin's virtual module: unknown, unless external.
+    expect(await b.host.resolve("no-such-package", entry)).toBeNull();
+    const ext = (await readBuild(ctx({ entrypoints: [entry], external: ["no-such-package"] }), undefined, false))!;
+    expect(await ext.host.resolve("no-such-package/sub", entry)).toBe(false);
     expect(await readBuild(ctx({}), undefined, false)).toBeNull();
   });
 
