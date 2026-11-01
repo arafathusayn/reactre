@@ -984,9 +984,10 @@ describe("effects on the server", () => {
     await tick();
     setN(2);
     expect(log).toEqual(["compute 1", "compute 1", "compute 1"]);
-    // The rest of each module is the client's.
+    // The rest of each module is the client's (but <Errored>, which marks its fallback for hydration).
     expect(serverTiming.flush).toBe(timing.flush);
-    expect(serverErrors.Errored).toBe(Errored);
+    expect(serverErrors.configureClientErrors).toBe(configureClientErrors);
+    expect(serverErrors.Errored).not.toBe(Errored);
   });
 
   test("bind computes, given its last value, and never applies; autorun and onFlush never run", async () => {
