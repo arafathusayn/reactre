@@ -56,9 +56,14 @@
 //     element to each, and `defaultValue`, `defaultChecked`,
 //     `defaultSelected` and `defaultMuted` are set as properties.
 //
+// A `<For>` or `<Repeat>` that is not an element's child with rows of one element (one outside an
+// element, or whose rows are text, fragments or other content) is @reactre/core/features/for's
+// `__each`, its nodes as content (`anyList`); a list of element rows in an element compiles as it
+// always did.
+//
 // Nothing is left to a JSX runtime: a construct the compiler does not handle
-// (a `<For>` outside an element, a row that is not one element) is a compile
-// error, with its source.
+// (a `<Match>` outside a `<Switch>`, a row that is not a function written in
+// place nor content) is a compile error, with its source.
 //
 // Design decisions:
 //   - The compiler reads Bun's output as text with the shared scanner (./scan.ts) instead of
