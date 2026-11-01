@@ -22,7 +22,8 @@
 //     (`@reactre/plugin:program`) sees every module of the app it does not compile, a `.js` file
 //     or a virtual module that may call a component by hand. If it passes a prop reactively to a
 //     component compiled already without it, the build fails with that component's name, never
-//     ships it; a late file that is not a script it can read fails the build too.
+//     ships it. In Rollup, Rolldown and Vite, a late file that is not a script joins once every
+//     plugin has made it JavaScript (`moduleParsed`).
 
 import { dirname, resolve } from "node:path";
 

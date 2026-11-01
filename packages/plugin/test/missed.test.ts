@@ -313,22 +313,56 @@ describe("a caller that joins at its transform, as a chunk another plugin adds",
       }, 60_000);
     }
 
-  for (const [name, build] of Object.entries(late))
-    test(`${name}, a file that is not a script: the program cannot read it, and the build fails naming it`, async () => {
-      const list = MISSED + "list.callers";
-      // Label first: a failing transform of the list would leave Label's load waiting.
-      const [hold, seen] = lateCaller("label", list);
+  // A file that is not a script, which another plugin makes code of: it joins once every plugin
+  // has transformed it, as JavaScript. Its code calls Label by hand.
+  const calls = MISSED + "hidden/byhand.calls";
+  const callsRollup: RollupPlugin = {
+    name: "calls",
+    resolveId: (id) => (id === calls ? id : null),
+    load: (id) => (id === calls ? byhandSource : null),
+  };
+  for (const [name, build] of Object.entries(late)) {
+    test(`${name}, a file that is not a script, made code by another plugin: transformed after Label, the build fails`, async () => {
+      const [hold, seen] = lateCaller("label", calls);
       const failure = await build(
         MISSED + "late.tsx",
         fresh(name),
-        [hold as never, listRollup as never],
+        [hold as never, callsRollup as never],
         [seen as never],
       ).then(
         () => "(built)",
         (e: unknown) => String((e as Error).message ?? e),
       );
-      expect(failure).toContain(`${list} was not in the program read before the build, and it is not a script`);
+      expect(failure).toContain(`${calls} was not in the program read before the build`);
+      expect(failure).toContain(`it passes (every prop) reactively to Label in ${LABEL}, compiled already`);
     }, 60_000);
+
+    test(`${name}, the same file transformed before Label: the app updates, or the build fails naming both`, async () => {
+      // It joins after its transform, when its code is parsed: Label may be compiled in between.
+      const dir = fresh(name);
+      const [hold, seen] = lateCaller("caller", calls);
+      const failure = await build(
+        MISSED + "late.tsx",
+        dir,
+        [hold as never, callsRollup as never],
+        [seen as never],
+      ).then(
+        () => null,
+        (e: unknown) => String((e as Error).message ?? e),
+      );
+      if (failure !== null) {
+        expect(failure).toContain(`${calls} was not in the program read before the build`);
+        expect(failure).toContain(`reactively to Label in ${LABEL}, compiled already`);
+        return;
+      }
+      installFakeDocument();
+      const root = new FakeElement("DIV");
+      const app = (await import(join(dir, "late-caller.js"))) as { mount(el: unknown): (n: number) => void };
+      const setCount = app.mount(root);
+      setCount(3);
+      expect(root.textContent).toBe("3");
+    }, 60_000);
+  }
 });
 
 describe("bun: a virtual module another plugin serves, which calls Label by hand", () => {

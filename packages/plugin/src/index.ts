@@ -295,31 +295,37 @@ export const reactre: UnpluginInstance<ReactreOptions | undefined, boolean> = cr
     // may call a component by hand, passing a prop as a getter. One the program read already is
     // left as it is; one it did not (a chunk another plugin adds) joins as a compiled module
     // joins, so the components compiled after it are compiled with its uses, and the build fails
-    // if one was compiled already without them.
+    // if one was compiled already without them. The filter keeps every other file away from the
+    // hook: esbuild and webpack would load it through the hook, as text.
     const joiner: UnpluginOptions = {
       name: "@reactre/plugin:program",
       enforce: "pre",
       transform: {
-        filter: { id: { exclude: [NODE_MODULES] } },
+        filter: { id: { include: [SCRIPT, /^\0/], exclude: [NODE_MODULES] } },
         async handler(code, id) {
           const path = id.replace(/[?#].*$/, "");
           const compiled = include.some((r) => r.test(id)) && !exclude.some((r) => r.test(id));
           if (compiled || ASSET.test(path)) return null;
           const w = await programs.get(envOf(this));
-          if (w == null) return null;
           // A module made from part of a file (an HTML page's inline script) is a module of its own.
-          if (SCRIPT.test(id) || id.startsWith("\0"))
-            await factsFor(w.program, id, w.host.transpile(path, code), w.host);
-          // A file the program would have given up on (a .vue or .mdx file), which it did not reach.
-          else if (!w.program.has(id))
-            throw new ReactreCompileError(
-              `reactre: ${id} was not in the program read before the build, and it is not a script the ` +
-                "plugin can read; set the plugin's `wholeProgram` option to false",
-            );
+          if (w != null) await factsFor(w.program, id, w.host.transpile(path, code), w.host);
           return null;
         },
       },
     };
+    // Rollup, Rolldown and Vite give each module's code once every plugin has transformed it: a
+    // late file that is not a script (a .vue or .mdx file another plugin makes code of) joins
+    // then, as JavaScript.
+    const parsed = async function (this: unknown, info: { id: string; code: string | null }): Promise<void> {
+      const { id, code } = info;
+      if (code === null || NODE_MODULES.test(id) || SCRIPT.test(id) || id.startsWith("\0")) return;
+      if (ASSET.test(id.replace(/[?#].*$/, ""))) return;
+      const w = await programs.get(envOf(this));
+      if (w != null && !w.program.has(id)) await factsFor(w.program, id, code, w.host);
+    };
+    joiner.rollup = { moduleParsed: parsed };
+    joiner.rolldown = { moduleParsed: parsed } as UnpluginOptions["rolldown"];
+    joiner.vite = { moduleParsed: parsed };
     return [plugin, joiner];
   }
 
