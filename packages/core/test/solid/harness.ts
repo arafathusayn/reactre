@@ -1,0 +1,216 @@
+// The harness of the Solid 2.0 test ports in this folder: what a port's TSX source is compiled and
+// run with, and `gap`, which marks a port that fails because reactre lacks a capability or behaves
+// differently. plans/solid-parity.md counts the ports and their gaps.
+//
+// The ports are of Solid's own tests, from solid-js 2.0.0-rc.20 (github.com/solidjs/solid at
+// 5e68925cc2fd216a9fb06345019e66d5da5c523c). Solid is MIT licensed:
+//
+//   MIT License. Copyright (c) 2016-2025 Ryan Carniato.
+//
+//   Permission is hereby granted, free of charge, to any person obtaining a copy of this software
+//   and associated documentation files (the "Software"), to deal in the Software without
+//   restriction, including without limitation the rights to use, copy, modify, merge, publish,
+//   distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the
+//   Software is furnished to do so, subject to the following conditions: The above copyright
+//   notice and this permission notice shall be included in all copies or substantial portions of
+//   the Software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
+//
+// How a port is translated:
+//   - Solid's names become reactre's: createSignal is `signal`, createMemo `memo`, createEffect
+//     `reaction` (its two halves) or `effect`, createRenderEffect `reaction`, and so on, from the
+//     module that has them (plans/solid-parity.md has the map). What a test asserts stays.
+//   - Solid holds a write until `flush()`: its reads and effects see it then. reactre applies a
+//     write at once, by design (README, "Timing"); its `flush` (features/timing) is kept where
+//     Solid calls it, and outside a batch it does nothing. A port keeps the assertions of what a
+//     flush shows; an assertion that a read or an effect has not seen a write before the flush is
+//     ported once per file, into a `gap("held-writes", ...)` test, so that the difference counts
+//     once there instead of failing every port that steps through it.
+//   - vitest's `vi.fn()` is bun:test's `mock()`.
+
+import { test } from "bun:test";
+
+import { compileSource } from "@reactre/compiler";
+
+import * as dynamic from "../../src/features/dynamic.ts";
+import * as index from "../../src/features/index.ts";
+import * as memo from "../../src/features/memo.ts";
+import * as owner from "../../src/features/owner.ts";
+import * as reaction from "../../src/features/reaction.ts";
+import * as selectors from "../../src/features/selectors.ts";
+import * as store from "../../src/features/store.ts";
+import * as timing from "../../src/features/timing.ts";
+import * as core from "../../src/index.ts";
+
+/** The Solid release the ports are of. */
+export const SOLID = "solid-js 2.0.0-rc.20, solidjs/solid@5e68925cc2fd216a9fb06345019e66d5da5c523c";
+
+/**
+ * Why a port fails, by the target that would make it pass. plans/solid-parity.md lists each
+ * target with the ports it blocks.
+ */
+export const GAPS = {
+  "held-writes": "Solid holds a write until flush(), for reads and effects; reactre applies it at once",
+  "render-effects": "createRenderEffect, createTrackedEffect, onFlush and effect phases (defer, schedule)",
+  from: "from(), a signal of an external source",
+  "memo-options": "memo options loadingValue, deferStream, transparent, ssrSource",
+  "store-path": "storePath, the path-based store setter",
+  "client-only": "clientOnly(), a component rendered only in the browser",
+  "ssr-helpers": "httpStatus, httpHeader, takeHydrationValue, getHydrationWriter",
+  hydration: "hydrate(), claiming server-rendered HTML",
+  "for-placement": "<For> and <Repeat> stand only as an element's direct child",
+  "jsx-props": "JSX in a prop other than children",
+  "store-alias": "a store read through an alias, a box, a function or props.list",
+  fold: "createSignal/createMemo's options folded into signal/memo",
+  "list-functions": "mapArray and repeat, the runtime list functions under <For> and <Repeat>",
+  bug: "a reactre bug, with its repro in plans/solid-parity.md under Bugs found",
+  "glitch-free": "memos updated once each, in topological order, never seeing half an update",
+  "pull-memos": "a memo nothing observes recomputes when read, not when its sources change",
+  "row-shape": "a <For> or <Repeat> row is (item) => <one element />: no text, fragment, array or element-child row",
+  "for-index": "a keyed <For> row gets its item only, not an index accessor",
+  "match-placement": "<Switch> takes only <Match> children, not a <For> or <Show> of them",
+  "stale-accessor": "a <Show>/<Match> child's accessor keeps reading after its branch is gone",
+  "portal-events": "an event in a <Portal> bubbles through the DOM, not the component tree",
+  "dispose-order": "teardown unwinds: children newest first, then an owner's cleanups last-registered first",
+  "effect-equals": "an effect's apply half runs each time its compute re-runs, not only on a new value",
+  "misuse-errors": "errors for misuse: an invalid cleanup value, flush() or onCleanup where Solid forbids them",
+  "owner-ids": "owner ids: createRoot's id option and getNextChildId, under createUniqueId",
+  "create-reaction": "createReaction(fn), a one-shot tracker that track(source) arms",
+  "cleanup-throw": "a throwing cleanup does not stop the teardown; the first error is rethrown after",
+  "settled-async": "onSettled waits for async reads under way before it runs",
+  "effect-errors": "an effect's unhandled compute error is logged and the app keeps going",
+  "no-owner": "NoOwnerError, for a context read or provided outside any owner",
+  "dev-checks": "a development warning or message of Solid's that reactre's dev build lacks",
+  "client-error-hook": "configureClientErrors and render's onError hearing what a boundary caught",
+  "error-accessor": "<Errored>'s fallback gets an accessor of the latest error, not the first error",
+  "fallback-tracking": "<Errored>'s fallback function is tracked: it re-runs when what it read changes",
+  "effect-bundle": "createEffect's { effect, error } bundle: an error arm for the compute half",
+  "children-helper": "children(), resolving props.children to nodes",
+  "pending-signal": "isPending of a plain signal whose readers a transition holds is false",
+  "switch-reads": "<Switch> is one computation: a change re-reads each condition up to the first truthy one",
+  "memo-errors": "a memo's error reaches the boundary of the reader, not only of where it was made",
+  "store-direct-write": "a direct write to a store throws; Solid ignores it",
+  "class-instances": "a store wraps plain objects and arrays only; Solid wraps class instances",
+  "store-in-place": "a store writes into the object it was given; Solid keeps writes beside it",
+  "symbol-keys": "reconcile, a returned replacement, merge, omit and deep skip symbol keys",
+  "draft-define": "Object.defineProperty on a store's draft notifies nothing",
+  "proto-guard": "a draft write or reconcile of __proto__ sets the object's prototype",
+  "merge-views": "merge/omit views: function sources, one-source identity, predicates",
+  "projection-chain": "a projection whose fn returns a store follows it; a projection with no seed",
+  "reconcile-identity": "reconcile throws when the root's key differs from the store's",
+  "ssr-semantics": "server primitives: memos computed when read, optimistic writes, no throw on async outside Loading",
+  "class-values": "a class object or array works written in place only, not as a runtime value",
+  "async-signal": "createSignal(async fn), a writable signal of an async value",
+  "array-text": "an array in a call hole is written as its string (a,b), not as its items",
+  "store-spread": "a store spread into a component's props is read once: the props do not follow it",
+  "dynamic-svg": "<Dynamic> with a tag name chosen at runtime makes an HTML element, even for svg tags",
+  "async-store": "createStore(fn) and createProjection(fn) with an async fn, read under <Loading>",
+  "transition-scope":
+    "a transition holds a whole update: a rebuilt branch and a write whose readers wait on its flight",
+  "root-hold": "a read not ready outside any <Loading> holds the whole render, not one empty hole",
+  "lazy-retry": "lazy() retries an import that failed, on reset() or preload()",
+  "refresh-promise": "refresh()'s Promise: the new value, no unhandled rejection, a no-op for a signal",
+  "action-writes": "an action holds and batches its plain writes: reads and effects see them when it ends",
+  "action-sync-yield": "an action's sync yield (not a Promise) resumes at once, not in a microtask",
+  "optimistic-outside": "an optimistic write outside an action never shows; reactre sets the base",
+  // New targets go above this line.
+} as const;
+
+/** A gap's key. */
+export type Gap = keyof typeof GAPS;
+
+/**
+ * A port that fails until reactre has `kind`: `test.failing`, so it runs and must fail (and is
+ * reported once it passes), or for "fold" `test.todo`, which waits on another change. The test's
+ * name carries the target and `why`, one line.
+ *
+ * With SOLID_STRICT=1 in the environment, each runs as a plain test, to see why it fails.
+ */
+export function gap(kind: Gap, why: string, name: string, fn: () => unknown): void {
+  const label = `${name} [${kind}: ${why}]`;
+  if (process.env["SOLID_STRICT"] === "1") test(label, fn as () => void);
+  else if (kind === "fold") test.todo(label, fn as () => void);
+  else test.failing(label, fn as () => void);
+}
+
+/**
+ * The modules a source may import that install nothing as they load (selectors installs itself
+ * for good, as other test files do). A file that uses context, errors, async, actions or the
+ * server adds them: async and actions turn the async runtime on, so a file that loads them turns
+ * it on before its tests and off after (`core.__installAsync(__hooks)`, then `false`), as
+ * ../async.test.ts does.
+ */
+export const base: Record<string, unknown> = {
+  "@reactre/core": core,
+  "@reactre/core/features/dynamic": dynamic,
+  "@reactre/core/features/index": index,
+  "@reactre/core/features/memo": memo,
+  "@reactre/core/features/owner": owner,
+  "@reactre/core/features/reaction": reaction,
+  "@reactre/core/features/selectors": selectors,
+  "@reactre/core/features/store": store,
+  "@reactre/core/features/timing": timing,
+};
+
+/** The options `memo` and `signal` of features/memo take once createMemo and createSignal fold into them. */
+export interface FoldedOptions<T> {
+  readonly equals?: false | ((prev: T, next: T) => boolean);
+  readonly lazy?: boolean;
+  readonly unobserved?: () => void;
+}
+
+/**
+ * features/memo's `memo` and `signal`, typed as they will be once createMemo's and createSignal's
+ * options fold into them (`memo(fn, { lazy })`, `signal(v, { unobserved })`): the ports of those
+ * options are written against these, as `gap("fold", ...)` tests.
+ */
+export const folded = memo as unknown as {
+  memo<T>(fn: (prev: T | undefined) => T, options?: FoldedOptions<T>): () => T;
+  signal<T>(value: T, options?: FoldedOptions<T>): [() => T, core.Setter<T>];
+};
+
+/**
+ * Compile a TSX module body ending in `return { ... }` as the plugin compiles it (for the server
+ * with `server`), and run it. Its imports of @reactre/core and its feature modules, and the ones
+ * the compiler adds, bind to `modules` by specifier; `scope`'s names are in scope.
+ */
+export function compile<T>(
+  src: string,
+  modules: Record<string, unknown>,
+  scope: Record<string, unknown> = {},
+  server = false,
+): T {
+  const mod = (from: string): string => {
+    if (!(from in modules)) throw new Error(`harness: no module for ${from}`);
+    return `rr[${JSON.stringify(from)}]`;
+  };
+  const js = compileSource(src, "tsx", server ? { server: true } : undefined)
+    .replace(/^(\s*)export /gm, "$1")
+    .replace(/^import "([^"]*)";$/gm, (_, from: string) => (mod(from), ""))
+    .replace(
+      /^import \* as (\w+) from "([^"]*)";$/gm,
+      (_, name: string, from: string) => `const ${name} = ${mod(from)};`,
+    )
+    .replace(/^import \{([^}]*)\} from "([^"]*)";$/gm, (_, names: string, from: string) =>
+      names
+        .split(",")
+        .map((n) => n.trim())
+        .filter(Boolean)
+        .map((n) => {
+          const [a, b] = n.split(" as ");
+          return `const ${b ?? a} = ${mod(from)}.${a};`;
+        })
+        .join("\n"),
+    );
+  const names = Object.keys(scope);
+  return new Function("rr", ...names, js)(modules, ...names.map((k) => scope[k])) as T;
+}
+
+/** A Promise with its resolve and reject. */
+export function deferred<T>(): { p: Promise<T>; ok: (v: T) => void; no: (e: unknown) => void } {
+  let ok!: (v: T) => void, no!: (e: unknown) => void;
+  const p = new Promise<T>((a, b) => ((ok = a), (no = b)));
+  return { p, ok, no };
+}
+
+/** Let timers and promise callbacks run. */
+export const tick = (ms = 0): Promise<void> => new Promise((r) => setTimeout(r, ms));
