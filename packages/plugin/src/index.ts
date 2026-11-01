@@ -221,31 +221,36 @@ export const reactre: UnpluginInstance<ReactreOptions | undefined, boolean> = cr
     transform: compile
       ? {
           filter: { id: { include, exclude } },
-          async handler(code, id) {
+          handler(code, id) {
             const path = id.replace(/[?#].*$/, "");
             const maps = wantsMaps(this);
             const out = transpile(path, code, compat === undefined ? "@reactre/core" : "react", maps);
             if (compat === undefined && out.classic) {
               throw new ReactreCompileError(`reactre: ${path}: a key after {...spread} props cannot be compiled`);
             }
-            try {
-              const whole = compat === undefined ? await programs.get(envOf(this)) : undefined;
-              const props: PropFacts | undefined =
-                whole == null ? undefined : await factsFor(whole.program, path, out.code, whole.host);
+            const finish = (props: PropFacts | undefined) => {
               const opts = props === undefined ? undefined : { props };
-              if (!maps)
-                return {
-                  code: compat !== undefined ? compileCompat(out.code) : compileCore(out.code, opts),
-                  map: null,
-                };
-              const compiled =
-                compat !== undefined ? compileCompatWithMap(out.code) : compileCoreWithMap(out.code, opts);
-              return { code: compiled.code, map: chain(compiled.map, out.map) };
-            } catch (e) {
-              if (compat === undefined && e instanceof ReactreCompileError && !e.message.includes(path))
-                e.message = `${path}: ${e.message}`;
-              throw e;
-            }
+              try {
+                if (!maps)
+                  return {
+                    code: compat !== undefined ? compileCompat(out.code) : compileCore(out.code, opts),
+                    map: null,
+                  };
+                const compiled =
+                  compat !== undefined ? compileCompatWithMap(out.code) : compileCoreWithMap(out.code, opts);
+                return { code: compiled.code, map: chain(compiled.map, out.map) };
+              } catch (e) {
+                if (compat === undefined && e instanceof ReactreCompileError) e.message = `${path}: ${e.message}`;
+                throw e;
+              }
+            };
+            // Without a program being read (compat mode, a dev server, a build that has none),
+            // the transform stays synchronous.
+            const whole = compat === undefined ? programs.get(envOf(this)) : undefined;
+            if (whole === undefined) return finish(undefined);
+            return whole.then(async (w) =>
+              finish(w === null ? undefined : await factsFor(w.program, path, out.code, w.host)),
+            );
           },
         }
       : undefined,

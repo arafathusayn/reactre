@@ -640,7 +640,10 @@ export declare namespace JSX {
   type Element = Node;
   /** What a tag may name: an intrinsic element, or a component, any function of its props. */
   type ElementType = keyof IntrinsicElements | ((props: never) => unknown);
-  /** Children are passed as the `children` prop. */
+  /**
+   * Children are passed as the `children` prop. Props are typed as values: that the compiler
+   * passes a prop that may change, and children that hold JSX, as getters is not in the types.
+   */
   interface ElementChildrenAttribute {
     children: {};
   }

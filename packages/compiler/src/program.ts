@@ -30,7 +30,15 @@
 //   - A compiled JSX expression never reads a signal where it is evaluated: a component is called
 //     untracked, and a host element's holes are effects of their own. So in a prop's expression,
 //     the jsx calls are opaque: `cond() ? <A /> : null` is reactive for `cond()`, `<A n={x()} />`
-//     is not (A's own call site passes `n` as a getter).
+//     is not (A's own call site passes `n` as a getter). A function literal's body is skipped
+//     too: it runs when the function is called, not when the prop is evaluated.
+//   - A component is not known to be one by its type, only by its name and shape. A function the
+//     scan does not take for a component (a lowercase name other than the default export, one
+//     chosen by a ternary) reads its props' members as any member read: once.
+//   - `analyze` reads a build from its entries with the bundler's resolver (`Host`), following
+//     what lands among the app's files; node_modules and assets are leaves. A late module (one
+//     a bundler transforms that the walk did not reach) joins with `walk`, and `check` says
+//     whether the facts given to modules compiled before it still hold.
 
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
@@ -147,24 +155,51 @@ function matches(tokens: readonly Token[]): Int32Array {
 // #region Expressions
 
 /**
- * Whether `expr` calls something outside its jsx calls: a `(` after a name, a literal, `)` or `]`.
- * A jsx call (one of `helpers`) is skipped whole, arguments included.
+ * Whether `expr` calls something when it is evaluated: a `(` after a name, a literal, `)` or `]`,
+ * or `new`. A jsx call (one of `helpers`) is skipped whole, arguments included, and so is a
+ * function literal's body, which runs only when the function is called.
  */
 export function callsOutsideJsx(expr: string, helpers: ReadonlySet<string>): boolean {
   const tokens = tokenize(expr),
     m = matches(tokens);
   for (let i = 0; i < tokens.length; i++) {
     const tok = tokens[i]!;
-    if (helpers.has(tok.t) && tokens[i + 1]?.t === "(" && tokens[i - 1]?.t !== ".") {
-      i = m[i + 1]!;
+    const skip = skipped(tokens, m, i, helpers);
+    if (skip >= 0) {
+      i = skip;
       continue;
     }
+    if (tok.t === "new") return true;
     if (tok.t !== "(" || i === 0) continue;
     const p = tokens[i - 1]!.t;
     if ((p === LIT || isName(p) || p === ")" || p === "]") && !KEYWORDS.has(p)) return true;
   }
   return false;
 }
+
+/**
+ * Where what starts at token i and is not evaluated with the expression around it ends: a jsx call
+ * (one of `helpers`), or a function literal's body (from its `=>` or its `function`). -1 when
+ * nothing of the kind starts there.
+ */
+function skipped(tokens: readonly Token[], m: Int32Array, i: number, helpers?: ReadonlySet<string>): number {
+  const tok = tokens[i]!;
+  if (helpers?.has(tok.t) && tokens[i + 1]?.t === "(" && tokens[i - 1]?.t !== ".") return m[i + 1]!;
+  if (tok.t === "function" && tokens[i - 1]?.t !== ".") {
+    let j = i + 1;
+    while (j < tokens.length && tokens[j]!.t !== "(") j++;
+    return tokens[m[j]! + 1]?.t === "{" ? m[m[j]! + 1]! : -1;
+  }
+  if (tok.t !== "=" || tokens[i + 1]?.t !== ">" || tokens[i + 1]!.s !== tok.e) return -1;
+  // An arrow's body: a block, or an expression up to what ends it.
+  if (tokens[i + 2]?.t === "{") return m[i + 2]!;
+  let j = i + 2;
+  while (j < tokens.length && !ENDS.has(tokens[j]!.t)) j = m[j]! > j ? m[j]! + 1 : j + 1;
+  return j - 1;
+}
+
+/** What ends an arrow's expression body. */
+const ENDS = new Set([",", ")", "]", "}", ";"]);
 
 /** Words a `(` may follow without being a call. */
 const KEYWORDS = new Set([
@@ -180,13 +215,15 @@ const KEYWORDS = new Set([
   "in",
   "of",
   "function",
+  "async",
 ]);
 
 /**
  * What `expr` reads of the object named `name` (a component's props): the members it reads
  * (`props.title`, `props?.title`), or true when it uses the object otherwise (`fn(props)`,
- * `props[k]`, `{...props}`); null when it does not mention it. With `helpers`, its jsx calls are
- * skipped, as in `callsOutsideJsx`.
+ * `props[k]`, `{...props}`); null when it does not mention it. A function literal's body is
+ * skipped, as it reads only when called (and an expression that calls it calls something); with
+ * `helpers`, so are its jsx calls, as in `callsOutsideJsx`.
  */
 export function readsOf(expr: string, name: string, helpers?: ReadonlySet<string>): Props | null {
   const tokens = tokenize(expr),
@@ -194,8 +231,9 @@ export function readsOf(expr: string, name: string, helpers?: ReadonlySet<string
   let out: Set<string> | null = null;
   for (let i = 0; i < tokens.length; i++) {
     const tok = tokens[i]!;
-    if (helpers?.has(tok.t) && tokens[i + 1]?.t === "(" && tokens[i - 1]?.t !== ".") {
-      i = m[i + 1]!;
+    const skip = skipped(tokens, m, i, helpers);
+    if (skip >= 0) {
+      i = skip;
       continue;
     }
     if (tok.t !== name || tokens[i - 1]?.t === ".") continue;
@@ -358,8 +396,11 @@ function scanDefs(src: string, tokens: readonly Token[], m = matches(tokens)): {
       if (fn?.name != null && isComponentName(fn.name))
         add(fn.name, fn, tok.s, false, i + (tokens[i + 1]!.t === "*" ? 2 : 1));
     } else if (tok.t === "default" && prev === "export") {
+      // A default export is a component whatever its name: Bun names an anonymous function
+      // `input_default`.
       const fn = fnAt(src, tokens, m, i + 1);
-      if (fn !== null && fn.name === null) add("default", fn, tokens[i + 1]!.s, false, -1);
+      if (fn !== null && (fn.name === null || !isComponentName(fn.name)))
+        add(fn.name ?? "default", fn, tokens[i + 1]!.s, false, -1);
     } else if (!isComponentName(tok.t)) continue;
     else if (next === "=" && tokens[i + 2]?.t !== "=" && tokens[i + 2]?.t !== ">") {
       // A member (`Card.Header = ...`) is reached through its object, and a function a call wraps
@@ -793,15 +834,19 @@ export class Program {
     return mod.info.stars.flatMap((s) => this.export(mod.resolved.get(s), name, seen));
   }
 
-  /** Every component module `file` exports, through re-exports. */
-  private exported(file: Resolved | undefined, seen = new Set<string>()): Def[] {
+  /**
+   * Every component module `file` exports, through re-exports; with `star`, as `export *` passes
+   * them on, without the default export.
+   */
+  private exported(file: Resolved | undefined, seen = new Set<string>(), star = false): Def[] {
     if (typeof file !== "string" || seen.has(file)) return [];
     seen.add(file);
     const mod = this.modules.get(file);
     if (mod === undefined) return [];
     return [...mod.info.exports.keys()]
+      .filter((k) => !star || k !== "default")
       .flatMap((k) => this.export(file, k))
-      .concat(mod.info.stars.flatMap((s) => this.exported(mod.resolved.get(s), seen)));
+      .concat(mod.info.stars.flatMap((s) => this.exported(mod.resolved.get(s), seen, true)));
   }
 }
 
@@ -888,7 +933,8 @@ export async function walk(
       const r = await host.resolve(spec, file);
       const path = typeof r === "string" ? r.replace(/[?#].*$/, "") : r;
       let to: Resolved;
-      if (typeof path !== "string" || /[\\/]node_modules[\\/]/.test(path)) to = path;
+      if (typeof path !== "string") to = path;
+      else if (/[\\/]node_modules[\\/]/.test(path)) to = false;
       else if (!isAbsolute(path) || !existsSync(path)) to = null;
       else if (SCRIPT.test(path) || path.endsWith(".html")) to = path;
       else to = ASSET.test(path) ? false : null;

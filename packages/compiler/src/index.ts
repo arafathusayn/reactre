@@ -25,7 +25,11 @@
 //     with arguments may read two selector keys: the file imports
 //     @reactre/core/features/selectors.
 //   - A component element `<Button id="run" />` is the call `Button({ id: "run" })`,
-//     made once (components run once in reactre).
+//     made once (components run once in reactre). A prop that may change, or holds JSX, is a
+//     getter (`{ get n() { return count(); } }`), so the component reads it where it uses it, and
+//     children are built when it reads them. In a component, a hole that reads a prop
+//     (`{props.n}`) is bound only if some call site may pass that prop reactively: the facts of
+//     ./program.ts, given as an option or found in the file alone.
 //   - A fragment's children join the parent's template; a fragment that is
 //     not a child of an element is an array of nodes (`__frag`).
 //   - A key on an element outside a list rebuilds the element when the key
@@ -56,6 +60,10 @@
 //     calls are all that is left to find, and everything else is copied through unchanged.
 //   - "Calls a function" is the whole test for a reactive hole: in reactre a signal is read by
 //     calling it. The test is conservative: a call that reads no signal only costs an effect.
+//     The one exception is a member read of a component's props (`props.title`), which may be a
+//     getter: it is reactive when a call site may pass that prop reactively, so a component
+//     whose callers pass only values costs what it did before props were reactive. Every member
+//     read is judged in one place (`readsChanging`), where more roots could join (a store's).
 //   - Every name the output adds starts with `__rr`, so it cannot collide with the app's names.
 //   - Control flow is recognized by import, not by name: `Show`, `Switch` and `Dynamic` are names
 //     apps give components of their own (a toggle switch, a dynamic form), and those must stay

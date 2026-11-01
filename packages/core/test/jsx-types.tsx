@@ -86,6 +86,26 @@ render(App, document.body);
 /** Every JSX expression is a JSX.Element, a Node. */
 const node: Node = <span />;
 
+/**
+ * Props are typed as values. The compiler passes one that may change as a getter, and children
+ * that hold JSX too, but the component reads `props.n` as a number and `props.children` as a Child.
+ */
+const Counter = (props: { n: number; children?: Child }): JSX.Element => (
+  <b title={String(props.n + 1)}>
+    {props.n}
+    {props.children}
+  </b>
+);
+const Counted = (): JSX.Element => (
+  <div>
+    <Counter n={count()}>
+      <i>{count()}</i>
+    </Counter>
+    <Counter n={1} />
+  </div>
+);
+void Counted;
+
 // #endregion
 
 // #region What must not type-check

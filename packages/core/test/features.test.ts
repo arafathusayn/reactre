@@ -32,6 +32,10 @@
 //   and errors features/errors (`<Errored>`, `effect(fn, { error })`, `configureClientErrors`).
 //              Loading one wraps methods of the owned effect class (and, for errors, of the list
 //              class); an app that does not import them ships the core's code unchanged.
+//   props      reactive props, compiled to getters at call sites and bound holes where a call
+//              site passes a prop reactively; only spread props at a component call run
+//              something (`__props`, imported when used). The "props" profile uses them; the
+//              others pass static props only, and are the same bytes as before.
 //
 // The size profiles (../sizes.json), one app each:
 //   jfb       the js-framework-benchmark app (apps/jfb/app/reactre.tsx): no opt-in at all.
@@ -47,6 +51,8 @@
 //   memo      a memo with `equals`, and a writable derived signal of it.
 //   context   a provider, and lookups in its children and in a slot's content made later.
 //   errors    an <Errored> whose child's hole throws on an update, and its reset.
+//   props     reactive props: holes that follow a prop, spread props passing them on (`__props`),
+//             and children built when the component reads them.
 //
 // The size budgets live in ../sizes.json. When a change is worth its bytes, record the new sizes:
 //
@@ -151,6 +157,15 @@ const apps = {
     }
     render(App, root);
     globalThis.api = { setRows, setUser };
+  `,
+  /** Reactive props: a hole that follows one, a component passing its props on, lazy children. */
+  props: `
+    import { render, signal } from "@reactre/core";
+    const [n, setN] = signal(1);
+    function Label(props) { return <b class={props.n > 1 ? "big" : "small"}>{props.n}</b>; }
+    function Card(props) { return <section><Label {...props} />{props.children}</section>; }
+    render(() => <Card n={n()}><i>{n() * 10}</i></Card>, root);
+    globalThis.api = { setN };
   `,
   /** A row that reads two selectors through a function of its own, which the compiler cannot see. */
   hidden: `
@@ -515,6 +530,21 @@ describe("context and errors", () => {
   });
 });
 
+describe("props", () => {
+  test("a reactive prop updates its holes once bundled, through spread props, and children are built lazily", async () => {
+    const code = await bundle("props", apps.props, false);
+    expect(code).toContain("function __props(");
+    expect(await bundle("plain", apps.plain, false)).not.toContain("function __props(");
+    const { root, api } = run(await bundle("props", apps.props));
+    const b = () => (root.firstChild as FakeElement).firstChild as FakeElement;
+    expect(text(root)).toBe("110");
+    expect(b().getAttribute("class")).toBe("small");
+    api.setN!(2);
+    expect(text(root)).toBe("220");
+    expect(b().getAttribute("class")).toBe("big");
+  });
+});
+
 describe("sizes", () => {
   test("each profile stays within its gzip budget", async () => {
     const jfb = Bun.fileURLToPath(new URL("../../../apps/jfb/app/reactre.tsx", import.meta.url));
@@ -536,6 +566,7 @@ describe("sizes", () => {
       "memo",
       "context",
       "errors",
+      "props",
     ] as const)
       measure(name, await bundle(name, apps[name]));
     if (process.env.UPDATE_SIZES) {
