@@ -5,7 +5,11 @@
 //   dist/async/      index.ts with the async runtime that @reactre/core/features/async and
 //                    features/actions need, for production: without the development blocks;
 //   dist/dev/        index.ts as it is: the async runtime and the development diagnostics; and
-//                    features/memo.ts as it is, with its checks (dist/features/memo.js has none).
+//                    features/memo.ts and features/hydrate.ts as they are, with their checks and
+//                    warnings (dist/features/memo.js and dist/features/hydrate.js have none).
+//
+// dist/hydrate/ holds hydration's <Loading> and <Errored> (src/hydrate/*.ts), and dist/server/ the
+// server's versions of the feature modules.
 //
 // The feature modules import "@reactre/core", which resolves to one of the three: package.json's
 // "reactre-async" condition picks dist/async, "development" dist/dev, and @reactre/plugin picks

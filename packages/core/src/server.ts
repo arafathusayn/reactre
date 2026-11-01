@@ -25,9 +25,11 @@
 //   - A function child of `__frag` (a provider's or a boundary's children) is a cell filled by an
 //     owned effect, as a slot is on the client, so @reactre/core/features/errors catches what it
 //     throws and `<Errored>` shows its fallback, and context lookups find their provider.
-//   - With `hydrate`, the HTML carries comment markers a later hydration step can claim the page
-//     by: `<!--[-->`/`<!--]-->` around every slot and list, `<!---->` between a text hole and the
-//     text beside it (see plans/core-hydration.md). Without it, the HTML is plain.
+//   - With `hydrate`, the HTML carries comment markers that @reactre/core/features/hydrate claims
+//     the page by: `<!--[-->`/`<!--]-->` around every slot and list, `<!---->` between a text hole
+//     and the text beside it, `<!--rr:e:...-->` before an `<Errored>`'s fallback
+//     (@reactre/core/server/errors) and `<!--rr:b-->` around a fallback `renderToString` wrote
+//     (see plans/core-hydration.md). Without it, the HTML is plain.
 //
 // Design decisions:
 //   - A module of its own: no client bundle ever includes it, and no client runtime profile

@@ -270,6 +270,8 @@ The template is parsed once. `mount` clones it with values for its holes, in ord
 |                                   | `createOptimisticStore(v \| fn, s)`  | The same for a store, whose `fn` may be async; `refresh(store)` runs `fn` again.                                                                         |
 |                                   | `affects(target, key?)`              | Marks what the action changes as pending, for `isPending`.                                                                                               |
 |                                   | `until(fn, { timeout, signal })`     | A Promise of the first truthy value of `fn`, which reads optimistic values as their base.                                                                |
+| `@reactre/core/features/hydrate`  | `hydrate(view, el)`                  | Runs `view` over the HTML the server rendered into `el`, keeping its nodes ([hydration](#hydration)); returns the disposer. Needs `hydrate: true`.       |
+|                                   | `isHydrating()`                      | Whether the code running now claims the page.                                                                                                            |
 
 ```tsx
 import { createRoot } from "@reactre/core/features/owner";
@@ -459,9 +461,30 @@ const res = new Response(renderToStream(() => <App />), { headers: { "content-ty
 - `renderToStream(app, options?)` returns a `ReadableStream` of the HTML. The shell comes once what it reads outside every `<Loading>` is ready, with each `<Loading>` that still waits showing its fallback; then each one's content as its data comes, in a `<template>` with a small script that swaps it in for the fallback (the first such chunk defines the script, `self.$rr`). Nested and sibling boundaries stream in the order their data comes. An error while the shell renders errors the stream; a later one goes to an `<Errored>` inside the boundary, or else to `onError`, and errors the stream. Cancelling the stream stops the render.
 - `renderToStringAsync(app, options?)` waits for everything and returns the whole page, with no script.
 
-Options: `hydrate: true` writes comment markers for a hydration step to claim the page by (`<!--[-->`…`<!--]-->` around what may change, `<!---->` between a text hole and the text beside it); `nonce` is set on the stream's scripts, for a Content Security Policy; `onError` gets an error thrown after the shell was sent. Hydration itself is not here yet: the client renders the page afresh (`render` replaces the container's content). [plans/core-hydration.md](../../plans/core-hydration.md) is its design.
+Options: `hydrate: true` writes comment markers that hydration claims the page by (below); `nonce` is set on the stream's scripts, for a Content Security Policy; `onError` gets an error thrown after the shell was sent.
 
-Builds: [@reactre/plugin](https://www.npmjs.com/package/@reactre/plugin) compiles for the server with its `ssr: true` option: in Vite, its SSR builds and its dev server's `ssrLoadModule` (Vite's environment says which), and in the other bundlers, a separate build for the server. Without the option every build is the browser's. The compiler's option is `compileJs(js, { server: true })`, and its Bun plugin's `reactreCompiler({ server: true })`. A server build points the app's imports of `@reactre/core` and its feature modules at the server's versions. The browser build of the same app is what it is without SSR, byte for byte.
+Builds: [@reactre/plugin](https://www.npmjs.com/package/@reactre/plugin) compiles for the server with its `ssr: true` option: in Vite, its SSR builds and its dev server's `ssrLoadModule` (Vite's environment says which), and in the other bundlers, a separate build for the server. Without the option every build is the browser's. The compiler's option is `compileJs(js, { server: true })`, and its Bun plugin's `reactreCompiler({ server: true })`. A server build points the app's imports of `@reactre/core` and its feature modules at the server's versions. The browser build of the same app is what it is without SSR, byte for byte, and hydrates with `hydrate: true` (in Vite, `reactre({ ssr: true, hydrate: true })` does both).
+
+### Hydration
+
+```tsx
+// client.tsx, built with @reactre/plugin's `hydrate: true`
+import { hydrate } from "@reactre/core/features/hydrate";
+
+import { App } from "./app.tsx";
+
+hydrate(() => <App />, document.getElementById("app")!);
+```
+
+`hydrate(view, el)` from `@reactre/core/features/hydrate` runs the view over `el`'s content, which the server rendered from the same app with `hydrate: true`: the server's nodes stay, and the view's holes, handlers, refs and effects attach to them, as `render` attaches them to nodes it builds. It returns the view's disposer, as `attach` does. `isHydrating()` is true while code runs that claims the page.
+
+- A context's provider and its children, an `<Errored>` that showed its fallback on the server (it shows it on the client too, with an error of the same name and message, and `reset` builds the children), and a `<Loading>` whose children the server rendered are claimed too. The client reads its async data again: until a value comes, what reads it keeps the server's nodes, and the boundary does not show its fallback. A `<Loading>` whose fallback `renderToString` wrote is built afresh, and one a stream has not sent yet keeps the server's fallback and hydrates when its content is swapped in.
+- Where the page does not match (another tag, a missing node, other text), the nearest slot, list row or streamed boundary renders afresh; outside every slot, the whole view does. The development build warns, `reactre HYDRATION_MISMATCH`.
+- The app is compiled for it: @reactre/plugin's `hydrate: true` option, or the compiler's `hydrate` compile option. `hydrate` over code compiled without it throws, naming the option, and so does compiling a file that imports `hydrate` without it; a page rendered without the markers, where the view needs them, throws naming `renderToString(app, { hydrate: true })`.
+- An `<Errored>`'s marker writes the error's name and message into the page: where they may hold what the page must not show, render a message of your own in the fallback.
+- An app that does not hydrate ships none of it: the browser's build without the option is what it was. Hydration adds about 1.9 KB gzipped ([`sizes.json`](sizes.json)'s `hydrate` profile, against `plain`).
+
+[plans/core-hydration.md](../../plans/core-hydration.md) is the design, with what it leaves out.
 
 ## What an app ships
 

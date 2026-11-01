@@ -98,6 +98,9 @@ reactre({
   // reactre mode: build for the server, to render with @reactre/core/server. Off by default; with
   // true, Vite's SSR builds and its dev server's server renders are, and any other bundler's build.
   ssr: false,
+  // reactre mode: build the browser's code to hydrate what @reactre/core/server rendered with
+  // `hydrate: true`. Off by default.
+  hydrate: false,
 });
 ```
 
@@ -114,6 +117,15 @@ await build({ entryPoints: ["server.tsx"], bundle: true, platform: "node", plugi
 ```
 
 Without the option, every build is the browser's, in every Vite environment too, byte for byte as before server rendering existed: a Vite server environment that runs the browser's code on a DOM of its own (`ssrLoadModule` with a fake document, Vitest's `node` environment with one) needs nothing.
+
+With `hydrate: true`, the browser's builds [hydrate](https://www.npmjs.com/package/@reactre/core#hydration) the server's HTML: the app compiles with the compiler's hydrate mode, so its templates, slots and lists claim the page's nodes, and the core's feature modules (a context's provider, `<Errored>`, `<Loading>`) claim it too. In Vite, `reactre({ ssr: true, hydrate: true })` makes the server's environment render and the client's hydrate, and the dev server serves `@reactre/core` as it is, not prebundled. In another bundler, where `ssr: true` makes every build a server build, give the browser's build a plugin of its own:
+
+```ts
+// esbuild, for the browser
+await build({ entryPoints: ["client.tsx"], bundle: true, plugins: [reactre({ hydrate: true })] });
+```
+
+The option fails where it cannot apply, naming itself: with `compat`, and with `ssr: true` outside Vite. Without it, the browser's build has none of hydration's code, and a file that imports `hydrate` fails to compile, naming the option.
 
 ### The whole program
 
