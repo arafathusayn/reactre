@@ -17,8 +17,10 @@
 //
 // How a port is translated:
 //   - Solid's names become reactre's: createSignal is `signal`, createMemo `memo`, createEffect
-//     `reaction` (its two halves) or `effect`, createRenderEffect `reaction`, and so on, from the
-//     module that has them (plans/solid-parity.md has the map). What a test asserts stays.
+//     `reaction` (its two halves) or `effect`, createRenderEffect `bind`, createTrackedEffect
+//     `autorun`, mapArray `map`, and so on, from the module that has them (plans/solid-parity.md
+//     has the map; ports written before features/effects keep `reaction` for a render effect that
+//     only logs). What a test asserts stays.
 //   - Solid holds a write until `flush()`: its reads and effects see it then. reactre applies a
 //     write at once, by design (README, "Timing"); its `flush` (features/timing) is kept where
 //     Solid calls it, and outside a batch it does nothing. A port keeps the assertions of what a
@@ -50,7 +52,7 @@ export const SOLID = "solid-js 2.0.0-rc.20, solidjs/solid@5e68925cc2fd216a9fb063
  */
 export const GAPS = {
   "held-writes": "Solid holds a write until flush(), for reads and effects; reactre applies it at once",
-  "render-effects": "createRenderEffect, createTrackedEffect, onFlush and effect phases (defer, schedule)",
+  "render-effects": "createEffect's user phase, after the render effects, and its defer option",
   from: "from(), a signal of an external source",
   "memo-options": "memo options loadingValue, deferStream, transparent, ssrSource",
   "store-path": "storePath, the path-based store setter",

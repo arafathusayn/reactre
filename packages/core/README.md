@@ -230,45 +230,52 @@ The template is parsed once. `mount` clones it with values for its holes, in ord
 
 `@reactre/core` itself holds what the compiler makes free. Runtime APIs beyond it are feature modules, imported by path: an app that does not import one ships none of its code, and its updates run as before.
 
-| Import                            | Export                               | What it does                                                                                                                                  |
-| --------------------------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `@reactre/core/features/owner`    | `createRoot(fn)`                     | Runs `fn(dispose)` under a new owner; `dispose` stops what it made. It goes with the owner it was made in.                                    |
-|                                   | `getOwner()`                         | The current owner, or null.                                                                                                                   |
-|                                   | `runWithOwner(o, fn)`                | Runs `fn`, untracked, with `o` as the owner of what it makes; null makes it belong to nothing.                                                |
-| `@reactre/core/features/timing`   | `onSettled(fn)`                      | Runs `fn` once, untracked, when the work under way has finished and the DOM shows it ([timing](#timing)). A function it returns is a cleanup. |
-|                                   | `flush(fn?)`                         | `flush(fn)` runs `fn` and applies its writes before it returns, inside a batch too. `flush()` applies what the current batch has queued.      |
-| `@reactre/core/features/reaction` | `reaction(compute, apply)`           | An effect in two halves: `compute` is tracked, `apply(value, prev)` runs untracked when the value changes, and may return a cleanup.          |
-| `@reactre/core/features/dynamic`  | `dynamic(source)`                    | A component that renders what `source` returns, as `<Dynamic>` does.                                                                          |
-| `@reactre/core/features/store`    | `createStore(value)`                 | `[store, setStore]`: a deep reactive proxy, whose reads subscribe per property (arrays by index and `length`), and a setter given a draft.    |
-|                                   | `createStore(fn, seed)`              | A derived store that can be written: `fn(draft)` runs tracked; a write holds until it runs again. `{ shallow: true }` for a one-layer store.  |
-|                                   | `createProjection(fn, s)`            | A read-only derived store: what `fn(draft)` returns is reconciled into it by `key` ("id" by default).                                         |
-|                                   | `reconcile(value, key?)`             | A setter's function that writes only what differs, keeping items of the same key ("id"; null for by index).                                   |
-|                                   | `snapshot(s)`, `deep(s)`             | A plain deep copy, untracked; `deep` subscribes to every property first.                                                                      |
-|                                   | `merge(...s)`, `omit(o,…)`           | Props helpers whose properties are getters of their sources, so reactive props stay reactive. In `merge`, a later `undefined` overrides.      |
-| `@reactre/core/features/memo`     | `memo(fn, { equals })`               | `memo` with `prev` and an equality of its own; `equals: false` re-runs readers each time.                                                     |
-|                                   | `signal(fn)`                         | A writable derived signal: `fn(prev)` recomputes it when its sources change; a write sets it until then. `signal(v, { equals })` too.         |
-|                                   | `memo(fn, { lazy })`                 | A memo that runs `fn` when first read, and once nothing reads it stops following its sources, keeping its value, until it is read again.      |
-|                                   | `signal(v, { unobserved })`          | Calls `unobserved` once the last reader stops reading (`memo` takes it too). Only a call the plugin compiles may pass these two (see below).  |
-| `@reactre/core/features/context`  | `createContext(default?)`            | A context, which is a component: `<Ctx value={v}>` provides `v` to what its children make, then and later.                                    |
-|                                   | `useContext(ctx)`                    | The nearest provider's value, else the default; with no default, it throws `ContextNotFoundError`.                                            |
-| `@reactre/core/features/errors`   | `<Errored fallback>`                 | Its children, or `fallback` (an element, or `(err, reset) => ...`) once something they made throws. `reset()` builds them again.              |
-|                                   | `effect(fn, { error })`              | The core's `effect`, with a handler for what its runs throw.                                                                                  |
-|                                   | `configureClientErrors({ onError })` | Gets what an effect, a slot or a row throws outside any boundary.                                                                             |
-| `@reactre/core/features/async`    | `memo(async () => ...)`              | `memo`, typed for an async function or an async iterable: it reads as what it resolves to, and before that is not ready.                      |
-|                                   | `<Loading fallback on>`              | Its children, once nothing they read is not ready; until then, `fallback`. With `on`, a change of it during an update shows `fallback` again. |
-|                                   | `<Reveal order>`                     | The `<Loading>` boundaries among its children shown `"natural"` (each when ready), `"sequential"` or `"together"`.                            |
-|                                   | `isPending(fn)`, `latest(fn)`        | Whether a change to what `fn` reads is in flight; `fn()`, read so that an update in flight does not hold it.                                  |
-|                                   | `resolve(fn)`, `refresh(target)`     | A Promise of `fn()` once it reads nothing pending; `refresh` computes a memo or an optimistic store again, quietly.                           |
-|                                   | `lazy(load)`, `NotReadyError`        | A component loaded the first time it renders (`preload()` starts it); what a read that is not ready throws where nothing waits.               |
-| `@reactre/core/features/actions`  | `action(function* () {...})`         | A mutation, run in a transition: yielded values are awaited, and the page goes from its optimistic state to the confirmed one at once.        |
-|                                   | `createOptimistic(v \| fn)`          | `[read, write]`: a write in an action's code shows at once and reverts when the transition ends; elsewhere it sets the value.                 |
-|                                   | `createOptimisticStore(v \| fn, s)`  | The same for a store, whose `fn` may be async; `refresh(store)` runs `fn` again.                                                              |
-|                                   | `affects(target, key?)`              | Marks what the action changes as pending, for `isPending`.                                                                                    |
-|                                   | `until(fn, { timeout, signal })`     | A Promise of the first truthy value of `fn`, which reads optimistic values as their base.                                                     |
+| Import                            | Export                               | What it does                                                                                                                                             |
+| --------------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@reactre/core/features/owner`    | `createRoot(fn)`                     | Runs `fn(dispose)` under a new owner; `dispose` stops what it made. It goes with the owner it was made in.                                               |
+|                                   | `getOwner()`                         | The current owner, or null.                                                                                                                              |
+|                                   | `runWithOwner(o, fn)`                | Runs `fn`, untracked, with `o` as the owner of what it makes; null makes it belong to nothing.                                                           |
+| `@reactre/core/features/timing`   | `onSettled(fn)`                      | Runs `fn` once, untracked, when the work under way has finished and the DOM shows it ([timing](#timing)). A function it returns is a cleanup.            |
+|                                   | `flush(fn?)`                         | `flush(fn)` runs `fn` and applies its writes before it returns, inside a batch too. `flush()` applies what the current batch has queued.                 |
+| `@reactre/core/features/reaction` | `reaction(compute, apply)`           | An effect in two halves: `compute` is tracked, `apply(value, prev)` runs untracked when the value changes, and may return a cleanup.                     |
+| `@reactre/core/features/effects`  | `bind(compute, apply)`               | A render effect: `compute` is tracked, and `apply(value, prev)` runs untracked after each of its runs, at once ([effects](#effects-and-list-functions)). |
+|                                   | `autorun(fn)`                        | A tracked effect whose first run waits for the flush: in a component, once its view is in the page. A function `fn` returns is a cleanup.                |
+|                                   | `onFlush(fn)`                        | Runs `fn` in a microtask, after the work under way, in a batch of its own, so its writes are an update of their own.                                     |
+| `@reactre/core/features/lists`    | `map(list, fn, { keyed })`           | An accessor of `list()` mapped by `fn`, a row per item, under an owner of its own, kept by the item, a key, or its position.                             |
+|                                   | `repeat(count, fn, { from })`        | An accessor of `fn(i)` for each index from `from` to `from + count - 1`, each under an owner of its own.                                                 |
+| `@reactre/core/features/dynamic`  | `dynamic(source)`                    | A component that renders what `source` returns, as `<Dynamic>` does.                                                                                     |
+| `@reactre/core/features/store`    | `createStore(value)`                 | `[store, setStore]`: a deep reactive proxy, whose reads subscribe per property (arrays by index and `length`), and a setter given a draft.               |
+|                                   | `createStore(fn, seed)`              | A derived store that can be written: `fn(draft)` runs tracked; a write holds until it runs again. `{ shallow: true }` for a one-layer store.             |
+|                                   | `createProjection(fn, s)`            | A read-only derived store: what `fn(draft)` returns is reconciled into it by `key` ("id" by default).                                                    |
+|                                   | `reconcile(value, key?)`             | A setter's function that writes only what differs, keeping items of the same key ("id"; null for by index).                                              |
+|                                   | `snapshot(s)`, `deep(s)`             | A plain deep copy, untracked; `deep` subscribes to every property first.                                                                                 |
+|                                   | `merge(...s)`, `omit(o,…)`           | Props helpers whose properties are getters of their sources, so reactive props stay reactive. In `merge`, a later `undefined` overrides.                 |
+| `@reactre/core/features/memo`     | `memo(fn, { equals })`               | `memo` with `prev` and an equality of its own; `equals: false` re-runs readers each time.                                                                |
+|                                   | `signal(fn)`                         | A writable derived signal: `fn(prev)` recomputes it when its sources change; a write sets it until then. `signal(v, { equals })` too.                    |
+|                                   | `memo(fn, { lazy })`                 | A memo that runs `fn` when first read, and once nothing reads it stops following its sources, keeping its value, until it is read again.                 |
+|                                   | `signal(v, { unobserved })`          | Calls `unobserved` once the last reader stops reading (`memo` takes it too). Only a call the plugin compiles may pass these two (see below).             |
+| `@reactre/core/features/context`  | `createContext(default?)`            | A context, which is a component: `<Ctx value={v}>` provides `v` to what its children make, then and later.                                               |
+|                                   | `useContext(ctx)`                    | The nearest provider's value, else the default; with no default, it throws `ContextNotFoundError`.                                                       |
+| `@reactre/core/features/errors`   | `<Errored fallback>`                 | Its children, or `fallback` (an element, or `(err, reset) => ...`) once something they made throws. `reset()` builds them again.                         |
+|                                   | `effect(fn, { error })`              | The core's `effect`, with a handler for what its runs throw.                                                                                             |
+|                                   | `configureClientErrors({ onError })` | Gets what an effect, a slot or a row throws outside any boundary.                                                                                        |
+| `@reactre/core/features/async`    | `memo(async () => ...)`              | `memo`, typed for an async function or an async iterable: it reads as what it resolves to, and before that is not ready.                                 |
+|                                   | `<Loading fallback on>`              | Its children, once nothing they read is not ready; until then, `fallback`. With `on`, a change of it during an update shows `fallback` again.            |
+|                                   | `<Reveal order>`                     | The `<Loading>` boundaries among its children shown `"natural"` (each when ready), `"sequential"` or `"together"`.                                       |
+|                                   | `isPending(fn)`, `latest(fn)`        | Whether a change to what `fn` reads is in flight; `fn()`, read so that an update in flight does not hold it.                                             |
+|                                   | `resolve(fn)`, `refresh(target)`     | A Promise of `fn()` once it reads nothing pending; `refresh` computes a memo or an optimistic store again, quietly.                                      |
+|                                   | `lazy(load)`, `NotReadyError`        | A component loaded the first time it renders (`preload()` starts it); what a read that is not ready throws where nothing waits.                          |
+| `@reactre/core/features/actions`  | `action(function* () {...})`         | A mutation, run in a transition: yielded values are awaited, and the page goes from its optimistic state to the confirmed one at once.                   |
+|                                   | `createOptimistic(v \| fn)`          | `[read, write]`: a write in an action's code shows at once and reverts when the transition ends; elsewhere it sets the value.                            |
+|                                   | `createOptimisticStore(v \| fn, s)`  | The same for a store, whose `fn` may be async; `refresh(store)` runs `fn` again.                                                                         |
+|                                   | `affects(target, key?)`              | Marks what the action changes as pending, for `isPending`.                                                                                               |
+|                                   | `until(fn, { timeout, signal })`     | A Promise of the first truthy value of `fn`, which reads optimistic values as their base.                                                                |
 
 ```tsx
 import { createRoot } from "@reactre/core/features/owner";
 import { flush, onSettled } from "@reactre/core/features/timing";
+import { autorun, bind, onFlush } from "@reactre/core/features/effects";
+import { map, repeat } from "@reactre/core/features/lists";
 import { dynamic } from "@reactre/core/features/dynamic";
 import { createStore, reconcile } from "@reactre/core/features/store";
 import { memo, signal } from "@reactre/core/features/memo";
@@ -278,7 +285,7 @@ import { Loading, isPending } from "@reactre/core/features/async";
 import { action, createOptimistic } from "@reactre/core/features/actions";
 ```
 
-`onSettled`, `flush`, `createRoot`, `getOwner` and `runWithOwner` are Solid 2.0's, and `reaction` is its `createEffect(compute, apply)`, under MobX's name. `<Dynamic>` stays in `@reactre/core`, since it is compiled away; `dynamic()` is the runtime function beside it. Rows with several selector keys are a feature module too (see [What an app ships](#what-an-app-ships)).
+`onSettled`, `flush`, `createRoot`, `getOwner` and `runWithOwner` are Solid 2.0's, and `reaction` is its `createEffect(compute, apply)`, under MobX's name; `bind` is its `createRenderEffect`, `autorun` its `createTrackedEffect` (MobX's name for an effect in one function, beside `reaction`), and `map` its `mapArray`, beside `repeat` and `onFlush`, which keep Solid's names. `<Dynamic>` stays in `@reactre/core`, since it is compiled away; `dynamic()` is the runtime function beside it. Rows with several selector keys are a feature module too (see [What an app ships](#what-an-app-ships)).
 
 The store APIs are Solid 2.0's, under its names: setters are draft-first (`setStore((s) => { s.todos.push(todo) })`, with a block body, since an object the setter returns replaces the store's contents). `memo` and `signal` from `@reactre/core/features/memo` take core's arguments as core's do, plus Solid 2.0's `equals`, `lazy` and `unobserved`. The last two need a count of a signal's readers, which core's signals do not keep, so the compiler sends a call that passes either (or options it cannot read, such as a variable or a spread) to a reader-counting entry of the module, whose signals alone are counted; every other call stays as it was, so an app that passes neither ships the same code as before, byte for byte. A file compiled alone (a dev server) and in a whole program (a build) give the same code. The call must be one the compiler sees: in a .tsx or .jsx file the plugin compiles, with `memo` or `signal` imported from `@reactre/core/features/memo` (under any name, or through `import * as`). In code the plugin does not compile (a .ts file, a dependency), the development build throws for either option, naming the fix (add the file to the plugin's `include`); the production build has no check, so that it costs nothing. Unlike Solid 2.0, the count is taken in a microtask after the last reader left (a reader that runs again drops its reads before it reads anew), so `unobserved` is called then, and a lazy memo stops then, if no reader came back; a read outside any reader computes a lazy memo, which stops at the next microtask; and a lazy memo whose owner was disposed returns its last value. In TSX, the compiler knows a store by where it is made: a name bound by `const [store, setStore] = createStore(...)` or `const p = createProjection(...)`, with the functions imported from `@reactre/core/features/store` under any local name or through `import * as`, or by `const [todos, setTodos] = createOptimisticStore(...)` from `@reactre/core/features/actions`. A store a module imports from another is one there too. A production build that reads the whole program (`@reactre/plugin`, or the compiler's own Bun plugin) knows which imports are stores, through re-exports and namespace imports; where each file is compiled alone (a dev server, `wholeProgram: false`, `compileSource`), any import from outside `@reactre` may be a store and is taken for one, as an exported component there takes every prop reactively. So the dev server and the build render the same updates; the build only binds fewer holes. A read through a store is reactive, as a signal's call is:
 
@@ -391,6 +398,48 @@ Writes apply at once: a signal's write re-runs its readers before it returns. In
 - Called anywhere else (a component rendered by `render` or `attach`, an effect re-run by a write outside any batch), `fn` runs in a microtask: after the code that called it has returned, and before the browser paints. `flush(() => render(App, el))` runs it before `flush` returns.
 
 In a component, the view is in the page either way. `fn` runs under the component's owner, and not at all if the owner goes first (a slot replaced the content); a function it returns runs when the owner goes.
+
+### Effects and list functions
+
+```tsx
+import { autorun, bind, onFlush } from "@reactre/core/features/effects";
+import { map, repeat } from "@reactre/core/features/lists";
+
+function Field(props: { label: string; focused: boolean }) {
+  const input = <input /> as HTMLInputElement;
+  bind(
+    () => props.label,
+    (label) => input.setAttribute("aria-label", label), // at once, while the view is built
+  );
+  autorun(() => {
+    if (!props.focused) return;
+    input.focus(); // first run once the view is in the page
+    const t = setInterval(() => console.log(input.value), 1000);
+    return () => clearInterval(t);
+  });
+  return input;
+}
+
+const select = (id: string) => {
+  onFlush(() => setOpen(false)); // a write of its own, after this handler's
+  setRoute(id);
+};
+
+const labels = map(todos, (todo, i) => memo(() => `${i() + 1}. ${todo.title}`));
+const page = repeat(() => 20, (i) => rowAt(i), { from: () => offset() });
+```
+
+These are Solid 2.0's render effects, tracked effects, `onFlush`, `mapArray` and `repeat`, under reactre's names: `bind` is `createRenderEffect`, `autorun` is `createTrackedEffect`, `map` is `mapArray`.
+
+- `bind(compute, apply, { defer, schedule })`: `compute(prev)` is tracked and owns what it makes; `apply(value, prev)` runs untracked after each of its runs, a value equal to the last one too, with the value it was last given as `prev`. It runs at once, where it is made, so in a component while the view is built, and again when what `compute` read changes. A function `apply` returns is a cleanup, run after `compute`'s next run, before the next `apply`, and when the owner goes. `defer` skips the first `apply`; `schedule` makes it wait for the flush.
+- `autorun(fn)` runs `fn` tracked and again when what it read changes, as `effect` does, but its first run waits for the flush: the end of the batch's drain it was called in, after the effects that batch queued, or else the next `flush()` or batch end, or a microtask. In a component, the view is in the page by then, and a `bind` made beside it has run. A function `fn` returns is a cleanup; it does not run at all if its owner goes first.
+- `onFlush(fn)` runs `fn` in a microtask, after the batch or `flush(fn)` it was called in, untracked and with no owner. The callbacks of one microtask run in call order, in one batch. A write in `fn` is an update of its own: with features/async, one that a transition does not hold, unless what it changes reads the async value too.
+- `map(list, fn, { keyed, fallback })` returns an accessor of `list()` mapped by `fn`. Each item is mapped once, untracked, under an owner of its own, which is disposed when the item leaves (and the rest with the owner `map` was made in). By default rows are kept by the item itself, and `fn(item, index)` gets an accessor of its index; `keyed: (item) => key` keeps them by key, and `fn` gets accessors of the item and the index; `keyed: false` keeps them by position, and `fn(item, i)` gets an accessor of the item at index `i`. The array is new when the rows change and the same when they do not; `fallback` is what it holds while the list is empty.
+- `repeat(count, fn, { from, fallback })` is the same for indexes: `fn(i)` for each `i` from `from()` (0) to `from() + count() - 1`, kept while the range keeps it.
+
+An update of `map` or `repeat` is staged: if `fn` throws, the rows it made are disposed and the list is as it was. A cleanup `bind` or `autorun` gets that is not a function or undefined throws, as Solid's development build does. Where reactre differs from Solid 2.0: writes apply at once, so a later run of `bind` or `autorun` is at the write, not at a flush; `reaction` (Solid's `createEffect`) applies at once too, so it is not held for a user phase after the render effects, and a `bind` made after it applies after it; `autorun` may make memos, effects and cleanups (Solid forbids them in development). On the server, `map` and `repeat` work as in the browser; a server build points the app's imports of features/effects at a server version, where `bind` computes and never applies (Solid's server render effect applies once), and `autorun` and `onFlush` never run.
+
+Neither module is in the code of an app that does not import it, and each costs only what it is: [`sizes.json`](sizes.json)'s `effects` profile (a component with a `bind` and an `autorun`, and an `onFlush`) is 3,303 bytes gzipped, and `lists` (a `map` with an index memo per row, and a `repeat`) 3,849.
 
 ## Server rendering
 

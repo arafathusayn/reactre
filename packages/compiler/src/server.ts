@@ -46,12 +46,14 @@ import { literal, NOT_LITERAL } from "./scan.ts";
 /**
  * The modules a server build of an app imports in place of the client's: the core, and the
  * feature modules that touch the DOM (`<Loading>`, `dynamic()`) or run effects (`reaction`'s
- * apply half, `onSettled`, `effect(fn, { error })`), which do not run on the server.
+ * apply half, `onSettled`, `effect(fn, { error })`, `bind`'s apply, `autorun`, `onFlush`), which
+ * do not run on the server.
  */
 const SERVER_MODULES: Record<string, string> = {
   "@reactre/core": "@reactre/core/server",
   "@reactre/core/features/async": "@reactre/core/server/async",
   "@reactre/core/features/dynamic": "@reactre/core/server/dynamic",
+  "@reactre/core/features/effects": "@reactre/core/server/effects",
   "@reactre/core/features/errors": "@reactre/core/server/errors",
   "@reactre/core/features/reaction": "@reactre/core/server/reaction",
   "@reactre/core/features/timing": "@reactre/core/server/timing",

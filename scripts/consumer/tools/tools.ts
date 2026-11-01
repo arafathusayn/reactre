@@ -7,6 +7,7 @@ import * as scan from "@reactre/compiler/scan";
 import * as server from "@reactre/core/server";
 import * as serverAsync from "@reactre/core/server/async";
 import * as serverDynamic from "@reactre/core/server/dynamic";
+import * as serverEffects from "@reactre/core/server/effects";
 import * as serverErrors from "@reactre/core/server/errors";
 import * as serverReaction from "@reactre/core/server/reaction";
 import * as serverTiming from "@reactre/core/server/timing";
@@ -46,6 +47,7 @@ export const all: unknown[] = [
   server,
   serverAsync,
   serverDynamic,
+  serverEffects,
   serverErrors,
   serverReaction,
   serverTiming,

@@ -84,6 +84,13 @@ describe("imports", () => {
     expect(serverImports(`import { flush, onSettled } from "@reactre/core/features/timing";`)).toBe(
       `import { flush, onSettled } from "@reactre/core/server/timing";`,
     );
+    expect(serverImports(`import { autorun, bind, onFlush } from "@reactre/core/features/effects";`)).toBe(
+      `import { autorun, bind, onFlush } from "@reactre/core/server/effects";`,
+    );
+    // The list functions compute, so a server build takes the module as it is.
+    expect(serverImports(`import { map } from "@reactre/core/features/lists";`)).toBe(
+      `import { map } from "@reactre/core/features/lists";`,
+    );
     expect(
       serverImports(`import * as E from "@reactre/core/features/errors";export { effect } from "@reactre/core";`),
     ).toBe(`import * as E from "@reactre/core/server/errors";export { effect } from "@reactre/core/server";`);

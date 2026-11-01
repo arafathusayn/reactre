@@ -18,6 +18,7 @@ import { types } from "node:util";
 
 import { FakeElement, installFakeDocument } from "@reactre/testdom";
 
+import { map } from "../../src/features/lists.ts";
 import { createRoot } from "../../src/features/owner.ts";
 import { reaction } from "../../src/features/reaction.ts";
 import * as storeApi from "../../src/features/store.ts";
@@ -241,15 +242,11 @@ describe("createStore.test.ts", () => {
       expect.assertions(12);
     });
 
-    gap("list-functions", "mapArray is missing", "Tracking Top-Level Array iteration, through mapArray", () => {
-      const mapArray = (storeApi as Record<string, unknown>)["mapArray"] as (
-        list: () => readonly string[],
-        map: (item: string) => string,
-      ) => () => string[];
+    test("Tracking Top-Level Array iteration, through mapArray", () => {
       const [state, setState] = createStore<string[]>(["hi"]);
       const lengths: number[] = [];
       createRoot(() => {
-        const mapped = mapArray(
+        const mapped = map(
           () => state,
           (item) => item,
         );

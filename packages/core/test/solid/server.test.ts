@@ -295,15 +295,15 @@ describe("packages/solid/test/server/signals.spec.ts", () => {
 
   describe("Server createRenderEffect", () => {
     gap(
-      "render-effects",
-      "reaction is createEffect, whose apply half does not run on the server; reactre has no render effect",
+      "ssr-semantics",
+      "bind's apply does not run on the server, as no effect does there; Solid's render effect applies once",
       "computes and runs effect once",
       async () => {
         const m = await server(`
-        import { reaction } from "@reactre/core/features/reaction";
+        import { bind } from "@reactre/core/features/effects";
         export const calls = { compute: 0, effect: [] };
         export function App() {
-          reaction(() => (calls.compute++, 42), (v, prev) => void calls.effect.push([v, prev]));
+          bind(() => (calls.compute++, 42), (v, prev) => void calls.effect.push([v, prev]));
           return <p>x</p>;
         }
       `);
@@ -312,13 +312,12 @@ describe("packages/solid/test/server/signals.spec.ts", () => {
       },
     );
 
-    // reaction takes no defer option: this passes because its apply half never runs on the server.
     test("defer: true skips the initial effect run but still computes (#2811)", async () => {
       const m = await server(`
-        import { reaction } from "@reactre/core/features/reaction";
+        import { bind } from "@reactre/core/features/effects";
         export const calls = { compute: 0, effect: 0 };
         export function App() {
-          reaction(() => (calls.compute++, 42), () => void calls.effect++, { defer: true });
+          bind(() => (calls.compute++, 42), () => void calls.effect++, { defer: true });
           return <p>x</p>;
         }
       `);
@@ -328,11 +327,18 @@ describe("packages/solid/test/server/signals.spec.ts", () => {
   });
 
   describe("Server createTrackedEffect", () => {
-    gap("render-effects", "createTrackedEffect is missing", "is a no-op", () => {
-      const createTrackedEffect = missing<(fn: () => void) => void>(serverApi, "createTrackedEffect");
-      let calls = 0;
-      createRoot(() => createTrackedEffect(() => void calls++));
-      expect(calls).toBe(0);
+    test("is a no-op", async () => {
+      const m = await server(`
+        import { autorun } from "@reactre/core/features/effects";
+        export const calls = { n: 0 };
+        export function App() {
+          autorun(() => void calls.n++);
+          return <p>x</p>;
+        }
+      `);
+      expect(m.renderToString(m.App)).toBe("<p>x</p>");
+      await tick();
+      expect(m["calls"]).toEqual({ n: 0 });
     });
   });
 
@@ -473,32 +479,32 @@ describe("packages/solid/test/server/signals.spec.ts", () => {
   });
 
   describe("Server mapArray", () => {
-    gap("list-functions", "mapArray is missing", "maps array items", () => {
-      const mapArray = missing<
-        (list: () => number[], fn: (item: number, index: () => number) => string) => () => string[]
-      >(serverApi, "mapArray");
-      createRoot(() => {
-        const mapped = mapArray(
-          () => [1, 2, 3],
-          (item, index) => `${item}-${index()}`,
-        );
-        expect(mapped()).toEqual(["1-0", "2-1", "3-2"]);
-      });
+    test("maps array items", async () => {
+      const m = await server(`
+        import { map } from "@reactre/core/features/lists";
+        export let mapped;
+        export function App() {
+          mapped = map(() => [1, 2, 3], (item, index) => \`\${item}-\${index()}\`)();
+          return <p>{mapped.join(",")}</p>;
+        }
+      `);
+      expect(m.renderToString(m.App)).toBe("<p>1-0,2-1,3-2</p>");
+      expect(m["mapped"]).toEqual(["1-0", "2-1", "3-2"]);
     });
   });
 
   describe("Server repeat", () => {
-    gap("list-functions", "repeat is missing", "repeats with from offset", () => {
-      const repeat = missing<
-        (count: () => number, fn: (i: number) => string, options: { from: () => number }) => () => string[]
-      >(serverApi, "repeat");
-      expect(
-        repeat(
-          () => 2,
-          (i) => `item-${i}`,
-          { from: () => 5 },
-        )(),
-      ).toEqual(["item-5", "item-6"]);
+    test("repeats with from offset", async () => {
+      const m = await server(`
+        import { repeat } from "@reactre/core/features/lists";
+        export let rows;
+        export function App() {
+          rows = repeat(() => 2, (i) => \`item-\${i}\`, { from: () => 5 })();
+          return <p>x</p>;
+        }
+      `);
+      m.renderToString(m.App);
+      expect(m["rows"]).toEqual(["item-5", "item-6"]);
     });
   });
 

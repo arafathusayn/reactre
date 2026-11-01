@@ -1,7 +1,8 @@
 // Ports of Solid 2.0's tests of lists: <For> (keyed by reference, by default), <For keyed={false}>
 // and <Repeat>, from packages/web/test/for.spec.tsx, for.nonkeyed.spec.tsx,
 // for.nonkeyed.store.spec.tsx and repeat.spec.tsx, and the runtime list functions under them,
-// mapArray and repeat, from packages/signals/tests/mapArray.test.ts and repeat.test.ts;
+// mapArray and repeat (`map` and `repeat` of features/lists), from
+// packages/signals/tests/mapArray.test.ts and repeat.test.ts;
 // solid-js 2.0.0-rc.20 (solidjs/solid@5e68925). Ported from Solid: MIT License, Copyright (c)
 // 2016-2025 Ryan Carniato; the license is in ./harness.ts.
 //
@@ -21,10 +22,10 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 
 import { FakeElement, type FakeNode, installFakeDocument } from "@reactre/testdom";
 
+import * as lists from "../../src/features/lists.ts";
 import { reaction } from "../../src/features/reaction.ts";
 import { createStore } from "../../src/features/store.ts";
 import { flush } from "../../src/features/timing.ts";
-import * as core from "../../src/index.ts";
 import { signal } from "../../src/index.ts";
 import { base, compile, type Gap, gap } from "./harness.ts";
 
@@ -488,23 +489,13 @@ describe("repeat.spec.tsx", () => {
 
 // #region mapArray.test.ts and repeat.test.ts
 
-/** Solid's mapArray and repeat, as reactre would export them beside <For> and <Repeat>; it has neither. */
-const lists = core as unknown as {
-  mapArray<T, U>(
-    list: () => readonly T[],
-    map: (value: T, index: () => number) => U,
-    options?: { keyed?: boolean | ((item: T) => unknown) },
-  ): () => U[];
-  repeat<U>(count: () => number, map: (index: number) => U, options?: { from?: () => number }): () => U[];
-};
-
-const why = "reactre's lists are compiled <For> and <Repeat>, with no runtime function";
+// Solid's mapArray is `lists.map`; the ports keep Solid's local name `map` for what it returns.
 
 describe("mapArray.test.ts", () => {
-  gap("list-functions", why, "should compute keyed map", () => {
+  test("should compute keyed map", () => {
     const [$source, setSource] = signal([{ id: "a" }, { id: "b" }, { id: "c" }]);
     const computed = mock();
-    const map = lists.mapArray($source, (value, index) => {
+    const map = lists.map($source, (value, index) => {
       computed();
       return {
         get id() {
@@ -551,9 +542,9 @@ describe("mapArray.test.ts", () => {
     expect(computed).toHaveBeenCalledTimes(4);
   });
 
-  gap("list-functions", why, "should notify observer", () => {
+  test("should notify observer", () => {
     const [$source, setSource] = signal([{ id: "a" }, { id: "b" }, { id: "c" }]);
-    const map = lists.mapArray($source, (value) => ({
+    const map = lists.map($source, (value) => ({
       get id() {
         return value.id;
       },
@@ -566,19 +557,19 @@ describe("mapArray.test.ts", () => {
     expect(effect).toHaveBeenCalledTimes(2);
   });
 
-  gap("list-functions", why, "should compute map when key by index", () => {
+  test("should compute map when key by index", () => {
     const [$source, setSource] = signal([1, 2, 3]);
     const computed = mock();
-    const map = lists.mapArray(
+    const map = lists.map(
       $source,
       (value, index) => {
         computed();
         return {
           get id() {
-            return (value as unknown as () => number)() * 2;
+            return value() * 2;
           },
           get index() {
-            return index as unknown as number;
+            return index;
           },
         };
       },
@@ -615,7 +606,7 @@ describe("mapArray.test.ts", () => {
 });
 
 describe("repeat.test.ts", () => {
-  gap("list-functions", why, "should compute keyed map", () => {
+  test("should compute keyed map", () => {
     const [source, setSource] = createStore<{ id: string }[]>([{ id: "a" }, { id: "b" }, { id: "c" }]);
     const computed = mock();
     const map = lists.repeat(
@@ -671,7 +662,7 @@ describe("repeat.test.ts", () => {
     expect(computed).toHaveBeenCalledTimes(4);
   });
 
-  gap("list-functions", why, "should notify observer", () => {
+  test("should notify observer", () => {
     const [source, setSource] = createStore([{ id: "a" }, { id: "b" }, { id: "c" }]);
     const map = lists.repeat(
       () => source.length,

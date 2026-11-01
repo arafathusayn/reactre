@@ -32,6 +32,8 @@ const features = [
   "async",
   "actions",
   "index",
+  "effects",
+  "lists",
 ];
 const options = {
   root: join(dir, "src"),
@@ -54,6 +56,7 @@ for (const r of [
       "server.browser.ts",
       "server/async.ts",
       "server/dynamic.ts",
+      "server/effects.ts",
       "server/errors.ts",
       "server/reaction.ts",
       "server/timing.ts",

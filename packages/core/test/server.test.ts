@@ -27,6 +27,7 @@ import * as browser from "../src/server.browser.ts";
 import * as server from "../src/server.ts";
 import * as serverAsync from "../src/server/async.ts";
 import * as serverDynamic from "../src/server/dynamic.ts";
+import * as serverEffects from "../src/server/effects.ts";
 import * as serverErrors from "../src/server/errors.ts";
 import * as serverReaction from "../src/server/reaction.ts";
 import * as serverTiming from "../src/server/timing.ts";
@@ -958,6 +959,25 @@ describe("effects on the server", () => {
     expect(serverTiming.flush).toBe(timing.flush);
     expect(serverErrors.Errored).toBe(Errored);
   });
+
+  test("bind computes, given its last value, and never applies; autorun and onFlush never run", async () => {
+    const log: string[] = [];
+    const [n, setN] = core.signal(1);
+    const App = () => {
+      serverEffects.bind(
+        (prev: number | undefined) => (log.push(`compute ${prev} ${n()}`), n()),
+        (v) => void log.push(`apply ${v}`),
+        { defer: true },
+      );
+      serverEffects.autorun(() => void log.push("autorun"));
+      serverEffects.onFlush(() => void log.push("flush"));
+      return "x";
+    };
+    expect(server.renderToString(App)).toBe("x");
+    await tick();
+    setN(2);
+    expect(log).toEqual(["compute undefined 1"]);
+  });
 });
 
 describe("<Errored> and async data", () => {
@@ -1037,11 +1057,17 @@ describe("in a server build", () => {
       import { effect as guarded } from "@reactre/core/features/errors";
       import { reaction } from "@reactre/core/features/reaction";
       import { onSettled } from "@reactre/core/features/timing";
+      import { autorun, bind, onFlush } from "@reactre/core/features/effects";
+      import { map } from "@reactre/core/features/lists";
       import { createStore, createProjection } from "@reactre/core/features/store";
       import { memo, resolve } from "@reactre/core/features/async";
       export const log = [];
       const [store] = createStore({ n: 2 });
       export function App() {
+        bind(() => (log.push("bind"), 1), () => log.push("bind's apply"));
+        autorun(() => log.push("autorun"));
+        onFlush(() => log.push("onFlush"));
+        const tens = map(() => [1, 2], (x) => x * 10);
         const data = memo(() => new Promise((ok) => setTimeout(() => ok("data"), 1)));
         const doubled = createProjection((d) => { d.n = store.n * 2; }, { n: 0 });
         effect(() => log.push("effect"));
@@ -1051,12 +1077,12 @@ describe("in a server build", () => {
         reaction(() => (log.push("compute"), 1), () => log.push("apply"));
         onSettled(() => log.push("settled"));
         resolve(() => data()).then((v) => log.push("resolved " + v));
-        return <p>{doubled.n} {data()}</p>;
+        return <p>{doubled.n} {data()} {tens().join(",")}</p>;
       }
     `);
-    expect(await m.renderToStringAsync(m.App)).toBe("<p>4 data</p>");
+    expect(await m.renderToStringAsync(m.App)).toBe("<p>4 data 10,20</p>");
     await tick();
-    expect(m["log"]).toEqual(["compute", "resolved data"]);
+    expect(m["log"]).toEqual(["bind", "compute", "resolved data"]);
   });
 
   /** An app whose data rejects, under `<Errored>` in `<Loading>`, when `reject` is called. */

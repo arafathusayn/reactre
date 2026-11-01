@@ -1,6 +1,7 @@
 // Ports of Solid 2.0's effect tests: createEffect, createTrackedEffect, createReaction, onFlush,
 // flush, and the error phases of createEffect. They run on @reactre/core's `effect`, `reaction`
-// (features/reaction) for createEffect(compute, apply) and createRenderEffect, `effect(fn, {
+// (features/reaction) for createEffect(compute, apply), `bind`, `autorun` and `onFlush`
+// (features/effects) for createRenderEffect, createTrackedEffect and onFlush, `effect(fn, {
 // error })` (features/errors) for an effect's error handler, and `flush` (features/timing).
 //
 // Ported from packages/signals/tests/createEffect.test.ts, createTrackedEffect.test.ts,
@@ -9,12 +10,13 @@
 // 2016-2025 Ryan Carniato; the license is in ./harness.ts.
 //
 // How the ports translate Solid's effects:
-//   - createEffect(compute, apply) and createRenderEffect(compute, apply) are `reaction(compute,
-//     apply)`: reactre has one kind of effect, so a test of the order of the two kinds is a
-//     "render-effects" gap. reaction runs `apply` at once, where Solid runs it at the flush: an
-//     assertion that it has not run before the flush goes to the file's "held-writes" test.
-//   - createTrackedEffect(fn) is `effect(fn)`; a cleanup the function returns is registered with
-//     `onCleanup` instead, as reactre's effects take their cleanups.
+//   - createEffect(compute, apply) is `reaction(compute, apply)`, and createRenderEffect(compute,
+//     apply) is `bind(compute, apply)`. reaction runs `apply` at once, as bind does, where Solid
+//     runs a user effect at the flush, after the render effects: a test of the order of the two
+//     kinds, or of createEffect's options, is a "render-effects" gap, and an assertion that a user
+//     effect has not run before the flush goes to the file's "held-writes" test. The error-phase
+//     ports keep `reaction` for the render effects they log with: they test the error phases.
+//   - createTrackedEffect(fn) is `autorun(fn)`, whose first run waits for the flush, as Solid's.
 //   - Solid's EffectBundle `{ effect, error }` is `effect(fn, { error })` from features/errors,
 //     with the compute and the effect in one function.
 
@@ -23,6 +25,7 @@ import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { FakeElement } from "@reactre/testdom";
 
 import * as context from "../../src/features/context.ts";
+import { autorun, bind, onFlush } from "../../src/features/effects.ts";
 import * as errors from "../../src/features/errors.ts";
 import { configureClientErrors, effect as effectWith } from "../../src/features/errors.ts";
 import { createRoot } from "../../src/features/owner.ts";
@@ -30,7 +33,7 @@ import * as reactionFeature from "../../src/features/reaction.ts";
 import { reaction } from "../../src/features/reaction.ts";
 import * as timing from "../../src/features/timing.ts";
 import { flush } from "../../src/features/timing.ts";
-import { effect, memo, onCleanup, signal } from "../../src/index.ts";
+import { memo, onCleanup, signal } from "../../src/index.ts";
 import { base, compile, gap } from "./harness.ts";
 
 afterEach(() => {
@@ -41,9 +44,8 @@ afterEach(() => {
 /** Solid's exports reactre lacks, to call in a gap's port: undefined until reactre has them. */
 const missing = { ...reactionFeature, ...timing } as unknown as {
   createReaction?: (fn: () => void) => (tracking: () => void) => void;
-  onFlush?: (fn: () => void) => void;
 };
-/** reaction with Solid's effect options, which reactre's does not take. */
+/** reaction with Solid's effect options, which reactre's does not take (bind does). */
 const reactionWith = reaction as unknown as <T>(
   compute: () => T,
   apply: (v: T, prev: T | undefined) => void | (() => void),
@@ -65,9 +67,9 @@ describe("held writes", () => {
       const fx = mock();
       createRoot(() => reaction($x, fx));
       expect(fx).toHaveBeenCalledTimes(0);
-      // createTrackedEffect.test.ts, should run effect: so does a tracked effect.
+      // createTrackedEffect.test.ts, should run effect: so does a tracked effect (autorun does).
       const tracked = mock($x);
-      createRoot(() => effect(() => void tracked()));
+      createRoot(() => autorun(() => void tracked()));
       expect(tracked).toHaveBeenCalledTimes(0);
       // flush.test.ts, should batch updates: writes outside a flush are batched.
       const [$y, setY] = signal(10);
@@ -421,7 +423,7 @@ describe("createEffect.test.ts", () => {
 
   gap(
     "render-effects",
-    "reactre has one kind of effect, run in creation order",
+    "reaction applies at once, as it is made, before a bind made after it",
     "should run render effect before user effects",
     () => {
       const [$x, setX] = signal(0);
@@ -430,8 +432,7 @@ describe("createEffect.test.ts", () => {
         reaction($x, () => {
           mark += "b";
         });
-        // createRenderEffect
-        reaction($x, () => {
+        bind($x, () => {
           mark += "a";
         });
       });
@@ -463,31 +464,26 @@ describe("createEffect.test.ts", () => {
   });
 
   describe("schedule option", () => {
-    gap(
-      "render-effects",
-      "reaction takes no schedule option",
-      "does not run initial render-effect callback synchronously when schedule: true",
-      () => {
-        let calls = 0;
-        createRoot(() => {
-          reactionWith(
-            () => 1,
-            () => {
-              calls++;
-            },
-            { schedule: true },
-          );
-          expect(calls).toBe(0);
-        });
-        flush();
-        expect(calls).toBe(1);
-      },
-    );
+    test("does not run initial render-effect callback synchronously when schedule: true", () => {
+      let calls = 0;
+      createRoot(() => {
+        bind(
+          () => 1,
+          () => {
+            calls++;
+          },
+          { schedule: true },
+        );
+        expect(calls).toBe(0);
+      });
+      flush();
+      expect(calls).toBe(1);
+    });
 
     test("runs initial render-effect callback synchronously without schedule (default)", () => {
       let calls = 0;
       createRoot(() => {
-        reaction(
+        bind(
           () => 1,
           () => {
             calls++;
@@ -562,7 +558,7 @@ describe("createEffect.test.ts", () => {
       const [$x, setX] = signal(0);
       const cleanup = mock();
       const dispose = createRoot((dispose) => {
-        reaction($x, () => cleanup);
+        bind($x, () => cleanup);
         return dispose;
       });
       flush();
@@ -665,10 +661,11 @@ describe("createTrackedEffect.test.ts", () => {
     const [$x, setX] = signal(0),
       fx = mock($x);
     createRoot(() =>
-      effect(() => {
+      autorun(() => {
         fx();
       }),
     );
+    expect(fx).toHaveBeenCalledTimes(0);
     flush();
     expect(fx).toHaveBeenCalledTimes(1);
     setX(1);
@@ -676,14 +673,14 @@ describe("createTrackedEffect.test.ts", () => {
     expect(fx).toHaveBeenCalledTimes(2);
   });
 
-  gap("held-writes", "the first run is not merged into the next write's", "should run effect on change", () => {
+  test("should run effect on change", () => {
     const [$x, setX] = signal(10);
     const [$y, setY] = signal(10);
     const $a = memo(() => $x() + $y());
     const $b = memo(() => $a());
     const fx = mock($b);
     createRoot(() =>
-      effect(() => {
+      autorun(() => {
         fx();
       }),
     );
@@ -700,11 +697,11 @@ describe("createTrackedEffect.test.ts", () => {
     expect(fx).toHaveBeenCalledTimes(2);
   });
 
-  gap("held-writes", "the effect ran when it was made, before the root was disposed", "should stop effect", () => {
+  test("should stop effect", () => {
     const [$x, setX] = signal(10);
     const fx = mock($x);
     const stopEffect = createRoot((dispose) => {
-      effect(() => {
+      autorun(() => {
         fx();
       });
       return dispose;
@@ -720,10 +717,10 @@ describe("createTrackedEffect.test.ts", () => {
       dispose = mock();
     const [$x, setX] = signal(0);
     createRoot(() =>
-      effect(() => {
+      autorun(() => {
         $x();
         fx();
-        onCleanup(dispose);
+        return dispose;
       }),
     );
     flush();
@@ -744,7 +741,7 @@ describe("createTrackedEffect.test.ts", () => {
     const $a = memo(() => ($condition() ? $x() : $y()));
     const fx = mock($a);
     createRoot(() =>
-      effect(() => {
+      autorun(() => {
         fx();
       }),
     );
@@ -773,7 +770,7 @@ describe("createTrackedEffect.test.ts", () => {
       const [$trigger, setTrigger] = signal(0);
       const [$target, setTarget] = signal(0);
       createRoot(() =>
-        effect(() => {
+        autorun(() => {
           $trigger();
           setTarget((n) => n + 1);
         }),
@@ -796,7 +793,7 @@ describe("createTrackedEffect.test.ts", () => {
     const $a = memo(() => $x() + 1),
       $b = memo(() => $a() + 2);
     createRoot(() =>
-      effect(() => {
+      autorun(() => {
         $y();
         setX((n) => n + 1);
       }),
@@ -817,29 +814,24 @@ describe("createTrackedEffect.test.ts", () => {
     expect($a()).toBe(4);
   });
 
-  gap(
-    "render-effects",
-    "reactre has one kind of effect, run in creation order",
-    "should run render effect before user effects",
-    () => {
-      const [$x, setX] = signal(0);
-      let mark = "";
-      createRoot(() => {
-        effect(() => {
-          $x();
-          mark += "b";
-        });
-        reaction($x, () => {
-          mark += "a";
-        });
+  test("should run render effect before user effects", () => {
+    const [$x, setX] = signal(0);
+    let mark = "";
+    createRoot(() => {
+      autorun(() => {
+        $x();
+        mark += "b";
       });
-      flush();
-      expect(mark).toBe("ab");
-      setX(1);
-      flush();
-      expect(mark).toBe("abab");
-    },
-  );
+      bind($x, () => {
+        mark += "a";
+      });
+    });
+    flush();
+    expect(mark).toBe("ab");
+    setX(1);
+    flush();
+    expect(mark).toBe("abab");
+  });
 
   gap(
     "misuse-errors",
@@ -847,8 +839,8 @@ describe("createTrackedEffect.test.ts", () => {
     "should throw when creating tracked-effect children inside (__DEV__ only)",
     () => {
       createRoot(() => {
-        effect(() => {
-          expect(() => effect(() => {})).toThrow();
+        autorun(() => {
+          expect(() => autorun(() => {})).toThrow();
           expect(() => memo(() => 1)).toThrow();
           expect(() => onCleanup(() => {})).toThrow();
         });
@@ -858,33 +850,28 @@ describe("createTrackedEffect.test.ts", () => {
   );
 
   test("should throw uncaught tracked effect errors during flush", () => {
-    // reactre runs the effect when it is made, so the error comes from there.
-    expect(() => {
-      createRoot(() => {
-        effect(() => {
-          throw new Error("tracked boom");
-        });
+    createRoot(() => {
+      autorun(() => {
+        throw new Error("tracked boom");
       });
-      flush();
-    }).toThrow("tracked boom");
+    });
+    expect(() => flush()).toThrow("tracked boom");
   });
 
-  gap("misuse-errors", "an effect's return value is ignored", "should throw on invalid cleanup values", () => {
-    expect(() => {
-      createRoot(() => {
-        effect((() => ({})) as () => void);
-      });
-      flush();
-    }).toThrow();
+  test("should throw on invalid cleanup values", () => {
+    createRoot(() => {
+      autorun((() => ({})) as () => void);
+    });
+    expect(() => flush()).toThrow();
   });
 
   test("should run the final returned cleanup at the node's own disposal", () => {
     const [$x, setX] = signal(0);
     const cleanup = mock();
     const dispose = createRoot((dispose) => {
-      effect(() => {
+      autorun(() => {
         $x();
-        onCleanup(cleanup);
+        return cleanup;
       });
       return dispose;
     });
@@ -903,7 +890,7 @@ describe("createTrackedEffect.test.ts", () => {
     const [$valueB, setValueB] = signal("Bob");
     const log = mock();
     createRoot(() => {
-      effect(() => {
+      autorun(() => {
         if ($type() === "a") log($valueA());
         else log($valueB());
       });
@@ -1034,53 +1021,43 @@ describe("createReaction.test.ts", () => {
 });
 
 describe("onFlush.test.ts", () => {
-  gap(
-    "render-effects",
-    "reactre has no onFlush",
-    "runs after the drain when called from an effect callback",
-    async () => {
-      const [trigger, setTrigger] = signal(0);
-      const [value, setValue] = signal(0);
-      const log: string[] = [];
-      createRoot(() => {
-        reaction(trigger, (t) => {
-          if (t) missing.onFlush!(() => setValue(t * 10));
-        });
-        reaction(value, (v) => void log.push(`value:${v}`));
+  test("runs after the drain when called from an effect callback", async () => {
+    const [trigger, setTrigger] = signal(0);
+    const [value, setValue] = signal(0);
+    const log: string[] = [];
+    createRoot(() => {
+      reaction(trigger, (t) => {
+        if (t) onFlush(() => setValue(t * 10));
       });
-      flush();
-      setTrigger(1);
-      await microtasks();
-      expect(log).toEqual(["value:0", "value:10"]);
-    },
-  );
+      bind(value, (v) => void log.push(`value:${v}`));
+    });
+    flush();
+    setTrigger(1);
+    await microtasks();
+    expect(log).toEqual(["value:0", "value:10"]);
+  });
 
-  gap(
-    "render-effects",
-    "reactre has no onFlush",
-    "lands after inline writes in the same frame; callbacks run in order and batch",
-    async () => {
-      const [v, setV] = signal(0);
-      const log: number[] = [];
-      createRoot(() => reaction(v, (x) => void log.push(x)));
-      flush();
-      log.length = 0;
-      missing.onFlush!(() => setV(1));
-      setV(2);
-      await microtasks();
-      expect(log).toEqual([2, 1]);
-      log.length = 0;
-      missing.onFlush!(() => setV((x) => x + 10));
-      setV((x) => x * 2);
-      await microtasks();
-      expect(log).toEqual([2, 12]);
-      log.length = 0;
-      missing.onFlush!(() => setV(100));
-      missing.onFlush!(() => setV(200));
-      await microtasks();
-      expect(log).toEqual([200]);
-    },
-  );
+  test("lands after inline writes in the same frame; callbacks run in order and batch", async () => {
+    const [v, setV] = signal(0);
+    const log: number[] = [];
+    createRoot(() => bind(v, (x) => void log.push(x)));
+    flush();
+    log.length = 0;
+    onFlush(() => setV(1));
+    setV(2);
+    await microtasks();
+    expect(log).toEqual([2, 1]);
+    log.length = 0;
+    onFlush(() => setV((x) => x + 10));
+    setV((x) => x * 2);
+    await microtasks();
+    expect(log).toEqual([2, 12]);
+    log.length = 0;
+    onFlush(() => setV(100));
+    onFlush(() => setV(200));
+    await microtasks();
+    expect(log).toEqual([200]);
+  });
 });
 
 describe("effect-error-phases.test.ts", () => {

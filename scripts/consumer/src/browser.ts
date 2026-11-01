@@ -19,7 +19,9 @@ import * as coreActions from "@reactre/core/features/actions";
 import * as coreAsync from "@reactre/core/features/async";
 import * as coreContext from "@reactre/core/features/context";
 import * as coreDynamic from "@reactre/core/features/dynamic";
+import * as coreEffects from "@reactre/core/features/effects";
 import * as coreErrors from "@reactre/core/features/errors";
+import * as coreLists from "@reactre/core/features/lists";
 import * as coreMemo from "@reactre/core/features/memo";
 import * as coreOwner from "@reactre/core/features/owner";
 import * as coreReaction from "@reactre/core/features/reaction";
@@ -70,6 +72,28 @@ const like: (by: number) => Promise<string> = coreActions.action(function* (by: 
   yield coreAsync.refresh(user);
   return "ok";
 });
+coreEffects.bind(
+  () => count(),
+  (n: number, prev: number | undefined) => void (n + (prev ?? 0)),
+  { defer: true },
+);
+coreEffects.autorun(() => () => setCount(0));
+coreEffects.onFlush(() => setCount(1));
+const labels: () => string[] = coreLists.map(
+  () => [{ id: 1 }],
+  (row: () => { id: number }, i: () => number) => `${row().id}:${i()}`,
+  { keyed: (row) => row.id },
+);
+const cells: () => number[] = coreLists.map(
+  () => [1, 2],
+  (n: () => number, i: number) => n() + i,
+  { keyed: false },
+);
+const stars: () => string[] = coreLists.repeat(
+  () => 3,
+  (i) => "*".repeat(i),
+  { from: () => 1 },
+);
 
 export const all: unknown[] = [
   dom,
@@ -77,6 +101,8 @@ export const all: unknown[] = [
   coreOwner,
   coreTiming,
   coreReaction,
+  coreEffects,
+  coreLists,
   coreDynamic,
   coreStore,
   coreMemo,
@@ -129,4 +155,7 @@ export const all: unknown[] = [
   pending,
   likes,
   like,
+  labels,
+  cells,
+  stars,
 ];

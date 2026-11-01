@@ -67,6 +67,14 @@
     "min": 12775,
     "gzip": 5488
   },
+  "effects": {
+    "min": 7438,
+    "gzip": 3303
+  },
+  "lists": {
+    "min": 8742,
+    "gzip": 3849
+  },
   "async": {
     "min": 12910,
     "gzip": 5315

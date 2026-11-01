@@ -304,6 +304,42 @@ const apps = {
     render(() => <p>{id()}</p>, root);
     globalThis.api = { setId, log };
   `,
+  /** A component with a render effect and a tracked effect, and an onFlush from a handler. */
+  effects: `
+    import { render, signal } from "@reactre/core";
+    import { autorun, bind, onFlush } from "@reactre/core/features/effects";
+    const [n, setN] = signal(1);
+    const log = [];
+    function Box() {
+      const p = <p>x</p>;
+      bind(() => n(), (v) => {
+        p.textContent = "n" + v;
+        return () => log.push("unbind " + v);
+      });
+      autorun(() => void log.push("autorun " + n() + " " + p.isConnected));
+      return p;
+    }
+    render(() => <div><Box /></div>, root);
+    const later = () => onFlush(() => setN(100));
+    globalThis.api = { setN, later, log };
+  `,
+  /** A keyed map whose rows own a memo of their index, and a repeat, shown as text. */
+  lists: `
+    import { memo, onCleanup, render, signal } from "@reactre/core";
+    import { map, repeat } from "@reactre/core/features/lists";
+    const [todos, setTodos] = signal(["a", "b"]);
+    const gone = [];
+    function App() {
+      const labels = map(todos, (t, i) => {
+        onCleanup(() => gone.push(t));
+        return memo(() => i() + ":" + t);
+      });
+      const stars = repeat(() => todos().length, (i) => "*" + i);
+      return <p>{labels().map((l) => l()).join(",")} {stars().join("")}</p>;
+    }
+    render(App, root);
+    globalThis.api = { setTodos, gone };
+  `,
   /** A store's todos in a <For>, pushed to, toggled in place, and reconciled. */
   store: `
     import { For, render } from "@reactre/core";
@@ -597,6 +633,42 @@ describe("lists by position", () => {
   });
 });
 
+describe("render and tracked effects, and list functions", () => {
+  test("off: an app that does not import them ships none of their code", async () => {
+    for (const name of ["plain", "slot", "attach", "reaction", "settled", "index"] as const) {
+      const code = await bundle(name, apps[name], false);
+      for (const fn of ["bind", "autorun", "onFlush", "map", "repeat"]) expect(code).not.toContain(`function ${fn}(`);
+      expect(code).not.toContain("runner");
+    }
+  });
+
+  test("effects: bind runs while the view is built, autorun once it is in the page, onFlush after a write", async () => {
+    const code = await bundle("effects", apps.effects, false);
+    expect(code).toContain("function autorun(");
+    const { root, api } = run(await bundle("effects", apps.effects));
+    const log = api.log as unknown as string[];
+    expect([text(root), log]).toEqual(["n1", []]);
+    await Promise.resolve();
+    expect(log).toEqual(["autorun 1 true"]);
+    api.setN!(2);
+    expect([text(root), log.slice(1)]).toEqual(["n2", ["unbind 1", "autorun 2 true"]]);
+    api.later!();
+    expect(text(root)).toBe("n2");
+    await Promise.resolve();
+    expect(text(root)).toBe("n100");
+  });
+
+  test("lists: map keeps its rows and their owners, and repeat its indexes", async () => {
+    expect(await bundle("lists", apps.lists, false)).toContain("function repeat(");
+    const { root, api } = run(await bundle("lists", apps.lists));
+    expect(text(root)).toBe("0:a,1:b *0*1");
+    api.setTodos!(["b", "c", "a"]);
+    expect(text(root)).toBe("0:b,1:c,2:a *0*1*2");
+    api.setTodos!(["c"]);
+    expect([text(root), api.gone as unknown]).toEqual(["0:c *0", ["b", "a"]]);
+  });
+});
+
 describe("stores and memo options", () => {
   test("off: an app that does not import them ships none of their code", async () => {
     for (const name of ["plain", "slot", "attach", "reaction"] as const) {
@@ -812,6 +884,8 @@ describe("sizes", () => {
       "errors",
       "props",
       "index",
+      "effects",
+      "lists",
     ] as const)
       measure(name, await bundle(name, apps[name]));
     // With the core's async code, as both plugins bundle a program that imports them.
