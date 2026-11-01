@@ -21,7 +21,8 @@
 //              `effect` do.
 //   control    <Show>, <Switch>, <Repeat>, <Portal>, <Dynamic>, a <For>'s fallback, class
 //   flow       objects and arrays: compiled to slots, memos and lists, with no opt-in and no
-//              runtime of their own (only `dynamic()` and `__class` run, imported when used).
+//              runtime of their own (only `__class` runs, imported when used; `dynamic()` is
+//              a feature module, @reactre/core/features/dynamic).
 //              The "show" profile is an app that uses some; the others use none, and are the
 //              same bytes as before control flow existed.
 //

@@ -1,5 +1,6 @@
 // Control flow and dynamic elements: <Show>, <Switch> and <Match>, <Repeat>, <Portal> and
-// <Dynamic>, with `dynamic()` for a component chosen at runtime.
+// <Dynamic>. `dynamic()`, a component chosen at runtime, is a runtime function, so it is the
+// feature module @reactre/core/features/dynamic; its types are here, beside <Dynamic>'s.
 //
 // The elements are compiled away, as <For> is: @reactre/compiler turns each into the code it
 // stands for, made of the calls compiled code already makes (`__slot`, `__insert`, `__for`,
@@ -14,11 +15,9 @@
 //   - <Portal mount>: its children in another element (`document.body` by default).
 //   - <Dynamic component>: a component, or a tag name's element, chosen by a value.
 //
-// Two things here do run: `dynamic(source)`, a component made at runtime, and `__class`, the
-// helper the compiler calls for a class list it cannot resolve while compiling. Each is in a
-// bundle only when it is used.
+// One thing here does run: `__class`, the helper the compiler calls for a class list it cannot
+// resolve while compiling. It is in a bundle only when compiled code calls it.
 
-import { __frag, __insert, __spread, untrack } from "./index.ts";
 import type { Child, JSX } from "./jsx-runtime.ts";
 
 // #region Types
@@ -174,39 +173,6 @@ export function Dynamic<C extends DynamicComponent>(
 // #endregion
 
 // #region What runs
-
-/**
- * A component that renders what `source` returns: a component, called with the props, or a tag
- * name's element, with the props applied as spread props are; nothing for null, undefined or
- * false. What `source` reads is followed: a new value rebuilds the content. It is
- * `<Dynamic component={source()} />` as a component of its own, to hand on or name.
- *
- * @example
- *   const View = dynamic(() => (editing() ? Editor : Preview));
- *   const App = () => <main><View doc={doc} /></main>;
- */
-export function dynamic<C extends DynamicComponent>(
-  source: () => C | null | undefined | false,
-): (props: PropsOf<C>) => unknown {
-  return (props) =>
-    __frag([
-      () => {
-        // The source is the slot's one dependency; what the content reads is its own.
-        const c = source();
-        return untrack(() => build(c, props as Record<string, unknown>));
-      },
-    ]);
-}
-
-/** What `dynamic`'s content is for one value of its source. */
-function build(c: unknown, props: Record<string, unknown>): unknown {
-  if (typeof c === "function") return (c as (p: unknown) => unknown)(props);
-  if (!c) return null;
-  const el = document.createElement(c as string);
-  __spread(el, props, undefined);
-  if (props["children"] != null) __insert(el.appendChild(document.createTextNode("")), props["children"], null);
-  return el;
-}
 
 /**
  * Internal: a class list as one string (@reactre/compiler calls it for a `class` array or object

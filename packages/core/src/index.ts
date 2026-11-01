@@ -49,6 +49,8 @@
 //     and not compiled away: @reactre/core/features/owner (`createRoot`, `getOwner`,
 //     `runWithOwner`), features/timing (`onSettled`, `flush`) and features/reaction. They build
 //     on the `__` internals below and hook into nothing that runs without them.
+//   - Control flow (<Show>, <Switch>/<Match>, <Repeat>, <Portal>, <Dynamic>) is in ./flow.ts,
+//     compiled away as <For> is. `dynamic()`, which runs, is @reactre/core/features/dynamic.
 //
 // The list is @reactre/dom's keyed List (reuse, minimal moves, swaps and
 // removals in place). Nothing here depends on React.

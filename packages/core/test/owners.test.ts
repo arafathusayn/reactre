@@ -14,6 +14,13 @@ test("@reactre/core leaves the owner and timing APIs to its feature modules", ()
     expect(core).not.toHaveProperty(name);
 });
 
+test("@reactre/core leaves dynamic() to @reactre/core/features/dynamic, and keeps what is compiled away", () => {
+  expect(core).not.toHaveProperty("dynamic");
+  // <Dynamic> and the other control flow stubs stay, as does the helper compiled code calls.
+  for (const name of ["Show", "Switch", "Match", "Repeat", "Portal", "Dynamic", "__class"])
+    expect(core).toHaveProperty(name);
+});
+
 describe("createRoot", () => {
   test("its dispose stops what fn made, deepest first; fn is untracked and its result returned", () => {
     const [n, setN] = signal(0);

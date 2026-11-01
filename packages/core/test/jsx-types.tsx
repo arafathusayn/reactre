@@ -3,7 +3,8 @@
 // element here type-checks and every line under @ts-expect-error is an error. Nothing runs it;
 // bun test runs only *.test.ts files.
 
-import { Dynamic, dynamic, For, Match, Portal, render, Repeat, selector, Show, signal, Switch } from "@reactre/core";
+import { Dynamic, For, Match, Portal, render, Repeat, selector, Show, signal, Switch } from "@reactre/core";
+import { dynamic } from "@reactre/core/features/dynamic";
 import type { Child, JSX } from "@reactre/core/jsx-runtime";
 
 type Row = { id: number; label: string };

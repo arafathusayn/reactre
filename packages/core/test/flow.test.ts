@@ -1,5 +1,6 @@
 // Tests of control flow and the element features on the fake DOM: <Show>, <Switch> and <Match>,
-// a <For>'s fallback, <Repeat>, <Portal>, <Dynamic> and dynamic(), class objects and arrays, the
+// a <For>'s fallback, <Repeat>, <Portal>, <Dynamic> and dynamic() (@reactre/core/features/dynamic),
+// class objects and arrays, the
 // default* properties and ref arrays. Each TSX source here is compiled as the plugin compiles it
 // and run against the runtime, outside lists and in <For> rows. Compile errors are in
 // packages/compiler/test/flow.test.ts.
@@ -12,6 +13,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:tes
 import { compileSource } from "@reactre/compiler";
 import { FakeElement, FakeEvent, installFakeDocument } from "@reactre/testdom";
 
+import * as dynamicFeature from "../src/features/dynamic.ts";
 import * as runtime from "../src/index.ts";
 
 const SVG = "http://www.w3.org/2000/svg";
@@ -57,23 +59,29 @@ beforeEach(() => {
   });
 });
 
+/** The modules a test source may import from, by specifier. */
+const modules: Record<string, unknown> = {
+  "@reactre/core": runtime,
+  "@reactre/core/features/dynamic": dynamicFeature,
+};
+
 /**
  * Compile a TSX test source (a module body ending in `return { ... }`) and run it with the
- * runtime, `root` in scope. Imports from @reactre/core become bindings to the runtime.
+ * runtime, `root` in scope. Imports from @reactre/core and its features become bindings to them.
  */
 function run<T>(src: string, root: FakeElement): T {
   const js = compileSource(src)
-    .replace(/^import \{([^}]*)\} from "@reactre\/core";$/gm, (_, names: string) =>
+    .replace(/^import \{([^}]*)\} from "(@reactre\/core[^"]*)";$/gm, (_, names: string, from: string) =>
       names
         .split(",")
         .map((n) => {
           const [a, b] = n.trim().split(" as ");
-          return `const ${b ?? a} = rr.${a};`;
+          return `const ${b ?? a} = rr[${JSON.stringify(from)}].${a};`;
         })
         .join("\n"),
     )
-    .replace(/^import \* as (\w+) from "@reactre\/core";$/gm, "const $1 = rr;");
-  return new Function("rr", "root", js)(runtime, root) as T;
+    .replace(/^import \* as (\w+) from "@reactre\/core";$/gm, 'const $1 = rr["@reactre/core"];');
+  return new Function("rr", "root", js)(modules, root) as T;
 }
 
 /** A root inside the document, so what is under it is connected as in a page. */
@@ -698,7 +706,8 @@ describe("<Dynamic>", () => {
     const root = box();
     const api = run<{ set: (v: unknown) => void; clicks: () => number }>(
       `
-      import { dynamic, render, signal } from "@reactre/core";
+      import { render, signal } from "@reactre/core";
+      import { dynamic } from "@reactre/core/features/dynamic";
       const B = (p) => <b>{p.label}</b>;
       const [v, set] = signal(B);
       let clicks = 0;
@@ -718,7 +727,7 @@ describe("<Dynamic>", () => {
     api.set("hr");
     api.set(null);
     expect(html(root)).toBe("<div></div>");
-    const bare = runtime.dynamic(() => "br")({} as never) as FakeElement[];
+    const bare = dynamicFeature.dynamic(() => "br")({} as never) as FakeElement[];
     expect(bare.map((n) => n.nodeName)).toEqual(["BR", "#text"]);
   });
 });

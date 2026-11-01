@@ -108,7 +108,7 @@ const Page = () => (
 - `<For>` takes a `fallback`, shown while `each` is empty.
 - `<Repeat count from>` is a row per index, from `from` (0 by default) to `from + count - 1`: a keyed `<For>` over the indexes, so a row is built once per index and kept while the count keeps it. It takes a `fallback` too.
 - `<Portal mount>` puts its children at the end of `mount` (`document.body` by default, read once) and takes them out when what holds it goes away: a `<Show>` that hides it, a row that leaves, `attach`'s disposer.
-- `<Dynamic component>` renders a component, called with the other props, or for a tag name, that element with them (applied as spread props, so they follow what they read); null renders nothing. A `component` that reads a signal rebuilds it when it changes, and a tag written as a string (`component="h1"`) compiles as if the element were written out. `dynamic(() => source())` is the same as a component of its own, to name or hand on.
+- `<Dynamic component>` renders a component, called with the other props, or for a tag name, that element with them (applied as spread props, so they follow what they read); null renders nothing. A `component` that reads a signal rebuilds it when it changes, and a tag written as a string (`component="h1"`) compiles as if the element were written out. `dynamic(() => source())`, from the feature module `@reactre/core/features/dynamic`, is the same as a component of its own, to name or hand on.
 
 `<For>` and `<Repeat>` render into their parent element, so they stand as an element's child, not directly inside a fragment, a `<Show>` or a `<Switch>` (wrap them in the element they fill). A `<Match>` stands only in a `<Switch>`. What the compiler cannot compile is a compile error that says so.
 
@@ -194,7 +194,6 @@ The template is parsed once. `mount` clones it with values for its holes, in ord
 | `<Repeat count>`      | A row per index, from `from` to `from + count - 1`.                                             |
 | `<Portal mount>`      | Its children in another element, `document.body` by default.                                    |
 | `<Dynamic component>` | A component or a tag name's element, chosen by a value.                                         |
-| `dynamic(source)`     | A component that renders what `source` returns, as `<Dynamic>` does.                            |
 | `render(view, root)`  | Mounts a TSX view into an element, for good.                                                    |
 | `attach(view, root)`  | `render`, returning a function that removes the view and stops its effects.                     |
 
@@ -210,13 +209,15 @@ The template is parsed once. `mount` clones it with values for its holes, in ord
 | `@reactre/core/features/timing`   | `onSettled(fn)`            | Runs `fn` once, untracked, when the work under way has finished and the DOM shows it ([timing](#timing)). A function it returns is a cleanup. |
 |                                   | `flush(fn?)`               | `flush(fn)` runs `fn` and applies its writes before it returns, inside a batch too. `flush()` applies what the current batch has queued.      |
 | `@reactre/core/features/reaction` | `reaction(compute, apply)` | An effect in two halves: `compute` is tracked, `apply(value, prev)` runs untracked when the value changes, and may return a cleanup.          |
+| `@reactre/core/features/dynamic`  | `dynamic(source)`          | A component that renders what `source` returns, as `<Dynamic>` does.                                                                          |
 
 ```tsx
 import { createRoot } from "@reactre/core/features/owner";
 import { flush, onSettled } from "@reactre/core/features/timing";
+import { dynamic } from "@reactre/core/features/dynamic";
 ```
 
-`onSettled`, `flush`, `createRoot`, `getOwner` and `runWithOwner` are Solid 2.0's, and `reaction` is its `createEffect(compute, apply)`, under MobX's name. Rows with several selector keys are a feature module too (see [What an app ships](#what-an-app-ships)).
+`onSettled`, `flush`, `createRoot`, `getOwner` and `runWithOwner` are Solid 2.0's, and `reaction` is its `createEffect(compute, apply)`, under MobX's name. `<Dynamic>` stays in `@reactre/core`, since it is compiled away; `dynamic()` is the runtime function beside it. Rows with several selector keys are a feature module too (see [What an app ships](#what-an-app-ships)).
 
 ## Timing
 
@@ -238,7 +239,7 @@ An app ships only what it uses. With a bundler that tree-shakes (all of the plug
 | Ownership                       | By use: `effect`, `memo`, a slot (a JSX expression that may change, `{cond() ? <A /> : <B />}`), a fragment, a row holding components, lists or slots, or `attach`. Nothing to turn on.                                |        0.3 KB | Nothing in the app needs it: with none of those, no effect is ever made inside another's run, so there is nothing to dispose.                                                                                                      |
 | Rows with several selector keys | `import "@reactre/core/features/selectors"`. The compiler adds the import itself to a file whose `<For>` row makes two or more calls with arguments in its reactive holes (`isSelected(row.id)`, `isHovered(row.id)`). |       0.16 KB | A row that reads a second selector key, or the same selector with a second key, throws an error naming the import. Only a row that reads the keys through a function of its own (`class={classes(row)}`) needs the import by hand. |
 
-Control flow is not a feature to turn on either: it compiles to slots, memos and lists (most of it holds a slot, so it brings ownership), and only `dynamic()` and the class-list helper are code of its own, in an app only where it uses them. An app with a `<Show>`, a `<For>` fallback and a class list ([`sizes.json`](sizes.json)'s `show`) is 5,962 bytes gzipped.
+Control flow is not a feature to turn on either: it compiles to slots, memos and lists (most of it holds a slot, so it brings ownership), and only the class-list helper is code of its own, in an app only where it uses one (`dynamic()` is a feature module, above). An app with a `<Show>`, a `<For>` fallback and a class list ([`sizes.json`](sizes.json)'s `show`) is 5,962 bytes gzipped.
 
 Ownership is what makes `effect` own the effects and cleanups its run makes, a slot dispose its old content, a row dispose what it holds when it leaves, and `attach` return a disposer. `onCleanup` itself costs a few bytes: called where nothing owns (at module scope, in a view given to `render`), it does nothing.
 

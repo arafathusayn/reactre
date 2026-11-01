@@ -15,6 +15,7 @@ import * as serverEdge from "@reactre/compat/server.edge";
 import * as serverNode from "@reactre/compat/server.node";
 import * as staticApi from "@reactre/compat/static";
 import * as core from "@reactre/core";
+import * as coreDynamic from "@reactre/core/features/dynamic";
 import * as coreOwner from "@reactre/core/features/owner";
 import * as coreReaction from "@reactre/core/features/reaction";
 import * as coreTiming from "@reactre/core/features/timing";
@@ -56,6 +57,7 @@ export const all: unknown[] = [
   coreOwner,
   coreTiming,
   coreReaction,
+  coreDynamic,
   jsxRuntime,
   jsxDevRuntime,
   compat,
