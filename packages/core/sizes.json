@@ -36,12 +36,12 @@
     "gzip": 5962
   },
   "store": {
-    "min": 16176,
-    "gzip": 6735
+    "min": 16470,
+    "gzip": 6827
   },
   "storeEach": {
-    "min": 16176,
-    "gzip": 6738
+    "min": 16470,
+    "gzip": 6829
   },
   "memo": {
     "min": 6555,

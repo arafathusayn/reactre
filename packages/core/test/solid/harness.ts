@@ -93,7 +93,6 @@ export const GAPS = {
   "store-in-place": "a store writes into the object it was given; Solid keeps writes beside it",
   "symbol-keys": "reconcile, a returned replacement, merge, omit and deep skip symbol keys",
   "draft-define": "Object.defineProperty on a store's draft notifies nothing",
-  "proto-guard": "a draft write or reconcile of __proto__ sets the object's prototype",
   "merge-views": "merge/omit views: function sources, one-source identity, predicates",
   "projection-chain": "a projection whose fn returns a store follows it; a projection with no seed",
   "reconcile-identity": "reconcile throws when the root's key differs from the store's",

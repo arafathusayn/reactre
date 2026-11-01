@@ -795,27 +795,22 @@ describe("createStore.test.ts", () => {
       expect(effect).toHaveBeenCalledWith("baz");
     });
 
-    gap(
-      "proto-guard",
-      "a draft write of __proto__ sets the object's prototype; Solid skips it",
-      "ignores prototype pollution keys in draft setters",
-      () => {
-        const [store, setStore] = createStore<Record<string, unknown>>({ a: 1 });
-        let inheritedConstructor: unknown;
-        setStore((s) => {
-          s["__proto__"] = { polluted_a: true };
-          inheritedConstructor = s["constructor"];
-          s["prototype"] = "value";
-          s["constructor"] = "value";
-        });
-        flush();
-        expect(store["a"]).toBe(1);
-        expect(store["prototype"]).toBe("value");
-        expect(store["constructor"]).toBe("value");
-        expect(inheritedConstructor).toBeUndefined();
-        expect(({} as Record<string, unknown>)["polluted_a"]).toBeUndefined();
-      },
-    );
+    test("ignores prototype pollution keys in draft setters", () => {
+      const [store, setStore] = createStore<Record<string, unknown>>({ a: 1 });
+      let inheritedConstructor: unknown;
+      setStore((s) => {
+        s["__proto__"] = { polluted_a: true };
+        inheritedConstructor = s["constructor"];
+        s["prototype"] = "value";
+        s["constructor"] = "value";
+      });
+      flush();
+      expect(store["a"]).toBe(1);
+      expect(store["prototype"]).toBe("value");
+      expect(store["constructor"]).toBe("value");
+      expect(inheritedConstructor).toBeUndefined();
+      expect(({} as Record<string, unknown>)["polluted_a"]).toBeUndefined();
+    });
 
     gap(
       "store-direct-write",
@@ -1342,39 +1337,34 @@ describe("shallow.test.ts", () => {
     expect(state[0]!.queries[0]).toBe(rows[0]!.queries[0]!);
   });
 
-  gap(
-    "bug",
-    "reconcile on a shallow store merges into its raw rows and re-runs no reader",
-    "reconcile replaces rows positionally and fires per-index",
-    () => {
-      const [state, setState] = createStore(makeRows(0), { shallow: true });
-      let runs0 = 0;
-      let runs2 = 0;
-      createRoot(() => {
-        reaction(
-          () => state[0],
-          () => {
-            runs0++;
-          },
-        );
-        reaction(
-          () => state[2],
-          () => {
-            runs2++;
-          },
-        );
-      });
-      flush();
-      runs0 = runs2 = 0;
-      const fresh = makeRows(1);
-      setState(reconcile(fresh, null));
-      flush();
-      expect(runs0).toBe(1);
-      expect(runs2).toBe(1);
-      expect(state[0]).toBe(fresh[0]!);
-      expect(state[0]!.count).toBe(1);
-    },
-  );
+  test("reconcile replaces rows positionally and fires per-index", () => {
+    const [state, setState] = createStore(makeRows(0), { shallow: true });
+    let runs0 = 0;
+    let runs2 = 0;
+    createRoot(() => {
+      reaction(
+        () => state[0],
+        () => {
+          runs0++;
+        },
+      );
+      reaction(
+        () => state[2],
+        () => {
+          runs2++;
+        },
+      );
+    });
+    flush();
+    runs0 = runs2 = 0;
+    const fresh = makeRows(1);
+    setState(reconcile(fresh, null));
+    flush();
+    expect(runs0).toBe(1);
+    expect(runs2).toBe(1);
+    expect(state[0]).toBe(fresh[0]!);
+    expect(state[0]!.count).toBe(1);
+  });
 
   test("setter reads serve raws; in-place mutation is reactively inert", () => {
     const [state, setState] = createStore(makeRows(0), { shallow: true });
@@ -1422,33 +1412,28 @@ describe("shallow.test.ts", () => {
     expect(state.length).toBe(2);
   });
 
-  gap(
-    "bug",
-    "reconcile on a shallow store merges into its raw values",
-    "shallow OBJECT store: per-key nodes, membership, raw values",
-    () => {
-      const a = { v: 1 };
-      const b = { v: 2 };
-      const [state, setState] = createStore<Record<string, { v?: number; z?: number }>>({ a }, { shallow: true });
-      expect(state["a"]).toBe(a);
-      let runs = 0;
-      createRoot(() => {
-        reaction(
-          () => state["a"],
-          () => {
-            runs++;
-          },
-        );
-      });
-      flush();
-      runs = 0;
-      setState(reconcile<Record<string, { v?: number; z?: number }>>({ a: b, extra: { z: 1 } }, null));
-      flush();
-      expect(runs).toBe(1);
-      expect(state["a"]).toBe(b);
-      expect(state["extra"]!.z).toBe(1);
-    },
-  );
+  test("shallow OBJECT store: per-key nodes, membership, raw values", () => {
+    const a = { v: 1 };
+    const b = { v: 2 };
+    const [state, setState] = createStore<Record<string, { v?: number; z?: number }>>({ a }, { shallow: true });
+    expect(state["a"]).toBe(a);
+    let runs = 0;
+    createRoot(() => {
+      reaction(
+        () => state["a"],
+        () => {
+          runs++;
+        },
+      );
+    });
+    flush();
+    runs = 0;
+    setState(reconcile<Record<string, { v?: number; z?: number }>>({ a: b, extra: { z: 1 } }, null));
+    flush();
+    expect(runs).toBe(1);
+    expect(state["a"]).toBe(b);
+    expect(state["extra"]!.z).toBe(1);
+  });
 });
 
 describe("storePath.test.ts", () => {

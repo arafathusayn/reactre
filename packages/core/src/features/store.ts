@@ -122,13 +122,30 @@ function readOnly(): never {
   throw new Error("reactre: a store is written through the draft its setter gives");
 }
 
+/**
+ * `t[k]`, read through a store or a draft. An inherited `__proto__` or `constructor` is
+ * undefined, as in Solid 2.0, since what it leads to (Object.prototype, Object) every object
+ * shares, and a write there would reach them all. An array's methods that read `constructor`
+ * then make plain arrays, as they do for an undefined one.
+ */
+function get(t: Obj, k: PropertyKey, r: unknown): unknown {
+  return (k === "__proto__" || k === "constructor") && !Object.hasOwn(t, k) ? undefined : Reflect.get(t, k, r);
+}
+
+/** `t[k] = v`, as an own property for `__proto__` too, whose assignment would set `t`'s prototype. */
+function put(t: Obj, k: PropertyKey, v: unknown): void {
+  if (k === "__proto__")
+    Object.defineProperty(t, k, { value: v, writable: true, enumerable: true, configurable: true });
+  else t[k] = v;
+}
+
 /** A store's proxy: reads subscribe; writes throw. */
 const read: ProxyHandler<Obj> = {
   get(t, k, r) {
     if (k === RAW) return t;
-    const v = Reflect.get(t, k, r);
+    const v = get(t, k, r);
     // Own properties are tracked, and missing ones, to see them added; the prototype's (an
-    // array's methods) are not.
+    // array's methods, an inherited `constructor`) are not.
     if (Object.hasOwn(t, k) || !(k in t)) track(t, k);
     return shallow.has(t) ? v : wrap(v, false);
   },
@@ -149,11 +166,12 @@ const read: ProxyHandler<Obj> = {
 const draft: ProxyHandler<Obj> = {
   get(t, k, r) {
     if (k === RAW) return t;
-    const v = Reflect.get(t, k, r);
+    const v = get(t, k, r);
     return shallow.has(t) ? v : wrap(v, true);
   },
   set(t, k, v) {
-    write(t, k, v);
+    // A write of `__proto__` is dropped, as in Solid 2.0: it would set the object's prototype.
+    if (k !== "__proto__") write(t, k, v);
     return true;
   },
   deleteProperty(t, k) {
@@ -168,7 +186,7 @@ function write(t: Obj, k: PropertyKey, v: unknown): void {
   const had = Object.hasOwn(t, k);
   if (had && t[k] === v) return;
   const len = Array.isArray(t) ? t.length : -1;
-  t[k] = v;
+  put(t, k, v);
   bump(t, k);
   if (!had) bump(t, KEYS);
   if (len >= 0) {
@@ -212,8 +230,12 @@ function same(o: unknown, n: unknown, key: string | null): o is Obj {
   return wrappable(o) && wrappable(n) && Array.isArray(o) === Array.isArray(n) && id(o, key) === id(n, key);
 }
 
-/** Write into `t` what differs in `v`, keeping `t`'s objects where `v` has one of the same identity. */
+/**
+ * Write into `t` what differs in `v`, keeping `t`'s objects where `v` has one of the same
+ * identity. A shallow store's values are replaced, not merged into: they are not its own.
+ */
 function diff(t: Obj, v: Obj, key: string | null): void {
+  if (shallow.has(t)) return replace(t, v);
   if (Array.isArray(t)) {
     const old = t as unknown[],
       next = v as unknown as unknown[],
@@ -236,7 +258,8 @@ function diff(t: Obj, v: Obj, key: string | null): void {
     return;
   }
   for (const k of Object.keys(v)) {
-    const o = raw(t[k]),
+    // `t`'s own value only: an own `__proto__` of `v` (JSON's) is data, not `t`'s prototype.
+    const o = raw(Object.hasOwn(t, k) ? t[k] : undefined),
       n = raw(v[k]);
     if (o !== n && same(o, n, key)) diff(o, n as Obj, key);
     else write(t, k, n);
@@ -252,7 +275,8 @@ function diff(t: Obj, v: Obj, key: string | null): void {
  * a copy of it.
  *
  * With `{ shallow: true }`, only the store's own properties are tracked, and their values are
- * returned as they are: replace them (`s.todos = [...s.todos, todo]`) to change them.
+ * returned as they are: replace them (`s.todos = [...s.todos, todo]`) to change them. `reconcile`
+ * replaces them too, by reference, rather than merging into them.
  *
  * `createStore(fn, seed)` is a derived store that can also be written: `fn` gets the draft, runs
  * tracked now and whenever what it read changes, and changes the draft or returns a new value,
@@ -351,7 +375,7 @@ function copy(v: unknown, tracked: boolean, seen: Map<object, unknown>): unknown
   const s = tracked ? wrap(t, false) : t;
   seen.set(t, (out = (Array.isArray(t) ? [] : {}) as Obj));
   if (Array.isArray(s)) for (let i = 0; i < s.length; i++) out[i] = copy(s[i], tracked, seen);
-  else for (const k of Object.keys(s)) out[k] = copy(s[k], tracked, seen);
+  else for (const k of Object.keys(s)) put(out, k, copy(s[k], tracked, seen));
   return out;
 }
 

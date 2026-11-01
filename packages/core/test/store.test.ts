@@ -408,6 +408,100 @@ describe("reconcile", () => {
     });
     expect(snapshot(s)).toEqual({ list: [{ id: 1, n: 2 }], at: 1 });
   });
+
+  test("on a shallow store, it replaces the values, by reference, and re-runs their readers", () => {
+    const first = { v: 1 };
+    const [list, setList] = createStore([first, { v: 2 }], { shallow: true });
+    const seen: unknown[] = [];
+    effect(() => void seen.push(list[0]));
+    const fresh = [{ v: 3 }];
+    setList(reconcile(fresh, null));
+    expect(seen.length).toBe(2);
+    expect(seen[0]).toBe(first);
+    expect(seen[1]).toBe(fresh[0]!);
+    expect(list[0]).toBe(fresh[0]!);
+    expect(list.length).toBe(1);
+    // The old row is the caller's still, unchanged.
+    expect(first).toEqual({ v: 1 });
+    const a = { v: 1 };
+    const [obj, setObj] = createStore<Record<string, { v: number }>>({ a, b: { v: 2 } }, { shallow: true });
+    const keys: string[][] = [];
+    effect(() => void keys.push(Object.keys(obj)));
+    const next: Record<string, { v: number }> = { a: { v: 1 }, c: { v: 3 } };
+    setObj(reconcile(next, "v"));
+    expect(obj["a"]).toBe(next.a);
+    expect(a).toEqual({ v: 1 });
+    expect(keys).toEqual([
+      ["a", "b"],
+      ["a", "c"],
+    ]);
+  });
+});
+
+describe("__proto__ and constructor", () => {
+  const polluted = (): unknown => (Object.prototype as Record<string, unknown>)["polluted"];
+
+  test("a draft write of __proto__ is dropped; constructor and prototype are own data", () => {
+    const [s, set] = createStore<Record<string, unknown>>({ a: 1 });
+    set((d) => {
+      d["__proto__"] = { polluted: true };
+      d["constructor"] = "c";
+      d["prototype"] = "p";
+    });
+    expect(Object.getPrototypeOf(s)).toBe(Object.prototype);
+    expect(s["polluted"]).toBeUndefined();
+    expect(s["constructor"]).toBe("c");
+    expect(s["prototype"]).toBe("p");
+    expect(polluted()).toBeUndefined();
+  });
+
+  test("an inherited __proto__ or constructor reads as undefined, so no write reaches Object.prototype", () => {
+    const [s, set] = createStore<{ list: number[]; o: Record<string, Record<string, unknown> | undefined> }>({
+      list: [3, 1, 2],
+      o: {},
+    });
+    expect(s.o["__proto__"]).toBeUndefined();
+    expect(s.o["constructor"]).toBeUndefined();
+    set((d) => {
+      expect(d.o["__proto__"]).toBeUndefined();
+      expect(d.o["constructor"]).toBeUndefined();
+      // Array methods that read `constructor` make plain arrays.
+      d.list = d.list.filter((n) => n > 1);
+    });
+    expect(s.list).toEqual([3, 2]);
+    expect(Array.isArray(s.list.map((n) => n))).toBe(true);
+    expect(polluted()).toBeUndefined();
+  });
+
+  test("reconcile, a returned object and snapshot keep an own __proto__ (JSON's) as data", () => {
+    const json = JSON.parse('{ "a": 2, "__proto__": { "polluted": true }, "constructor": { "x": 1 } }') as Record<
+      string,
+      unknown
+    >;
+    const [s, set] = createStore<Record<string, unknown>>({ a: 1 });
+    set(reconcile(json));
+    expect(polluted()).toBeUndefined();
+    expect(Object.getPrototypeOf(s)).toBe(Object.prototype);
+    expect(s["polluted"]).toBeUndefined();
+    expect(snapshot(s["__proto__"])).toEqual({ polluted: true });
+    expect(snapshot(s["constructor"])).toEqual({ x: 1 });
+    // Own, it is followed as any key is; reconciled again, it is merged into.
+    const own = s["__proto__"] as Record<string, unknown>;
+    const seen: unknown[] = [];
+    effect(() => void seen.push(own["polluted"]));
+    set(reconcile(JSON.parse('{ "__proto__": { "polluted": false } }')));
+    expect(s["__proto__"]).toBe(own);
+    expect(seen).toEqual([true, false]);
+    expect(polluted()).toBeUndefined();
+    const copy = snapshot(s) as Record<string, unknown>;
+    expect(Object.getPrototypeOf(copy)).toBe(Object.prototype);
+    expect(Object.hasOwn(copy, "__proto__")).toBe(true);
+    const [r, setR] = createStore<Record<string, unknown>>({});
+    setR(() => JSON.parse('{ "__proto__": { "polluted": 1 } }'));
+    expect(Object.getPrototypeOf(r)).toBe(Object.prototype);
+    expect(snapshot(r["__proto__"])).toEqual({ polluted: 1 });
+    expect(polluted()).toBeUndefined();
+  });
 });
 
 describe("snapshot and deep", () => {
