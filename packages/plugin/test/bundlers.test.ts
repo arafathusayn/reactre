@@ -175,10 +175,10 @@ describe.each(Object.keys(bundlers))("%s", (name) => {
     const file = join(out, `${name}-async.js`);
     await bundle(FIXTURES + "async/main.tsx", file, {});
     expect(await Bun.file(file).text()).toContain("NotReadyError");
-    // Bun's build resolves the core's sources, which hold the async code, off until a module
-    // turns it on. Vite and Rollup's node-resolve, under bun test (NODE_ENV=test), resolve the
-    // "development" condition, the async build, which the plugin turns into the default one.
-    if (name !== "bun") expect(await Bun.file(join(out, `${name}-core.js`)).text()).not.toContain("NotReadyError");
+    // Vite and Rollup's node-resolve, under bun test (NODE_ENV=test), resolve the "development"
+    // condition, the async build, which the plugin turns into the default one; Bun's build here
+    // resolves the core's sources, whose index.ts the plugin strips as the default build is.
+    expect(await Bun.file(join(out, `${name}-core.js`)).text()).not.toContain("NotReadyError");
 
     installFakeDocument();
     const root = new FakeElement("DIV");

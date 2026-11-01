@@ -45,9 +45,11 @@
 //     of the chosen one, so every module of the app shares one core. A program that imports
 //     neither async feature module gets the default build, which has none of the async runtime's
 //     code; one that does, the async build. Rewriting the resolved module, not the specifier,
-//     keeps each bundler's own resolution of the package (conditions, symlinks, dedupe).
+//     keeps each bundler's own resolution of the package (conditions, symlinks, dedupe). Bun
+//     resolves the core's sources (the `bun` condition), which hold that code: there the plugin
+//     strips it from index.ts as the default build does, for a program that imports neither.
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -62,7 +64,15 @@ import {
   ReactreCompileError,
 } from "@reactre/compiler";
 import type { SourceMapV3 } from "@reactre/compiler/map";
-import { analyze, type Host, type Program } from "@reactre/compiler/program";
+import {
+  analyze,
+  CORE_RUNTIME,
+  coreRuntime,
+  type Host,
+  isCore,
+  noticingAsync,
+  type Program,
+} from "@reactre/compiler/program";
 import { createUnplugin, type UnpluginInstance, type UnpluginOptions } from "unplugin";
 
 import { entrySource, offError, usedApis, writeEntry } from "./api.ts";
@@ -156,16 +166,6 @@ const NODE_MODULES = /[\\/]node_modules[\\/]/;
 /** Files that import no code: styles, data, images, fonts, media; a virtual one's too (`\0x.css`). */
 const ASSET =
   /\.(?:css|scss|sass|less|styl|stylus|pcss|postcss|json|json5|svg|png|jpe?g|gif|webp|avif|ico|bmp|tiff?|woff2?|eot|ttf|otf|mp4|webm|ogg|mp3|wav|flac|aac|txt|wasm)$/;
-
-/** @reactre/core's two builds and its async feature modules (built or source), by path. */
-const CORE_RUNTIME =
-  /[\\/]core[\\/](?:dist[\\/](?:async[\\/])?index\.js|(?:dist|src)[\\/]features[\\/](?:async|actions)\.[jt]s)$/;
-
-/** Of those, the feature modules. */
-const FEATURE = /[\\/]features[\\/](?:async|actions)\.[jt]s$/;
-
-/** The specifiers of @reactre/core's async feature modules. */
-const ASYNC_FEATURE = /^@reactre\/core\/features\/(?:async|actions)$/;
 
 /** esbuild's pluginData for a resolve the plugin asks for itself, which it then leaves alone. */
 const OWN = Symbol("@reactre/plugin");
@@ -311,7 +311,7 @@ export const reactre: UnpluginInstance<ReactreOptions | undefined, boolean> = cr
         const seen = { async: false },
           read = readBuild(this, args[0], serve);
         const build = read.then(async (b) => {
-          const program = b === null ? null : await analyze(b.entries, noticing(b.host, seen));
+          const program = b === null ? null : await analyze(b.entries, noticingAsync(b.host, seen));
           return program === null ? null : { program, host: b!.host };
         });
         programs.set(envOf(this), build);
@@ -331,30 +331,19 @@ export const reactre: UnpluginInstance<ReactreOptions | undefined, boolean> = cr
     };
     // @reactre/core's build: whichever of its two builds the bundler resolved (its export
     // conditions pick the async one for "development"), each becomes the one the build gets, so
-    // that every module has the same core; its async feature modules fail the build where that
-    // is the default one.
+    // that every module has the same core; its sources (Bun's `bun` condition) are stripped as
+    // the default build is where that is the one; its async feature modules fail the build where
+    // that is the default one.
     const runtime: UnpluginOptions = {
       name: "@reactre/plugin:runtime",
       enforce: "pre",
       transform: {
         filter: { id: { include: [CORE_RUNTIME] } },
-        async handler(_code, id) {
+        async handler(code, id) {
           const path = id.replace(/[?#].*$/, "");
           if (!isCore(path)) return null;
-          const on = await asyncRuntime(this);
-          if (!FEATURE.test(path)) {
-            const isAsync = /[\\/]async[\\/]index\.js$/.test(path);
-            if (on === isAsync) return null;
-            return { code: `export * from "${on ? "./async/index.js" : "../index.js"}";\n`, map: null };
-          }
-          if (on) return null;
-          throw new Error(
-            `reactre: ${path} needs @reactre/core's async runtime, and this build has its default build: ` +
-              (options.async === false
-                ? "the plugin's `async` option is false"
-                : "the program read at the build's start imports neither @reactre/core/features/async nor /actions") +
-              ". Import the module from one the program reaches, or set the plugin's `async` option to true.",
-          );
+          const out = await coreRuntime(path, () => code, await asyncRuntime(this), options.async === false);
+          return out === null ? null : { code: out, map: null };
         },
       },
     };
@@ -614,37 +603,6 @@ export function baseFor(importer: string | undefined, root: string, pkg: CompatP
     if (reaches(dir, pkg)) return dir;
   }
   return reaches(root, pkg) ? root : SELF;
-}
-
-/**
- * `host`, noting in `seen` whether a module of the program imports @reactre/core's async feature
- * modules, by name or by a path its resolver gives (an alias, a workspace's sources).
- */
-function noticing(host: Host, seen: { async: boolean }): Host {
-  return {
-    ...host,
-    resolve: async (spec, importer) => {
-      const r = await host.resolve(spec, importer);
-      if (ASYNC_FEATURE.test(spec) || (typeof r === "string" && FEATURE.test(r) && isCore(r))) seen.async = true;
-      return r;
-    },
-  };
-}
-
-/** Whether file `path` (CORE_RUNTIME's) is @reactre/core's: its package is named so. By package, cached. */
-const cores = new Map<string, boolean>();
-function isCore(path: string): boolean {
-  const dir = path.slice(0, path.search(/[\\/](?:dist|src)[\\/](?:(?:async[\\/])?index\.js|features[\\/])/));
-  let r = cores.get(dir);
-  if (r === undefined) {
-    try {
-      r = (JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as { name?: string }).name === "@reactre/core";
-    } catch {
-      r = false;
-    }
-    cores.set(dir, r);
-  }
-  return r;
 }
 
 function toArray(pattern: RegExp | readonly RegExp[]): RegExp[] {

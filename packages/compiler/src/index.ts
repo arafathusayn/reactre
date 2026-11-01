@@ -83,6 +83,13 @@
 //   - For a source map (`compileJsWithMap`), each piece of source carries where it starts in the
 //     input, and the output marks each token it copies with its place (./map.ts). Without a map,
 //     nothing is marked, so the code is the same either way.
+//   - @reactre/core has a default build and one with its async runtime, and its sources hold
+//     both (`// #if ASYNC` blocks). Bun.build resolves the sources for target "bun" and the async
+//     build for target "browser" outside production (the "development" condition). The plugin
+//     reads the whole program anyway, so where no module of it imports
+//     @reactre/core/features/async or /actions, it gives the app the core without that code: the
+//     default build, or the sources' index.ts stripped as that build is. Where one does, or where
+//     no program is read (`bun run`, `bun test`, `wholeProgram: false`), the async runtime.
 //
 //   Bun.build({ plugins: [reactreCompiler()], ... })
 
@@ -93,13 +100,17 @@ import type { BunPlugin } from "bun";
 import { hasMarks, mark, type SourceMapV3, unmark } from "./map.ts";
 import {
   analyze,
+  CORE_RUNTIME,
+  coreRuntime,
   type Def,
   findDefs,
   findStores,
   type Host,
+  isCore,
   isExternal,
   isFunction,
   moduleFacts,
+  noticingAsync,
   type Program,
   type PropFacts,
   propReads,
@@ -141,6 +152,16 @@ export interface ReactreCompilerOptions {
    * true. With false, or outside `Bun.build`, each file is seen alone (see `CompileOptions`).
    */
   readonly wholeProgram?: boolean;
+  /**
+   * Whether the build gets @reactre/core's async runtime, which @reactre/core/features/async and
+   * features/actions need, or its default build, which has none of that code (with the sources
+   * resolved, index.ts stripped as that build is), as @reactre/plugin's option of that name.
+   * Unset: the async runtime where the program read from the entrypoints imports either module,
+   * or where no program is read (`bun run`, `bun test`, `wholeProgram: false`); the default build
+   * where it imports neither. With the default build, loading either module fails the build,
+   * naming this option.
+   */
+  readonly async?: boolean;
 }
 
 /** A Bun loader for a script's path: tsx, ts, jsx or js. */
@@ -174,14 +195,28 @@ export function reactreCompiler(options: ReactreCompilerOptions = {}): BunPlugin
         transpile: (file, source) => transpileSource(source, loaderOf(file)),
       };
       let program: Promise<Program | null> = Promise.resolve(null);
+      // Whether the build gets the core's async runtime: by the option, else by the program.
+      let keep: Promise<boolean> = Promise.resolve(options.async ?? true);
       const entries = (build.config as { entrypoints?: string[] } | undefined)?.entrypoints;
       if (options.wholeProgram !== false && entries !== undefined)
         build.onStart(() => {
+          const seen = { async: false };
           program = analyze(
             entries.map((e) => resolve(e)),
-            host,
+            noticingAsync(host, seen),
           );
+          if (options.async === undefined) keep = program.then(() => seen.async);
         });
+      // @reactre/core's runtime, as @reactre/plugin picks it (`coreRuntime`): whichever build the
+      // conditions resolved (target "browser" resolves "development", the async one) or the
+      // sources (target "bun"), the one the build gets; an async feature module fails the build
+      // where that is the default one (one the program did not reach, a dependency's import of
+      // one, `async: false`).
+      build.onLoad({ filter: CORE_RUNTIME }, async ({ path }) => {
+        if (!isCore(path)) return undefined;
+        const out = await coreRuntime(path, () => Bun.file(path).text(), await keep, options.async === false);
+        return out === null ? undefined : { contents: out, loader: path.endsWith(".ts") ? "ts" : "js" };
+      });
       build.onLoad({ filter }, async ({ path }) => {
         if (path.includes("/node_modules/")) return undefined;
         const js = transpileSource(await Bun.file(path).text(), path.endsWith(".tsx") ? "tsx" : "jsx");

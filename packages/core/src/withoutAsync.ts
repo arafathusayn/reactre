@@ -16,7 +16,10 @@
 // symbols by how often they are used, dead code included, so the bundle's names would move.
 //
 // This module is for builds: the package's own (build.ts), its size budgets, and the benchmark
-// app's. It is not one of the package's exports.
+// app's; and @reactre/plugin's and @reactre/compiler's Bun builds, which load `stripAsync` from
+// beside the index.ts Bun resolves (the `bun` condition) for a program that imports neither
+// async module, so the markers are read by the version of the core that wrote them. It is not
+// one of the package's exports.
 
 import type { BunPlugin } from "bun";
 

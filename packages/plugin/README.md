@@ -116,9 +116,9 @@ In reactre mode, a prop that may change is passed to a component as a getter, an
 - A dev server, watch mode and `wholeProgram: false` read no program, so they get the async runtime, which is inert until one of the modules loads.
 - `async: true` or `async: false` decides it. With the default build, a module that imports either feature module fails the build, naming the option: one the program did not reach (a chunk another plugin adds) needs `async: true`.
 
-`Bun.build` resolves @reactre/core to its TypeScript sources (the `bun` condition), which hold both: there the async runtime's code ships, inert until one of the modules loads.
+`Bun.build` with target `"bun"` resolves @reactre/core to its TypeScript sources (the `bun` condition), which hold both: for a program that imports neither module, the plugin loads their `index.ts` with the async runtime's code stripped, as the default build is, so a Bun bundle ships none of it either. With target `"browser"`, Bun resolves a build, which the plugin picks as above. The compiler's own Bun plugin (`reactreCompiler()` from [@reactre/compiler](https://www.npmjs.com/package/@reactre/compiler)) picks the same way, with the same `async` option.
 
-Without the plugin, the export condition `"reactre-async"` resolves `@reactre/core` to its async build, and `"development"` does too. Bun runs the sources, which hold both.
+Without the plugin, the export condition `"reactre-async"` resolves `@reactre/core` to its async build, and `"development"` does too. `bun run` and `bun test` read no program and run the sources as they are: the async runtime's code is there, and its checks in a write, a batch and an effect's run with it, but it does nothing until one of the modules loads.
 
 ### Switching React APIs off
 

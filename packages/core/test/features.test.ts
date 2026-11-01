@@ -40,9 +40,11 @@
 //   actions    features/actions (actions, optimistic values). They need the core's async code,
 //              which sits between `// #if ASYNC` markers in index.ts: every other profile is
 //              bundled with it stripped (src/withoutAsync.ts), as the default build is, and is
-//              the same bytes as before it existed. The "async" and "actions" profiles are
-//              bundled with it, as @reactre/plugin bundles a program that imports either
-//              module; with it stripped, importing either throws, naming the fix.
+//              the same bytes as before it existed. The compiler's Bun plugin strips it itself,
+//              as it reads a program that imports neither module, so the profiles measure what
+//              a Bun.build of each app ships. The "async" and "actions" profiles are bundled
+//              with it, as both plugins bundle a program that imports either module; with it
+//              stripped, importing either throws, naming the fix.
 //
 // The size profiles (../sizes.json), one app each:
 //   jfb       the js-framework-benchmark app (apps/jfb/app/reactre.tsx): no opt-in at all.
@@ -84,9 +86,11 @@ const budgets = Bun.fileURLToPath(new URL("../sizes.json", import.meta.url));
 
 /**
  * Bundle `src`, a TSX module body with `root` in scope: minified, or not to read its code. The
- * core is its default build (index.ts without its async code), or with `async`, its async build.
+ * compiler's Bun plugin picks the core's runtime as it reads the program: index.ts without its
+ * async code (as the default build is) for an app that imports neither async module, as it is
+ * for one that does. With `stripped`, the core is stripped whatever the app imports.
  */
-async function bundle(name: string, src: string, minify = true, async = false): Promise<string> {
+async function bundle(name: string, src: string, minify = true, stripped = false): Promise<string> {
   const entry = `${scratch}/${name}.tsx`;
   await Bun.write(entry, src);
   const r = await Bun.build({
@@ -96,7 +100,8 @@ async function bundle(name: string, src: string, minify = true, async = false): 
     target: "browser",
     // The packages' sources, as the repository's own builds resolve them.
     conditions: ["reactre-source"],
-    plugins: async ? [reactreCompiler()] : [reactreCompiler(), withoutAsync],
+    // Bun loads a file with the first plugin's onLoad that returns it.
+    plugins: stripped ? [withoutAsync, reactreCompiler()] : [reactreCompiler()],
   });
   if (!r.success) throw new Error(r.logs.join("\n"));
   return r.outputs[0]!.text();
@@ -627,16 +632,16 @@ describe("async and actions", () => {
 
   test("off: importing either module with the default build throws, naming the fix", async () => {
     for (const name of ["async", "actions"] as const) {
-      const code = await bundle(name, apps[name]);
+      const code = await bundle(name, apps[name], true, true);
       expect(() => run(code)).toThrow(`@reactre/core/features/${name} needs @reactre/core's async runtime`);
       expect(() => run(code)).toThrow('"reactre-async" export condition');
     }
   });
 
   test("async: the fallback, then the children; an update keeps the old UI, dimmed, until it settles", async () => {
-    const code = await bundle("async", apps.async, false, true);
+    const code = await bundle("async", apps.async, false);
     expect(code).toContain("class Computed");
-    const { root, api } = run(await bundle("async", apps.async, true, true));
+    const { root, api } = run(await bundle("async", apps.async));
     expect(text(root)).toBe("wait");
     api.next!();
     await tick();
@@ -650,7 +655,7 @@ describe("async and actions", () => {
   });
 
   test("actions: an optimistic write shows at once and reverts when the action ends", async () => {
-    const { root, api } = run(await bundle("actions", apps.actions, true, true));
+    const { root, api } = run(await bundle("actions", apps.actions));
     expect(text(root)).toBe("0");
     const done = api.like!() as Promise<void>;
     expect(text(root)).toBe("1");
@@ -695,8 +700,8 @@ describe("sizes", () => {
       "props",
     ] as const)
       measure(name, await bundle(name, apps[name]));
-    // With the core's async build, as @reactre/plugin bundles a program that imports them.
-    for (const name of ["async", "actions"] as const) measure(name, await bundle(name, apps[name], true, true));
+    // With the core's async code, as both plugins bundle a program that imports them.
+    for (const name of ["async", "actions"] as const) measure(name, await bundle(name, apps[name]));
     if (process.env.UPDATE_SIZES) {
       await Bun.write(budgets, JSON.stringify(sizes, null, 2) + "\n");
       return;
