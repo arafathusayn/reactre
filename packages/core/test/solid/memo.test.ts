@@ -662,33 +662,28 @@ describe("createMemo.test.ts", () => {
       expect(downstreamRuns).toBe(2);
     });
 
-    gap(
-      "bug",
-      "reaction's compute reading latest() is held by the transition",
-      "should should show pending state in graph",
-      async () => {
-        const [s, set] = signal(1);
-        let res = null as number | null;
-        const async1 = mock(() => Promise.resolve(s()));
-        createRoot(() => {
-          const a = asyncApi.memo(async1);
-          reaction(
-            () => latest(s),
-            (v) => {
-              res = v;
-            },
-          );
-          reaction(a, () => {}); // ensure re-compute
-        });
-        await tick();
-        expect(res).toBe(1);
-        set(2);
-        flush();
-        expect(res).toBe(2);
-        await tick();
-        expect(res).toBe(2);
-      },
-    );
+    test("should should show pending state in graph", async () => {
+      const [s, set] = signal(1);
+      let res = null as number | null;
+      const async1 = mock(() => Promise.resolve(s()));
+      createRoot(() => {
+        const a = asyncApi.memo(async1);
+        reaction(
+          () => latest(s),
+          (v) => {
+            res = v;
+          },
+        );
+        reaction(a, () => {}); // ensure re-compute
+      });
+      await tick();
+      expect(res).toBe(1);
+      set(2);
+      flush();
+      expect(res).toBe(2);
+      await tick();
+      expect(res).toBe(2);
+    });
 
     test("should should show pending state outside of graph", async () => {
       const [s, set] = signal(1);
@@ -707,37 +702,32 @@ describe("createMemo.test.ts", () => {
       expect(latest(s)).toBe(2);
     });
 
-    gap(
-      "bug",
-      "reaction's compute reading latest() is held by the transition",
-      "should track pending value changes for loading indicator pattern",
-      async () => {
-        const [id, setId] = signal(0);
-        const data = asyncApi.memo(() => Promise.resolve("D" + id()));
-        const effectFn = mock();
+    test("should track pending value changes for loading indicator pattern", async () => {
+      const [id, setId] = signal(0);
+      const data = asyncApi.memo(() => Promise.resolve("D" + id()));
+      const effectFn = mock();
 
-        createRoot(() => {
-          reaction(data, () => {}); // ensure re-compute
-          reaction(
-            () => latest(id),
-            (pendingVal) => {
-              effectFn(pendingVal);
-            },
-          );
-        });
+      createRoot(() => {
+        reaction(data, () => {}); // ensure re-compute
+        reaction(
+          () => latest(id),
+          (pendingVal) => {
+            effectFn(pendingVal);
+          },
+        );
+      });
 
-        await tick();
-        expect(effectFn).toHaveBeenLastCalledWith(0);
+      await tick();
+      expect(effectFn).toHaveBeenLastCalledWith(0);
 
-        setId(1);
-        flush();
-        // During the transition, latest(id) is the new value.
-        expect(effectFn).toHaveBeenLastCalledWith(1);
+      setId(1);
+      flush();
+      // During the transition, latest(id) is the new value.
+      expect(effectFn).toHaveBeenLastCalledWith(1);
 
-        await tick();
-        expect(effectFn).toHaveBeenLastCalledWith(1);
-      },
-    );
+      await tick();
+      expect(effectFn).toHaveBeenLastCalledWith(1);
+    });
 
     test("should resolve to a value with resolveAsync", async () => {
       const [s, set] = signal(1);

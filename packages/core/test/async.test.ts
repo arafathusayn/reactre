@@ -16,6 +16,7 @@ import * as asyncApi from "../src/features/async.ts";
 import { __hooks, isPending, latest, memo, NotReadyError, refresh, resolve } from "../src/features/async.ts";
 import * as context from "../src/features/context.ts";
 import * as errors from "../src/features/errors.ts";
+import { reaction } from "../src/features/reaction.ts";
 import * as core from "../src/index.ts";
 import { batch, effect, signal } from "../src/index.ts";
 
@@ -581,6 +582,49 @@ describe("isPending, latest, resolve, refresh", () => {
     const d = deferred<number>();
     const m = memo(() => d.p);
     expect(() => latest(() => m())).toThrow(NotReadyError);
+  });
+
+  test("a reaction whose compute reads through latest or isPending is not held; one that does not is", async () => {
+    const [s, setS] = signal(1);
+    const [on, setOn] = signal(false);
+    const ds = [deferred<number>(), deferred<number>(), deferred<number>()];
+    const a = memo(() => ds[s() - 1]!.p);
+    effect(() => void a());
+    const log: string[] = [];
+    reaction(
+      () => latest(s),
+      (v) => void log.push(`latest ${v}`),
+    );
+    reaction(
+      () => isPending(() => a()),
+      (v) => void log.push(`pending ${v}`),
+    );
+    reaction(
+      () => s(),
+      (v) => void log.push(`held ${v}`),
+    );
+    // Live from the run in which its compute first reads through latest, in a transition too.
+    reaction(
+      () => (on() ? latest(s) : 0),
+      (v) => void log.push(`later ${v}`),
+    );
+    ds[0]!.ok(1);
+    await tick();
+    log.length = 0;
+    setS(2);
+    expect(log).toEqual(["latest 2", "pending true"]);
+    ds[1]!.ok(2);
+    await tick();
+    expect(log.sort()).toEqual(["held 2", "latest 2", "pending false", "pending true"]);
+    log.length = 0;
+    batch(() => {
+      setOn(true);
+      setS(3);
+    });
+    expect(log.sort()).toEqual(["later 3", "latest 3", "pending true"]);
+    ds[2]!.ok(3);
+    await tick();
+    expect(log.sort()).toEqual(["held 3", "later 3", "latest 3", "pending false", "pending true"]);
   });
 
   test("resolve: the first value read with nothing pending; a failure rejects", async () => {

@@ -1056,48 +1056,43 @@ describe("signals/tests/createLoadingBoundary.test.ts", () => {
 });
 
 describe("signals/tests/latest-async.test.ts", () => {
-  gap(
-    "bug",
-    "reaction(() => isPending(...), apply): the transition holds apply, so it never sees true",
-    "latest(asyncMemo) settles to the resolved value and re-reports pending on each refresh (#2829)",
-    async () => {
-      const [count, setCount] = signal(0);
-      const gate = { current: deferred<void>() };
-      const latestLog: unknown[] = [];
-      const pendingLog: boolean[] = [];
-      createRoot(() => {
-        const asyncValue = memo(async () => {
-          const c = count();
-          await gate.current.p;
-          return `AV${c}`;
-        });
-        reaction(
-          () => latest(asyncValue),
-          (v) => void latestLog.push(v),
-        );
-        reaction(
-          () => isPending(() => latest(asyncValue)),
-          (v) => void pendingLog.push(v),
-        );
+  test("latest(asyncMemo) settles to the resolved value and re-reports pending on each refresh (#2829)", async () => {
+    const [count, setCount] = signal(0);
+    const gate = { current: deferred<void>() };
+    const latestLog: unknown[] = [];
+    const pendingLog: boolean[] = [];
+    createRoot(() => {
+      const asyncValue = memo(async () => {
+        const c = count();
+        await gate.current.p;
+        return `AV${c}`;
       });
-      flush();
-      expect(latestLog).toEqual([]);
-      gate.current.ok();
-      await settle();
-      expect(latestLog.at(-1)).toBe("AV0");
-      expect(pendingLog.at(-1)).toBe(false);
-      gate.current = deferred<void>();
-      setCount(1);
-      flush();
-      expect(pendingLog.at(-1)).toBe(true);
-      expect(latestLog.at(-1)).toBe("AV0");
-      gate.current.ok();
-      await settle();
-      expect(latestLog.at(-1)).toBe("AV1");
-      expect(pendingLog.at(-1)).toBe(false);
-      expect(latestLog).not.toContain(undefined);
-    },
-  );
+      reaction(
+        () => latest(asyncValue),
+        (v) => void latestLog.push(v),
+      );
+      reaction(
+        () => isPending(() => latest(asyncValue)),
+        (v) => void pendingLog.push(v),
+      );
+    });
+    flush();
+    expect(latestLog).toEqual([]);
+    gate.current.ok();
+    await settle();
+    expect(latestLog.at(-1)).toBe("AV0");
+    expect(pendingLog.at(-1)).toBe(false);
+    gate.current = deferred<void>();
+    setCount(1);
+    flush();
+    expect(pendingLog.at(-1)).toBe(true);
+    expect(latestLog.at(-1)).toBe("AV0");
+    gate.current.ok();
+    await settle();
+    expect(latestLog.at(-1)).toBe("AV1");
+    expect(pendingLog.at(-1)).toBe(false);
+    expect(latestLog).not.toContain(undefined);
+  });
 });
 
 describe("signals/tests/resolve.test.ts", () => {
