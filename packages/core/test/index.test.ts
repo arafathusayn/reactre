@@ -561,6 +561,37 @@ describe("reactre: compiler coverage", () => {
     expect(em!.getAttribute("data-y")).toBe("2");
   });
 
+  test("a spread's string in an inline handler attribute, in any case, is left out: it would run as code", () => {
+    const root = box();
+    const api = run<{ setP: (p: Record<string, unknown>) => void; clicks: () => number }>(
+      `
+      import { render, signal } from "@reactre/core";
+      let clicks = 0;
+      const p0 = { onclick: "alert(1)", ONCLICK: "x", OnFocus: "y", onerror: "z", onError: "w", onClick: () => clicks++, title: "t", one: "1", online: "2" };
+      const [p, setP] = signal(p0);
+      render(() => <div><em {...p()} /><my-el {...p0} /></div>, root);
+      return { setP, clicks: () => clicks };
+    `,
+      root,
+    );
+    const em = (root.firstChild as FakeElement).firstChild as FakeElement;
+    // An element and a custom element alike: what it has as a handler property is left out, and
+    // another on... name is an attribute.
+    for (const el of [em, em.nextSibling as FakeElement]) {
+      for (const k of ["onclick", "ONCLICK", "OnFocus", "onfocus", "onerror", "onError"])
+        expect(el.getAttribute(k)).toBeNull();
+      expect([el.getAttribute("title"), el.getAttribute("one"), el.getAttribute("online")]).toEqual(["t", "1", "2"]);
+    }
+    // A function still listens, in camelCase.
+    click(em);
+    expect(api.clicks()).toBe(1);
+    // A string in camelCase does not listen either, and null still removes an attribute.
+    api.setP({ onClick: "alert(2)", onclick: null, title: null });
+    click(em);
+    expect(api.clicks()).toBe(1);
+    expect(em.getAttribute("title")).toBeNull();
+  });
+
   test("style objects, refs, and checked and value as properties", () => {
     const root = box();
     const api = run<{

@@ -426,16 +426,52 @@ export function __ssrStyle(v: unknown): string {
 }
 
 /**
- * Internal: spread props as attributes, as `__spread` applies them on the client: handlers, refs,
- * `children` and `key` are left out, `className` is `class`, `htmlFor` is `for`, `style` takes an
- * object, and a later prop of a name wins. A key that is not one attribute name (empty, or with
- * whitespace, a quote, `<`, `>`, `/`, `=` or a control character) is left out, as Solid 2.0 leaves
- * it: written, it could end the tag and start markup of its own.
+ * The inline event-handler attributes a browser runs as code: the HTML standard's
+ * GlobalEventHandlers, WindowEventHandlers and DocumentAndElementEventHandlers, with those of
+ * pointer, touch, animation, transition, fullscreen and selection events, SVG's own and a few
+ * browsers have alone. The client asks the element (`name in node`); the server, with no element,
+ * asks this list.
+ */
+const HANDLERS = new Set(
+  (
+    "abort afterprint animationcancel animationend animationiteration animationstart auxclick " +
+    "activate begin beforecopy beforecut beforeinput beforematch beforepaste beforeprint " +
+    "beforetoggle beforeunload beforexrselect blur cancel canplay canplaythrough change click " +
+    "close command contentvisibilityautostatechange contextlost contextmenu contextrestored copy " +
+    "cuechange cut dblclick drag dragend dragenter dragexit dragleave dragover dragstart drop " +
+    "durationchange emptied end ended error focus focusin focusout formdata fullscreenchange " +
+    "fullscreenerror gotpointercapture hashchange input invalid keydown keypress keyup " +
+    "languagechange load loadeddata loadedmetadata loadend loadstart lostpointercapture message " +
+    "messageerror mousedown mouseenter mouseleave mousemove mouseout mouseover mouseup mousewheel " +
+    "offline online pagehide pagereveal pageshow pageswap paste pause play playing pointercancel " +
+    "pointerdown pointerenter pointerleave pointermove pointerout pointerover pointerrawupdate " +
+    "pointerup popstate progress ratechange rejectionhandled repeat reset resize scroll scrollend " +
+    "scrollsnapchange scrollsnapchanging search securitypolicyviolation seeked seeking select " +
+    "selectionchange selectstart show slotchange stalled storage submit suspend timeupdate toggle " +
+    "touchcancel touchend touchmove touchstart transitioncancel transitionend transitionrun " +
+    "transitionstart unhandledrejection unload volumechange waiting webkitanimationend " +
+    "webkitanimationiteration webkitanimationstart webkitfullscreenchange webkitfullscreenerror " +
+    "webkittransitionend wheel zoom"
+  )
+    .split(" ")
+    .map((n) => "on" + n),
+);
+
+/**
+ * Internal: spread props as attributes, as `__spread` applies them on the client: handlers
+ * (`onClick`), refs, `children` and `key` are left out, and so is an inline event-handler
+ * attribute (`onclick`, `ONCLICK`, `onerror`), whatever its value: a string there would run as
+ * code. Another key that starts with `on` (`one`, `online`) is an attribute like any other.
+ * `className` is `class`, `htmlFor` is `for`, `style` takes an object, and a later prop of a name
+ * wins. A key that is not one attribute name (empty, or with whitespace, a quote, `<`, `>`, `/`,
+ * `=` or a control character) is left out, as Solid 2.0 leaves it: written, it could end the tag
+ * and start markup of its own.
  */
 export function __ssrAttrs(v: unknown): string {
   const attrs = new Map<string, string>();
   for (const [k, x] of Object.entries((v ?? {}) as Record<string, unknown>)) {
-    if (k === "children" || k === "key" || k === "ref" || /^on[A-Z]/.test(k) || k === "" || NOT_NAME.test(k)) continue;
+    if (k === "children" || k === "key" || k === "ref" || /^on[A-Z]/.test(k) || HANDLERS.has(k.toLowerCase())) continue;
+    if (k === "" || NOT_NAME.test(k)) continue;
     const name = k === "className" ? "class" : k === "htmlFor" ? "for" : k;
     attrs.set(name, name === "style" ? __ssrStyle(x) : name === "class" ? __ssrClass(x) : __ssrAttr(x, name));
   }

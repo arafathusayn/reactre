@@ -1908,13 +1908,27 @@ function prop(el: Element, k: string, v: unknown, old: unknown): void {
     (el as unknown as Record<string, unknown>)[k] = v;
     return;
   }
+  // A string in an inline event-handler attribute (`onclick`, `ONCLICK`: one the element has as a
+  // property) is code the page would run: from data spread onto an element, a script injected. It
+  // is left out; null and false still remove one, and another `on...` name (`one`) is an attribute.
+  if (typeof v === "string" && /^on/i.test(k) && k.toLowerCase() in el) {
+    // #if DEV
+    warn(
+      "STRING_HANDLER",
+      el,
+      `the spread prop ${k} was given a string, which would run as an inline handler, so it is left out`,
+      `to listen, pass a function as on${k.charAt(2).toUpperCase()}${k.slice(3).toLowerCase()}; to keep the text, put it in a data- attribute`,
+    );
+    // #endif
+    return;
+  }
   // #if DEV
   if (typeof v === "function" && /^on[a-z]/.test(k))
     warn(
       "ATTRIBUTE_HANDLER",
       el,
       `the spread prop ${k} was given a function, which becomes the text of an attribute`,
-      `to listen, write it in camelCase (on${k.charAt(2).toUpperCase()}${k.slice(3)}); an attribute takes a string`,
+      `to listen, write it in camelCase (on${k.charAt(2).toUpperCase()}${k.slice(3)})`,
     );
   // #endif
   const name = k === "className" ? "class" : k === "htmlFor" ? "for" : k;

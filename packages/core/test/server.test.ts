@@ -847,11 +847,10 @@ describe("the names the server writes", () => {
     for (const k of INJECTIONS)
       for (const v of ["v", true, 0, { a: 1 }, ["a"]])
         expect(server.__ssrAttrs({ [k]: v, "data-ok": "1" })).toBe(' data-ok="1"');
-    // The names an element takes: data, aria, namespaced, custom, non-ASCII; and a handler
-    // written in lowercase, an attribute on the client too, its value escaped.
-    expect(
-      server.__ssrAttrs({ "data-x": 1, "aria-label": "l", "xlink:href": "#a", "x.y": "", é: "e", onclick: '"><b>' }),
-    ).toBe(' data-x="1" aria-label="l" xlink:href="#a" x.y="" é="e" onclick="&quot;&gt;&lt;b&gt;"');
+    // The names an element takes: data, aria, namespaced, custom, non-ASCII.
+    expect(server.__ssrAttrs({ "data-x": 1, "aria-label": "l", "xlink:href": "#a", "x.y": "", é: "e" })).toBe(
+      ' data-x="1" aria-label="l" xlink:href="#a" x.y="" é="e"',
+    );
     // Compiled: the spread the port's test writes, through the server compile.
     const api = ssr<{ App: () => unknown }>(`
       const props = { ${INJECTIONS.map((k, i) => `${JSON.stringify(k)}: ${i % 2 === 0 ? `"v"` : "true"}`).join(", ")}, "data-ok": "1" };
@@ -859,6 +858,36 @@ describe("the names the server writes", () => {
       return { App };
     `);
     expect(server.renderToString(api.App)).toBe('<div data-ok="1" title="t"></div>');
+  });
+
+  test("a spread's handlers and inline handler attributes are left out, in any case and whatever their value", () => {
+    const h = (): void => {};
+    expect(
+      server.__ssrAttrs({
+        onclick: "alert(1)",
+        ONCLICK: "x",
+        OnFocus: "y",
+        onerror: "z",
+        onError: "w",
+        onClick: h,
+        onload: h,
+        onpointerdown: "p",
+        ononline: "o",
+        onCustom: h,
+        title: "t",
+      }),
+    ).toBe(' title="t"');
+    // Another key that starts with on is an attribute like any other.
+    expect(server.__ssrAttrs({ one: "1", online: "2", on: "3", onx: "4" })).toBe(' one="1" online="2" on="3" onx="4"');
+    // Compiled, onto an element and a custom element.
+    const api = ssr<{ App: () => unknown }>(`
+      const props = { onclick: "alert(1)", ONCLICK: "x", onError: "e", onClick: () => {}, one: "1", online: "2", "data-ok": "1" };
+      const App = () => <div><div {...props} /><my-el {...props} /></div>;
+      return { App };
+    `);
+    expect(server.renderToString(api.App)).toBe(
+      '<div><div one="1" online="2" data-ok="1"></div><my-el one="1" online="2" data-ok="1"></my-el></div>',
+    );
   });
 
   test("a tag that is not one element name throws, on every render: __ssrElement, <Dynamic> and dynamic()", () => {

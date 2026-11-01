@@ -119,16 +119,31 @@ describe("diagnostics", () => {
     expect(codes()).toEqual(["ATTRIBUTE_HANDLER"]);
     expect(String(warns.mock.calls[0]![0])).toContain("(onClick)");
     // A spread handler in camelCase, and an element's own onclick (set as its property, which
-    // listens), are as they should be; beside a spread, an element's props go with it.
+    // listens), are as they should be; beside a spread, an element's props go with it. A string
+    // handler is left out, with a warning of its own on each element.
     warns.mockClear();
     run(`
       import { render } from "@reactre/core";
       const h = () => {};
-      const props = { onClick: h, onmouseover: "x" };
+      const props = { onClick: h, onfocus: "x" };
       render(() => <div><button onclick={h}>a</button><a {...props} /><i onclick={h} {...props} /></div>, root);
       return {};
     `);
-    expect(codes()).toEqual(["ATTRIBUTE_HANDLER"]);
+    expect(codes().sort()).toEqual(["ATTRIBUTE_HANDLER", "STRING_HANDLER", "STRING_HANDLER"]);
+  });
+
+  test("STRING_HANDLER: a string in an inline handler attribute of a spread, which is left out", () => {
+    run(`
+      import { render } from "@reactre/core";
+      const props = { onclick: "alert(1)", title: "t", one: "1", online: "2" };
+      const upper = { ONCLICK: "x" };
+      render(() => <div><a {...props} /><b {...upper} /></div>, root);
+      return {};
+    `);
+    expect(codes()).toEqual(["STRING_HANDLER", "STRING_HANDLER"]);
+    expect(String(warns.mock.calls[0]![0])).toContain("pass a function as onClick");
+    expect(String(warns.mock.calls[1]![0])).toContain("the spread prop ONCLICK");
+    expect(String(warns.mock.calls[1]![0])).toContain("pass a function as onClick");
   });
 
   test("FUNCTION_AS_TEXT: a function in a text hole, written once or bound, or in a slot", () => {
