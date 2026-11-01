@@ -19,6 +19,11 @@
 //              nothing that runs without it: an app that does not import them ships the same
 //              code as before. `createRoot` and `reaction` bring ownership, as `attach` and
 //              `effect` do.
+//   control    <Show>, <Switch>, <Repeat>, <Portal>, <Dynamic>, a <For>'s fallback, class
+//   flow       objects and arrays: compiled to slots, memos and lists, with no opt-in and no
+//              runtime of their own (only `dynamic()` and `__class` run, imported when used).
+//              The "show" profile is an app that uses some; the others use none, and are the
+//              same bytes as before control flow existed.
 //
 // The size profiles (../sizes.json), one app each:
 //   jfb       the js-framework-benchmark app (apps/jfb/app/reactre.tsx): no opt-in at all.
@@ -29,6 +34,7 @@
 //   root      `createRoot` around a `render`, with `getOwner` and `runWithOwner`.
 //   settled   `onSettled` in a slot's content, rendered in a `flush(fn)`.
 //   reaction  `reaction` beside a `render`.
+//   show      a <Show> whose child reads an accessor, a <For> with a fallback, a class list.
 //
 // The size budgets live in ../sizes.json. When a change is worth its bytes, record the new sizes:
 //
@@ -117,6 +123,22 @@ const apps = {
     const [n, setN] = signal(0);
     const dispose = attach(() => <p>{n()}</p>, root);
     globalThis.api = { setN, dispose };
+  `,
+  /** Control flow: a <Show> whose child reads an accessor, a <For> with a fallback, a class list. */
+  show: `
+    import { For, render, Show, signal } from "@reactre/core";
+    const [rows, setRows] = signal([]);
+    const [user, setUser] = signal(null);
+    function App() {
+      return (
+        <div>
+          <Show when={user()} fallback={<p>out</p>}>{(u) => <p class={["user", { admin: true }]}>{u().name}</p>}</Show>
+          <ul><For each={rows()} key={(r) => r} fallback={<li>none</li>}>{(r) => <li>{r}</li>}</For></ul>
+        </div>
+      );
+    }
+    render(App, root);
+    globalThis.api = { setRows, setUser };
   `,
   /** A row that reads two selectors through a function of its own, which the compiler cannot see. */
   hidden: `
@@ -323,6 +345,20 @@ describe("owner and timing APIs", () => {
   });
 });
 
+describe("control flow", () => {
+  test("an app's <Show> and <For> fallback follow its signals once bundled", async () => {
+    const { root, api } = run(await bundle("show", apps.show));
+    expect(text(root)).toBe("outnone");
+    api.setUser!({ name: "ann" });
+    api.setRows!([1, 2]);
+    expect(text(root)).toBe("ann12");
+    expect(((root.firstChild as FakeElement).firstChild as FakeElement).getAttribute("class")).toBe("user admin");
+    api.setUser!(null);
+    api.setRows!([]);
+    expect(text(root)).toBe("outnone");
+  });
+});
+
 describe("sizes", () => {
   test("each profile stays within its gzip budget", async () => {
     const jfb = Bun.fileURLToPath(new URL("../../../apps/jfb/app/reactre.tsx", import.meta.url));
@@ -331,7 +367,7 @@ describe("sizes", () => {
       (sizes[name] = { min: code.length, gzip: gzipSync(code, { level: 9 }).length });
     // The benchmark app: what an app with no opt-in ships.
     measure("jfb", await bundle("jfb", await Bun.file(jfb).text()));
-    for (const name of ["plain", "slot", "attach", "imported", "root", "settled", "reaction"] as const)
+    for (const name of ["plain", "slot", "attach", "imported", "root", "settled", "reaction", "show"] as const)
       measure(name, await bundle(name, apps[name]));
     if (process.env.UPDATE_SIZES) {
       await Bun.write(budgets, JSON.stringify(sizes, null, 2) + "\n");

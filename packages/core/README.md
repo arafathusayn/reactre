@@ -63,6 +63,61 @@ A row can also hold components, nested `<For>` lists and JSX expressions. They b
 
 Elements take what React's do: fragments, spread props, `style` as an object or a string, `ref` (a function or an object with `current`), SVG, `value`, `checked` and `selected` as properties, and `key`, which outside `<For>` rebuilds the element when it changes. A handler expression that reads a signal (`onClick={editing() ? save : edit}`) follows it.
 
+## Control flow and elements
+
+`<Show>`, `<Switch>` and `<Match>`, `<Repeat>`, `<Portal>` and `<Dynamic>` come from `@reactre/core` and are compiled away, into the slots, memos and lists the compiler already writes. An app that uses none of them ships none of them, and one that does ships no runtime of theirs. The compiler recognizes them by their import from `@reactre/core` (under any name, or through `import * as`), so a component of your own named `Switch` stays yours.
+
+```tsx
+import { Dynamic, For, Match, Portal, Repeat, Show, Switch } from "@reactre/core";
+
+const Page = () => (
+  <main>
+    <Show when={user()} fallback={<a href="/login">Sign in</a>}>
+      {(u) => <p>Hello, {u().name}</p>}
+    </Show>
+    <Switch fallback={<p>Not found</p>}>
+      <Match when={route() === "home"}>
+        <Home />
+      </Match>
+      <Match when={route() === "settings"}>
+        <Settings />
+      </Match>
+    </Switch>
+    <ul>
+      <For each={todos()} key={(t) => t.id} fallback={<li>Nothing to do</li>}>
+        {(t) => <li>{t.title}</li>}
+      </For>
+    </ul>
+    <ol>
+      <Repeat count={stars()}>{(i) => <li>Star {i + 1}</li>}</Repeat>
+    </ol>
+    <Dynamic component={big() ? "h1" : "h2"} class="title">
+      Today
+    </Dynamic>
+    <Show when={open()}>
+      <Portal>
+        <div class="modal">Saved</div>
+      </Portal>
+    </Show>
+  </main>
+);
+```
+
+- `<Show when fallback>` shows its children while `when` is truthy, else `fallback`. They are built when `when` turns truthy and taken down, effects and cleanups included, when it turns falsy; a new truthy value does not rebuild them. A function child gets an accessor of the value (`u()`), which follows it. With `keyed`, every new value rebuilds the children, and a function child gets the value itself (`(u) => u.name`).
+- `<Switch fallback>` shows its first `<Match when>` whose `when` is truthy, and rebuilds only when another match becomes the first. The conditions are read in order, up to the first truthy one. `<Match>` takes `keyed` and function children as `<Show>` does.
+- `<For>` takes a `fallback`, shown while `each` is empty.
+- `<Repeat count from>` is a row per index, from `from` (0 by default) to `from + count - 1`: a keyed `<For>` over the indexes, so a row is built once per index and kept while the count keeps it. It takes a `fallback` too.
+- `<Portal mount>` puts its children at the end of `mount` (`document.body` by default, read once) and takes them out when what holds it goes away: a `<Show>` that hides it, a row that leaves, `attach`'s disposer.
+- `<Dynamic component>` renders a component, called with the other props, or for a tag name, that element with them (applied as spread props, so they follow what they read); null renders nothing. A `component` that reads a signal rebuilds it when it changes, and a tag written as a string (`component="h1"`) compiles as if the element were written out. `dynamic(() => source())` is the same as a component of its own, to name or hand on.
+
+`<For>` and `<Repeat>` render into their parent element, so they stand as an element's child, not directly inside a fragment, a `<Show>` or a `<Switch>` (wrap them in the element they fill). A `<Match>` stands only in a `<Switch>`. What the compiler cannot compile is a compile error that says so.
+
+Elements take a few things beyond React's:
+
+- `class` takes an object or an array written in place: `class={{ active: on(), done: todo.done }}` toggles each key's class while its value is truthy, and `class={["btn", size(), { active: on() }]}` joins its items, leaving out what is falsy. The classes the compiler can see (`"btn"`, `{ big: true }`) join the template; an object's other keys become `classList` toggles, so classes added by other code stay; a list with an item it cannot see into (`size()`) is one string, through a small helper only that file imports. The lists are taken apart by their syntax: one held in a variable goes inside an array, `class={[classes]}`.
+- `ref={[a, b]}` gives the element to each ref (a `null` one is skipped). A directive is a function that returns a ref: `ref={tooltip("Save")}`.
+- `defaultValue`, `defaultChecked`, `defaultSelected` and `defaultMuted` set the property of their name: the initial value a form's reset goes back to, which the user's edits leave alone.
+
 TSX is compiled at build time by [`@reactre/plugin`](https://www.npmjs.com/package/@reactre/plugin), for Vite, Rollup, Rolldown, esbuild, webpack, Rspack and Bun:
 
 ```sh
@@ -91,9 +146,10 @@ For TypeScript, point the JSX types at `@reactre/core`:
 
 TypeScript then reads `@reactre/core/jsx-runtime`'s JSX namespace: every HTML and SVG element with its attributes, `on*` handlers typed by their event (`onClick` gets a `MouseEvent`, `onKeyDown` a `KeyboardEvent`), and `<For>`, whose rows take the type of `each`. The types follow what the compiler compiles:
 
-- `class` (or `className`) takes a string; `style` takes a string or an object of CSS properties (a number gets no unit).
+- `class` (or `className`) takes a string, or a class object or array written in place; `style` takes a string or an object of CSS properties (a number gets no unit).
 - An attribute or a child takes a value, not a function: `{count()}` updates, while `{count}` is an error, since it would be written once as text.
-- `ref` takes a function or an object typed by the element, and void elements such as `<input>` take no children.
+- `ref` takes a function or an object typed by the element, or an array of them, and void elements such as `<input>` take no children.
+- `<Show>`'s and `<Match>`'s function children take an accessor of `when`'s value, or with `keyed` the value, without its falsy types; `<Repeat>`'s row takes a number, and `<Dynamic>` the props of its tag or component.
 - A `key` belongs on `<For>`; on any other element it is an error.
 
 The plugin leaves no call to a JSX runtime in the bundle. A file that reaches the bundle without it throws on its first element, naming the fix.
@@ -123,18 +179,24 @@ The template is parsed once. `mount` clones it with values for its holes, in ord
 
 ## API
 
-| Export               | What it does                                                                                    |
-| -------------------- | ----------------------------------------------------------------------------------------------- |
-| `signal(value)`      | A getter and a setter. Reading the getter inside an effect or a hole subscribes it.             |
-| `effect(fn)`         | Runs `fn` now, and again whenever a signal it read changes.                                     |
-| `memo(fn)`           | A derived value, recomputed when what it reads changes.                                         |
-| `batch(fn)`          | Runs `fn` and applies its writes together, so effects run once.                                 |
-| `untrack(fn)`        | Reads signals without subscribing to them.                                                      |
-| `selector(source)`   | `isSelected(key)`, where a change of selection re-runs only the readers of the old and new key. |
-| `onCleanup(fn)`      | Runs `fn` when the effect, component or row it was called in re-runs or goes away.              |
-| `<For each key>`     | A keyed list in TSX.                                                                            |
-| `render(view, root)` | Mounts a TSX view into an element, for good.                                                    |
-| `attach(view, root)` | `render`, returning a function that removes the view and stops its effects.                     |
+| Export                | What it does                                                                                    |
+| --------------------- | ----------------------------------------------------------------------------------------------- |
+| `signal(value)`       | A getter and a setter. Reading the getter inside an effect or a hole subscribes it.             |
+| `effect(fn)`          | Runs `fn` now, and again whenever a signal it read changes.                                     |
+| `memo(fn)`            | A derived value, recomputed when what it reads changes.                                         |
+| `batch(fn)`           | Runs `fn` and applies its writes together, so effects run once.                                 |
+| `untrack(fn)`         | Reads signals without subscribing to them.                                                      |
+| `selector(source)`    | `isSelected(key)`, where a change of selection re-runs only the readers of the old and new key. |
+| `onCleanup(fn)`       | Runs `fn` when the effect, component or row it was called in re-runs or goes away.              |
+| `<For each key>`      | A keyed list in TSX, with a `fallback` while it is empty.                                       |
+| `<Show when>`         | Its children while `when` is truthy, else `fallback`.                                           |
+| `<Switch>`/`<Match>`  | The children of the first `<Match>` whose `when` is truthy, else `fallback`.                    |
+| `<Repeat count>`      | A row per index, from `from` to `from + count - 1`.                                             |
+| `<Portal mount>`      | Its children in another element, `document.body` by default.                                    |
+| `<Dynamic component>` | A component or a tag name's element, chosen by a value.                                         |
+| `dynamic(source)`     | A component that renders what `source` returns, as `<Dynamic>` does.                            |
+| `render(view, root)`  | Mounts a TSX view into an element, for good.                                                    |
+| `attach(view, root)`  | `render`, returning a function that removes the view and stops its effects.                     |
 
 ## Feature modules
 
@@ -175,6 +237,8 @@ An app ships only what it uses. With a bundler that tree-shakes (all of the plug
 | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Ownership                       | By use: `effect`, `memo`, a slot (a JSX expression that may change, `{cond() ? <A /> : <B />}`), a fragment, a row holding components, lists or slots, or `attach`. Nothing to turn on.                                |        0.3 KB | Nothing in the app needs it: with none of those, no effect is ever made inside another's run, so there is nothing to dispose.                                                                                                      |
 | Rows with several selector keys | `import "@reactre/core/features/selectors"`. The compiler adds the import itself to a file whose `<For>` row makes two or more calls with arguments in its reactive holes (`isSelected(row.id)`, `isHovered(row.id)`). |       0.16 KB | A row that reads a second selector key, or the same selector with a second key, throws an error naming the import. Only a row that reads the keys through a function of its own (`class={classes(row)}`) needs the import by hand. |
+
+Control flow is not a feature to turn on either: it compiles to slots, memos and lists (most of it holds a slot, so it brings ownership), and only `dynamic()` and the class-list helper are code of its own, in an app only where it uses them. An app with a `<Show>`, a `<For>` fallback and a class list ([`sizes.json`](sizes.json)'s `show`) is 5,962 bytes gzipped.
 
 Ownership is what makes `effect` own the effects and cleanups its run makes, a slot dispose its old content, a row dispose what it holds when it leaves, and `attach` return a disposer. `onCleanup` itself costs a few bytes: called where nothing owns (at module scope, in a view given to `render`), it does nothing.
 

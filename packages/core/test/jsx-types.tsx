@@ -3,7 +3,7 @@
 // element here type-checks and every line under @ts-expect-error is an error. Nothing runs it;
 // bun test runs only *.test.ts files.
 
-import { For, render, selector, signal } from "@reactre/core";
+import { Dynamic, dynamic, For, Match, Portal, render, Repeat, selector, Show, signal, Switch } from "@reactre/core";
 import type { Child, JSX } from "@reactre/core/jsx-runtime";
 
 type Row = { id: number; label: string };
@@ -118,8 +118,10 @@ const errors = (): Node[] => [
   <notatag />,
   // @ts-expect-error an attribute that does not exist
   <div hreff="/" />,
-  // @ts-expect-error class takes a string, not a class map
-  <div class={{ active: true }} />,
+  // @ts-expect-error a class object's value is a flag, not a signal's getter
+  <div class={{ active: count }} />,
+  // @ts-expect-error a class array's items are class names, objects and arrays
+  <div class={[() => "a"]} />,
   // @ts-expect-error a signal's getter, not its value: it would be written once, as text
   <p title={count} />,
   // @ts-expect-error a child function would be written as text
@@ -149,5 +151,105 @@ const errors = (): Node[] => [
 ];
 
 (void node, errors);
+
+// #endregion
+
+// #region Control flow and element features
+
+const [user] = signal<{ first: string } | null>(null);
+const [on] = signal(false);
+const Home = (): JSX.Element => <p>home</p>;
+/** A directive: a function that returns a ref. */
+const tooltip =
+  (text: string) =>
+  (el: HTMLElement): void =>
+    void el.setAttribute("title", text);
+const View = dynamic(() => (on() ? "h1" : "h2"));
+const Chosen = dynamic(() => (on() ? Label : null));
+
+const flow = (): Node[] => {
+  const input: { current: HTMLDivElement | null } = { current: null };
+  return [
+    <div>
+      <Show when={user()} fallback={<p>signed out</p>}>
+        {(u) => <p>{u().first}</p>}
+      </Show>
+      <Show when={user()} keyed>
+        {(u) => <p>{u.first}</p>}
+      </Show>
+      <Show when={count() > 0}>positive</Show>
+      <Switch fallback="none">
+        <Match when={count() === 1}>
+          <Home />
+        </Match>
+        <Match when={user()}>{(u) => <p>{u().first}</p>}</Match>
+        <Match when={user()} keyed>
+          {(u) => <p>{u.first}</p>}
+        </Match>
+      </Switch>
+      <Portal mount={document.body}>
+        <p>modal</p>
+      </Portal>
+      <Portal>
+        <p />
+      </Portal>
+      <Dynamic component="h1" class="title">
+        x
+      </Dynamic>
+      <Dynamic component={on() ? "h1" : "h2"} id="t" />
+      <Dynamic component={Button} id="b" onClick={() => {}} />
+      <View class="v" />
+      <Chosen text="chosen" />
+    </div>,
+    <ul>
+      <For each={rows()} key={(r) => r.id} fallback={<li>none</li>}>
+        {(row) => <li>{row.label}</li>}
+      </For>
+      <Repeat count={3} from={1} fallback={<li />}>
+        {(i) => <li>{i.toFixed(0)}</li>}
+      </Repeat>
+    </ul>,
+    <div class={{ active: on(), "big wide": true }} className="base" />,
+    <div class={["a", { b: on() }, null, false, ["c", count()]]} />,
+    <circle class={{ on: on() }} />,
+    <input defaultValue="x" defaultChecked />,
+    <textarea defaultValue="t" />,
+    <option defaultSelected />,
+    <video defaultMuted />,
+    <div ref={[(el: HTMLDivElement) => el, input, null]} />,
+    <div ref={tooltip("hi")} />,
+  ];
+};
+
+const flowErrors = (): Node[] => [
+  // @ts-expect-error <Show> needs when
+  <Show>x</Show>,
+  <Show when={user()} keyed>
+    {
+      // @ts-expect-error a keyed <Show>'s function child gets the value, not an accessor
+      (u) => <p>{u().first}</p>
+    }
+  </Show>,
+  <Show when={user()}>
+    {
+      // @ts-expect-error a <Show>'s function child gets an accessor of the value
+      (u) => <p>{u.first}</p>
+    }
+  </Show>,
+  // @ts-expect-error <Repeat>'s row gets the index, a number
+  <Repeat count={2}>{(i: string) => <li>{i}</li>}</Repeat>,
+  // @ts-expect-error <Dynamic>'s props are its tag's
+  <Dynamic component="a" viewBox="0 0 1 1" />,
+  // @ts-expect-error <Dynamic>'s props are its component's
+  <Dynamic component={Button} id={1} onClick={() => {}} />,
+  // @ts-expect-error a ref array's refs get the element's own type
+  <div ref={[(el: HTMLInputElement) => el]} />,
+  // @ts-expect-error defaultChecked is an input's
+  <div defaultChecked />,
+  // @ts-expect-error fallback is <For>'s, not every component's
+  <Label text="x" fallback="y" />,
+];
+
+(void flow, flowErrors);
 
 // #endregion

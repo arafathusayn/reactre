@@ -15,18 +15,32 @@
 //     attribute empty, false leaves it out) or nothing. A function is not a value: a hole that
 //     calls one (`{count()}`) updates, and a function itself (`{count}`) would be written once,
 //     as text, so it is a type error.
-//   - `class` (or `className`) takes a string; `style` takes a string of CSS, or an object of
-//     properties (camelCase or CSS names, custom properties too). A number gets no unit.
+//   - `class` (or `className`) takes a string, or a class list written in place: an object
+//     literal whose keys are classes, each set while its value is truthy (`{ active: on() }`),
+//     or an array literal of class names, objects and nested arrays, falsy items left out. A
+//     list held in a variable is put inside an array literal (`class={[classes]}`): the compiler
+//     takes lists apart by their syntax, and a bare expression is a string to it. `style` takes
+//     a string of CSS, or an object of properties (camelCase or CSS names, custom properties
+//     too). A number gets no unit.
 //   - `on` + the event's name (`onClick`, `onKeyDown`, `onPointerMove`) takes a handler for that
 //     event. The compiler lowercases the name, so the handler of `onDblClick` gets "dblclick".
 //     Inside a `<For>` row the handler is delegated to the list's parent, so neither `this` nor
 //     `currentTarget` is the element: the handler's only argument is the event.
-//   - `ref` takes a function, called with the element, or an object whose `current` gets it.
+//   - `ref` takes a function, called with the element, or an object whose `current` gets it, or
+//     an array literal of those, each given the element. A directive is a function that returns
+//     the ref: `ref={tooltip("Save")}`.
+//   - `defaultValue`, `defaultChecked`, `defaultSelected` and `defaultMuted` set the property
+//     of their name: the initial value a form's reset goes back to, which the user's edits leave.
 //   - `key` on an element outside `<For>` rebuilds the element when its value changes.
 //   - A child is a node (an element, `<For>`, a component's result), text, a number, nothing, or
 //     an array of those. Void elements (`<input>`, `<img>`, ...) take no children.
 //   - SVG elements have their own attributes and events. A tag both HTML and SVG name (`a`,
 //     `script`, `style`, `title`) has HTML's.
+//   - `<For>` takes a `fallback`, shown while `each` is empty (below, through
+//     LibraryManagedAttributes, as `For` itself is declared in ./index.ts). The other control flow
+//     elements are declared in ./flow.ts.
+
+import type { For } from "./index.ts";
 
 // #region Values
 
@@ -36,8 +50,17 @@ type Attr = string | number | bigint | boolean | null | undefined;
 /** A boolean attribute's value. */
 type Bool = boolean | null | undefined;
 
-/** `class`'s value: the element's class list as one string. */
-type ClassValue = string | null | undefined;
+/** A class object's value: the key is a class while it is truthy. */
+type ClassFlag = string | number | bigint | boolean | null | undefined;
+
+/** A class object: each key is a class (or several, space-separated), set while its value is truthy. */
+export type ClassObject = { readonly [className: string]: ClassFlag };
+
+/** An item of a class array: class names, a class object, a nested array, or nothing (left out). */
+export type ClassItem = string | number | bigint | boolean | null | undefined | ClassObject | readonly ClassItem[];
+
+/** `class`'s value: the class list as one string, or written in place as an object or an array. */
+type ClassValue = string | ClassObject | readonly ClassItem[] | null | undefined;
 
 /** A style property's value. Written as given: a number gets no unit; null, undefined and false remove it. */
 type StyleValue = string | number | false | null | undefined;
@@ -55,6 +78,9 @@ type Key = string | number | bigint | null | undefined;
 
 /** An element's `ref`: a function called with it, or an object given it as `current`. */
 export type Ref<E> = ((element: E) => void) | { current: E | null } | null | undefined;
+
+/** What `ref` takes: one ref, or an array literal of refs, each given the element. */
+type Refs<E> = Ref<E> | readonly Ref<E>[];
 
 /** A child of a host element: a node, text, nothing, or an array of children. */
 export type Child = Node | string | number | bigint | boolean | null | undefined | readonly Child[];
@@ -163,7 +189,7 @@ export interface HTMLAttributes extends EventHandlers<HTMLElementEventMap> {
   autocapitalize?: Attr;
   autocorrect?: Attr;
   autofocus?: Bool;
-  /** The element's classes, as one string. */
+  /** The element's classes: one string, or a class object or array written in place. */
   class?: ClassValue;
   /** `class`, by React's name. */
   className?: ClassValue;
@@ -225,6 +251,8 @@ interface MediaAttributes extends HTMLAttributes {
   controls?: Bool;
   controlslist?: Attr;
   crossorigin?: Attr;
+  /** The `defaultMuted` property: whether the media starts muted (the `muted` attribute's state). */
+  defaultMuted?: Bool;
   disableremoteplayback?: Bool;
   loop?: Bool;
   muted?: Bool;
@@ -316,6 +344,10 @@ interface HTMLElementAttributes {
       alt?: Attr;
       autocomplete?: Attr;
       checked?: Bool;
+      /** The `defaultChecked` property: the state a form's reset goes back to. */
+      defaultChecked?: Bool;
+      /** The `defaultValue` property: the value a form's reset goes back to. */
+      defaultValue?: Attr;
       dirname?: Attr;
       disabled?: Bool;
       form?: Attr;
@@ -364,7 +396,14 @@ interface HTMLElementAttributes {
   object: HTMLAttributes & { data?: Attr; form?: Attr; height?: Attr; name?: Attr; type?: Attr; width?: Attr };
   ol: HTMLAttributes & { reversed?: Bool; start?: Attr; type?: Attr };
   optgroup: HTMLAttributes & { disabled?: Bool; label?: Attr };
-  option: HTMLAttributes & { disabled?: Bool; label?: Attr; selected?: Bool; value?: Attr };
+  option: HTMLAttributes & {
+    /** The `defaultSelected` property: the selection a form's reset goes back to. */
+    defaultSelected?: Bool;
+    disabled?: Bool;
+    label?: Attr;
+    selected?: Bool;
+    value?: Attr;
+  };
   output: HTMLAttributes & { for?: Attr; form?: Attr; htmlFor?: Attr; name?: Attr };
   progress: HTMLAttributes & { max?: Attr; value?: Attr };
   q: HTMLAttributes & { cite?: Attr };
@@ -410,6 +449,8 @@ interface HTMLElementAttributes {
   textarea: HTMLAttributes & {
     autocomplete?: Attr;
     cols?: Attr;
+    /** The `defaultValue` property: the text a form's reset goes back to. */
+    defaultValue?: Attr;
     dirname?: Attr;
     disabled?: Bool;
     form?: Attr;
@@ -434,7 +475,7 @@ type HTMLElements = {
   [K in keyof HTMLElementTagNameMap]: (K extends keyof HTMLElementAttributes
     ? HTMLElementAttributes[K]
     : HTMLAttributes) & {
-    ref?: Ref<HTMLElementTagNameMap[K]>;
+    ref?: Refs<HTMLElementTagNameMap[K]>;
     key?: Key;
   };
 };
@@ -449,7 +490,7 @@ export interface SVGAttributes extends EventHandlers<SVGElementEventMap> {
   children?: Child;
   [data: `data-${string}`]: Attr;
   [aria: `aria-${string}`]: Attr;
-  /** The element's classes, as one string. */
+  /** The element's classes: one string, or a class object or array written in place. */
   class?: ClassValue;
   /** `class`, by React's name. */
   className?: ClassValue;
@@ -584,7 +625,7 @@ export interface SVGAttributes extends EventHandlers<SVGElementEventMap> {
 /** Every SVG element whose tag HTML has no element of: `svg`, `path`, `circle`, ... */
 type SVGElements = {
   [K in Exclude<keyof SVGElementTagNameMap, keyof HTMLElementTagNameMap>]: SVGAttributes & {
-    ref?: Ref<SVGElementTagNameMap[K]>;
+    ref?: Refs<SVGElementTagNameMap[K]>;
     key?: Key;
   };
 };
@@ -610,6 +651,8 @@ export declare namespace JSX {
   interface IntrinsicAttributes {}
   /** The host elements and their attributes. */
   interface IntrinsicElements extends IntrinsicElementMap {}
+  /** A component's props as JSX checks them: its own, and for `<For>`, a `fallback` too. */
+  type LibraryManagedAttributes<C, P> = C extends typeof For ? P & { fallback?: Child } : P;
 }
 
 // #endregion
