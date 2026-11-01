@@ -217,6 +217,31 @@ describe("holes that read a prop", () => {
     expect(body(fixed, "Box")).toContain("__rrInsert(__n[0], props.children, null)");
   });
 
+  test("a prop other than children that a call site passes JSX is inserted, as children are", () => {
+    const out = compileSource(`
+      function Card(props) { return <section><h1>{props.header}</h1><Inner title={props.header} /><p>{props.text}</p></section>; }
+      function Inner({ title }) { return <b>{title}</b>; }
+      function Merged(props) { const p = merge({}, props); return <i>{p.icon}</i>; }
+      export const App = () => <main><Card header={<em />} text="a" /><Merged icon={on() ? <b /> : null} /></main>;
+    `);
+    expect(body(out, "Card")).toContain("__rrInsert(__n[0], props.header, null)");
+    // Passed on, it is content where it lands too; a prop given text stays a text hole.
+    expect(body(out, "Card")).toContain("Inner({ get title() { return props.header; } })");
+    expect(body(out, "Inner")).toContain("__rrInsert(__n[0], title, null)");
+    expect(body(out, "Card")).toContain("(props.text)])");
+    // A prop that may change, and holds JSX, is followed.
+    expect(body(out, "Merged")).toContain("__rrSlot(__n[0], () => (p.icon))");
+  });
+
+  test("a component its file exports gets no JSX props it can see: its prop reads stay text holes, as before", () => {
+    // A file seen alone cannot see the callers of what it exports, so a caller in the file does
+    // not count either; a whole program compiles it the same.
+    const card = `export function Card(props) { return <section><h1>{props.header}</h1></section>; }`;
+    const hole = "__rrBind(__rrT0, 0, __n[0], () => (props.header))";
+    expect(compileSource(card)).toContain(hole);
+    expect(compileSource(`${card} export const App = () => <Card header={<em />} />;`)).toContain(hole);
+  });
+
   test("a local made of the whole props object reads props: merge's defaults, omit's rest, a spread", () => {
     const out = compileSource(`
       function Button(props) {
@@ -360,6 +385,56 @@ describe("at runtime", () => {
     expect(html(root)).toBe("<div><b>1</b></div>");
     api.setN(2);
     expect(html(root)).toBe("<div><b>2</b></div>");
+  });
+
+  test("JSX in a prop other than children renders: an element, a component, a fragment, an array, a conditional", () => {
+    const root = box();
+    const api = run<{ setOn: (v: boolean) => void }>(
+      `
+      import { render, signal } from "@reactre/core";
+      const [on, setOn] = signal(true);
+      function Card(props) { return <section><h1>{props.header}</h1>{props.children}</section>; }
+      function Pattern({ header }) { return <p>{header}</p>; }
+      function Title(props) { return <b>{props.t}</b>; }
+      render(() => (
+        <div>
+          <Card header={<i>hi</i>}>body</Card>
+          <Card header={<Title t="comp" />} />
+          <Card header={<><b>a</b>frag</>} />
+          <Card header={[<i>x</i>, <i>y</i>]} />
+          <Card header={on() ? <b>yes</b> : "no"} />
+          <Pattern header={<em>pat</em>} />
+        </div>
+      ), root);
+      return { setOn };
+    `,
+      root,
+    );
+    const cards = [
+      "<section><h1><i>hi</i></h1>body</section>",
+      "<section><h1><b>comp</b></h1></section>",
+      "<section><h1><b>a</b>frag</h1></section>",
+      "<section><h1><i>x</i><i>y</i></h1></section>",
+    ].join("");
+    expect(html(root)).toBe(`<div>${cards}<section><h1><b>yes</b></h1></section><p><em>pat</em></p></div>`);
+    api.setOn(false);
+    expect(html(root)).toBe(`<div>${cards}<section><h1>no</h1></section><p><em>pat</em></p></div>`);
+  });
+
+  test("a component its file exports or uses as a value renders such a prop through <Dynamic>, as the README says", () => {
+    const root = box();
+    const api = run<{ cards: unknown[] }>(
+      `
+      import { Dynamic, render } from "@reactre/core";
+      function Card(props) { return <h1><Dynamic component={() => props.header} />{props.header}</h1>; }
+      render(() => <div><Card header={<i>hi</i>} /></div>, root);
+      return { cards: [Card] };
+    `,
+      root,
+    );
+    // The second hole is text: Card is used as a value, so its callers cannot all be seen.
+    expect(api.cards.length).toBe(1);
+    expect(html(root)).toMatch(/^<div><h1><i>hi<\/i>\[object /);
   });
 
   test("a destructured prop keeps the value it had when the component ran", () => {

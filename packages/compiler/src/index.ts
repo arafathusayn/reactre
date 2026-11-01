@@ -732,20 +732,30 @@ export class Compiler {
 
   /**
    * Whether an element's child reads `children` from its component's props (`{props.children}`, or
-   * `{children}` from a pattern, `{p.children}` from a local made of the props): content, which
+   * `{children}` from a pattern, `{p.children}` from a local made of the props), or another prop
+   * that some call site passes JSX (`{props.header}`, for `header={<h1>Hi</h1>}`): content, which
    * may be nodes, so it is inserted, not text.
    */
   readsChildren(expr: string): boolean {
+    // Children, or a prop some call site passes JSX (`PropFacts.contentProps`).
+    const given = this.props.contentProps;
+    const content = (d: Def, r: ReadonlySet<string> | true) => {
+      if (r === true) return false;
+      if (r.has("children")) return true;
+      const c = given?.get(d.name);
+      return c !== undefined && touches(c, r);
+    };
     for (const d of this.scope) {
       if (d.param.kind === "pattern") {
-        for (const [local, key] of d.param.locals) if (key === "children" && readsOf(expr, local) !== null) return true;
+        for (const [local, key] of d.param.locals)
+          if (content(d, new Set([key])) && readsOf(expr, local) !== null) return true;
       }
       for (const a of d.aliases) {
         const r = readsOf(expr, a);
-        if (r !== null && r !== true && r.has("children")) return true;
+        if (r !== null && content(d, r)) return true;
       }
     }
-    return propReads(expr, this.scope).some(([, r]) => r !== true && r.has("children"));
+    return propReads(expr, this.scope).some(([d, r]) => content(d, r));
   }
 
   /** The mark for input offset `at`, when the output carries marks and `at` is known; else "". */

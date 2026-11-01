@@ -9,7 +9,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { factsFor, ReactreCompileError, reactreCompiler, transpileSource } from "../src/index.ts";
+import { compileJs, factsFor, ReactreCompileError, reactreCompiler, transpileSource } from "../src/index.ts";
 import {
   analyze,
   callsOutsideJsx,
@@ -219,6 +219,31 @@ describe("a program", () => {
     expect(plain(p.factsOf("parts"))).toEqual({ Count: ["n"], Def: ["d"] });
     expect(p.info("main")!.defs.map((d) => d.name)).toEqual(["App"]);
     expect(p.info("nowhere")).toBeUndefined();
+  });
+
+  test("the props other than children a call site passes JSX are content, in a component its module keeps", () => {
+    const main = `
+      import { Card as Shared } from "./card";
+      function Card(props) { return <section>{props.header}<Inner title={props.header} /></section>; }
+      function Inner(props) { return <b>{props.title}</b>; }
+      function Used(props) { return <i>{props.icon}</i>; }
+      const [on] = signal(true);
+      export const App = () => (
+        <div><Card header={<h1 />} text="a" /><Shared header={<h1 />} /><Used icon={<b />} />{[Used]}</div>
+      );
+    `;
+    const p = program({ main, card: `export function Card(props) { return <p>{props.header}</p>; }` });
+    const facts = p.factsOf("main");
+    expect([...facts.contentProps!].map(([k, v]) => [k, [...v]])).toEqual([
+      ["Card", ["header"]],
+      ["Inner", ["title"]],
+    ]);
+    // An exported component, and one used as a value, are passed none.
+    expect(p.factsOf("card").contentProps).toBeUndefined();
+    const out = compileJs(js(main), { props: facts });
+    expect(out).toContain("__rrInsert(__n[0], props.header, null)");
+    expect(out).toContain("__rrInsert(__n[0], props.title, null)");
+    expect(out).toContain("__rrBind(__rrT2, 0, __n[0], () => (props.icon))");
   });
 
   test("an entry's exports, and what escapes, are reactive in every prop", () => {

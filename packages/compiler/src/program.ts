@@ -92,6 +92,12 @@ export type PropFacts = ReadonlyMap<string, ReadonlySet<string> | true> & {
    * none, as is one its module exports or uses as a value (see the module's comment).
    */
   readonly storeProps?: ReadonlyMap<string, ReadonlySet<string>>;
+  /**
+   * The props other than children of each component, by its name, that some call site passes
+   * JSX (`<Card header={<h1>Hi</h1>} />`), or a prop that holds it: `{props.header}` is content,
+   * inserted as `{props.children}` is, not text. Missing, as for `storeProps`: none.
+   */
+  readonly contentProps?: ReadonlyMap<string, ReadonlySet<string>>;
 };
 
 /** Reactive props, as a set or true for all; also what an expression reads of a props object. */
@@ -1114,6 +1120,8 @@ export class Program {
   /** The reactive props `solve` is finding (or found), and the props that may be passed a store. */
   private work = new Map<Def, Props>();
   private stored = new Map<Def, Set<string>>();
+  /** The props other than children each component may be passed JSX in (`contentOf`). */
+  private content = new Map<Def, Set<string>>();
   /** The components their modules export, which count no store props (`storeOf`). */
   private shared = new Set<Def>();
   /** The facts each compiled module was given, to check that later modules leave them true. */
@@ -1158,16 +1166,20 @@ export class Program {
   factsOf(file: string): PropFacts {
     const facts = this.solve(),
       out = new Map<string, Set<string> | true>(),
-      storeProps = new Map<string, Set<string>>();
+      storeProps = new Map<string, Set<string>>(),
+      contentProps = new Map<string, Set<string>>();
     const mod = this.modules.get(file);
     for (const d of mod?.info.defs ?? []) out.set(d.name, union(out.get(d.name), facts.get(d)!));
-    for (const d of mod?.info.defs ?? []) {
-      const s = this.storeOf(d);
-      if (out.get(d.name) === true || s.size === 0) continue;
-      const set = storeProps.get(d.name) ?? new Set();
-      for (const k of s) set.add(k);
-      storeProps.set(d.name, set);
-    }
+    for (const d of mod?.info.defs ?? [])
+      for (const [into, s] of [
+        [storeProps, this.storeOf(d)],
+        [contentProps, this.contentOf(d)],
+      ] as const) {
+        if (out.get(d.name) === true || s.size === 0) continue;
+        const set = into.get(d.name) ?? new Set();
+        for (const k of s) set.add(k);
+        into.set(d.name, set);
+      }
     this.given.set(file, out);
     // The module's store roots: its own, the stores it imports, what it imports from where the
     // program cannot see (`unseen`), which may be one, and its locals made of a store or of a prop
@@ -1181,7 +1193,12 @@ export class Program {
       else for (const k of this.exportNames(target)) if (this.storeExport(target, k)) stores.add(`${local}.${k}`);
     }
     for (const n of mod?.info.aliases.keys() ?? []) if (!stores.has(n) && this.storeIn(file, n)) stores.add(n);
-    return Object.assign(out, stores.size === 0 ? {} : { stores }, storeProps.size === 0 ? {} : { storeProps });
+    return Object.assign(
+      out,
+      stores.size === 0 ? {} : { stores },
+      storeProps.size === 0 ? {} : { storeProps },
+      contentProps.size === 0 ? {} : { contentProps },
+    );
   }
 
   /**
@@ -1216,6 +1233,11 @@ export class Program {
     return this.work.get(d) === true || this.shared.has(d) ? NO_PROPS : (this.stored.get(d) ?? NO_PROPS);
   }
 
+  /** The props other than children that component `d` may be passed JSX in: as `storeOf`. */
+  private contentOf(d: Def): Set<string> {
+    return this.work.get(d) === true || this.shared.has(d) ? NO_PROPS : (this.content.get(d) ?? NO_PROPS);
+  }
+
   /** Each component's reactive props: what escapes is true, and call sites add the rest. */
   private solve(): Map<Def, Props> {
     if (this.facts !== null) return this.facts;
@@ -1224,6 +1246,7 @@ export class Program {
     // component its module exports (`storeOf`).
     this.work = facts;
     this.stored = new Map();
+    this.content = new Map();
     this.shared = new Set();
     for (const { info } of this.modules.values()) {
       const out = new Set<string>();
@@ -1276,6 +1299,13 @@ export class Program {
                 (use.storeReads?.some(([o, r]) => touches(this.storeOf(o), r)) ?? false);
               if (store && !this.stored.get(d)?.has(k)) {
                 this.stored.set(d, (this.stored.get(d) ?? new Set()).add(k));
+                changed = true;
+              }
+              // JSX, or a prop that may hold it, passed on: content, as children are.
+              const content =
+                k !== "children" && (use.lazy || use.reads.some(([o, r]) => touches(this.contentOf(o), r)));
+              if (content && !this.content.get(d)?.has(k)) {
+                this.content.set(d, (this.content.get(d) ?? new Set()).add(k));
                 changed = true;
               }
               const changes = store || use.calls || use.reads.some(([o, r]) => touches(facts.get(o)!, r));
