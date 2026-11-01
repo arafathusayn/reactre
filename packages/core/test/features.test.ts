@@ -25,6 +25,9 @@
 //              a feature module, @reactre/core/features/dynamic).
 //              The "show" profile is an app that uses some; the others use none, and are the
 //              same bytes as before control flow existed.
+//   stores and Solid 2.0's stores (@reactre/core/features/store) and memo and signal options
+//   memo       (features/memo), built from the public API: each comes only with its import.
+//   options
 //
 // The size profiles (../sizes.json), one app each:
 //   jfb       the js-framework-benchmark app (apps/jfb/app/reactre.tsx): no opt-in at all.
@@ -36,6 +39,8 @@
 //   settled   `onSettled` in a slot's content, rendered in a `flush(fn)`.
 //   reaction  `reaction` beside a `render`.
 //   show      a <Show> whose child reads an accessor, a <For> with a fallback, a class list.
+//   store     a store's array in a <For>, written through its setter and `reconcile`.
+//   memo      a memo with `equals`, and a writable derived signal of it.
 //
 // The size budgets live in ../sizes.json. When a change is worth its bytes, record the new sizes:
 //
@@ -225,6 +230,38 @@ const apps = {
     render(() => <p>{id()}</p>, root);
     globalThis.api = { setId, log };
   `,
+  /** A store's todos in a <For>, pushed to, toggled in place, and reconciled. */
+  store: `
+    import { For, render } from "@reactre/core";
+    import { createStore, reconcile } from "@reactre/core/features/store";
+    const [s, set] = createStore({ todos: [{ id: 1, title: "a", done: false }] });
+    function App() {
+      return (
+        <ul>
+          <For each={[...s.todos]} key={(t) => t.id}>
+            {(t) => <li class={String(t.done)}>{t.title.trim()}</li>}
+          </For>
+        </ul>
+      );
+    }
+    render(App, root);
+    globalThis.api = {
+      add: (id, title) => set((d) => { d.todos.push({ id, title, done: false }); }),
+      toggle: (i) => set((d) => { d.todos[i].done = !d.todos[i].done; }),
+      load: (todos) => set((d) => { reconcile(todos)(d.todos); }),
+    };
+  `,
+  /** A memo with a custom equality, and a writable signal derived from it. */
+  memo: `
+    import { render, signal as base } from "@reactre/core";
+    import { memo, signal } from "@reactre/core/features/memo";
+    const [user, setUser] = base({ id: 1, name: "a" });
+    let runs = 0;
+    const current = memo(() => user(), { equals: (a, b) => a.id === b.id });
+    const [label, setLabel] = signal(() => current().name);
+    render(() => <p>{(runs++, current().name)}:{label()}</p>, root);
+    globalThis.api = { setUser, setLabel, runs: () => runs };
+  `,
 };
 
 describe("ownership", () => {
@@ -360,6 +397,45 @@ describe("control flow", () => {
   });
 });
 
+describe("stores and memo options", () => {
+  test("off: an app that does not import them ships none of their code", async () => {
+    for (const name of ["plain", "slot", "attach", "reaction"] as const) {
+      const code = await bundle(name, apps[name], false);
+      for (const fn of ["createStore", "createProjection", "reconcile", "snapshot", "deep", "merge", "omit"])
+        expect(code).not.toContain(`function ${fn}(`);
+      expect(code).not.toContain("new Proxy");
+      expect(code).not.toContain("equals");
+    }
+  });
+
+  test("store: <For> rows follow pushes, in-place writes to their items, and reconcile", async () => {
+    const { root, api } = run(await bundle("store", apps.store));
+    const lis = () => (root.firstChild as FakeElement).childNodes as FakeElement[];
+    api.add!(2, "b");
+    expect(text(root)).toBe("ab");
+    const first = lis()[0];
+    api.toggle!(0);
+    expect(lis().map((li) => li.getAttribute("class"))).toEqual(["true", "false"]);
+    api.load!([
+      { id: 1, title: "A", done: true },
+      { id: 3, title: "c", done: false },
+    ]);
+    expect(text(root)).toBe("Ac");
+    expect(lis()[0]).toBe(first!);
+  });
+
+  test("memo: equals keeps readers from re-running, and the derived signal holds a write until its source changes", async () => {
+    const { root, api } = run(await bundle("memo", apps.memo));
+    expect(text(root)).toBe("a:a");
+    api.setUser!({ id: 1, name: "b" });
+    expect([text(root), api.runs!()]).toEqual(["a:a", 1]);
+    api.setLabel!("x");
+    expect(text(root)).toBe("a:x");
+    api.setUser!({ id: 2, name: "c" });
+    expect([text(root), api.runs!()]).toEqual(["c:c", 2]);
+  });
+});
+
 describe("sizes", () => {
   test("each profile stays within its gzip budget", async () => {
     const jfb = Bun.fileURLToPath(new URL("../../../apps/jfb/app/reactre.tsx", import.meta.url));
@@ -368,7 +444,18 @@ describe("sizes", () => {
       (sizes[name] = { min: code.length, gzip: gzipSync(code, { level: 9 }).length });
     // The benchmark app: what an app with no opt-in ships.
     measure("jfb", await bundle("jfb", await Bun.file(jfb).text()));
-    for (const name of ["plain", "slot", "attach", "imported", "root", "settled", "reaction", "show"] as const)
+    for (const name of [
+      "plain",
+      "slot",
+      "attach",
+      "imported",
+      "root",
+      "settled",
+      "reaction",
+      "show",
+      "store",
+      "memo",
+    ] as const)
       measure(name, await bundle(name, apps[name]));
     if (process.env.UPDATE_SIZES) {
       await Bun.write(budgets, JSON.stringify(sizes, null, 2) + "\n");

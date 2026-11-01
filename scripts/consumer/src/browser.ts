@@ -16,8 +16,10 @@ import * as serverNode from "@reactre/compat/server.node";
 import * as staticApi from "@reactre/compat/static";
 import * as core from "@reactre/core";
 import * as coreDynamic from "@reactre/core/features/dynamic";
+import * as coreMemo from "@reactre/core/features/memo";
 import * as coreOwner from "@reactre/core/features/owner";
 import * as coreReaction from "@reactre/core/features/reaction";
+import * as coreStore from "@reactre/core/features/store";
 import * as coreTiming from "@reactre/core/features/timing";
 import * as jsxDevRuntime from "@reactre/core/jsx-dev-runtime";
 import * as jsxRuntime from "@reactre/core/jsx-runtime";
@@ -50,6 +52,12 @@ const t = dom.html`<p>${dom.text<number>()}</p>`;
 const el = compat.createElement("div", { id: "x" }, "hi");
 const html: Promise<string> | string = typeof server.renderToString === "function" ? server.renderToString(el) : "";
 const fullEl: unknown = full.createElement("span", null);
+const [todos, setTodos] = coreStore.createStore({ list: [{ id: 1, done: false }] });
+setTodos((d) => {
+  d.list[0]!.done = true;
+});
+const done: boolean = todos.list[0]!.done;
+const same: () => { id: number } = coreMemo.memo(() => ({ id: count() }), { equals: (a, b) => a.id === b.id });
 
 export const all: unknown[] = [
   dom,
@@ -58,6 +66,8 @@ export const all: unknown[] = [
   coreTiming,
   coreReaction,
   coreDynamic,
+  coreStore,
+  coreMemo,
   jsxRuntime,
   jsxDevRuntime,
   compat,
@@ -98,4 +108,6 @@ export const all: unknown[] = [
   t,
   html,
   fullEl,
+  done,
+  same,
 ];

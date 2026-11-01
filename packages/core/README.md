@@ -210,14 +210,36 @@ The template is parsed once. `mount` clones it with values for its holes, in ord
 |                                   | `flush(fn?)`               | `flush(fn)` runs `fn` and applies its writes before it returns, inside a batch too. `flush()` applies what the current batch has queued.      |
 | `@reactre/core/features/reaction` | `reaction(compute, apply)` | An effect in two halves: `compute` is tracked, `apply(value, prev)` runs untracked when the value changes, and may return a cleanup.          |
 | `@reactre/core/features/dynamic`  | `dynamic(source)`          | A component that renders what `source` returns, as `<Dynamic>` does.                                                                          |
+| `@reactre/core/features/store`    | `createStore(value)`       | `[store, setStore]`: a deep reactive proxy, whose reads subscribe per property (arrays by index and `length`), and a setter given a draft.    |
+|                                   | `createStore(fn, seed)`    | A derived store that can be written: `fn(draft)` runs tracked; a write holds until it runs again. `{ shallow: true }` for a one-layer store.  |
+|                                   | `createProjection(fn, s)`  | A read-only derived store: what `fn(draft)` returns is reconciled into it by `key` ("id" by default).                                         |
+|                                   | `reconcile(value, key?)`   | A setter's function that writes only what differs, keeping items of the same key ("id"; null for by index).                                   |
+|                                   | `snapshot(s)`, `deep(s)`   | A plain deep copy, untracked; `deep` subscribes to every property first.                                                                      |
+|                                   | `merge(...s)`, `omit(o,…)` | Props helpers whose properties are getters of their sources, so reactive props stay reactive. In `merge`, a later `undefined` overrides.      |
+| `@reactre/core/features/memo`     | `memo(fn, { equals })`     | `memo` with `prev` and an equality of its own; `equals: false` re-runs readers each time.                                                     |
+|                                   | `signal(fn)`               | A writable derived signal: `fn(prev)` recomputes it when its sources change; a write sets it until then. `signal(v, { equals })` too.         |
 
 ```tsx
 import { createRoot } from "@reactre/core/features/owner";
 import { flush, onSettled } from "@reactre/core/features/timing";
 import { dynamic } from "@reactre/core/features/dynamic";
+import { createStore, reconcile } from "@reactre/core/features/store";
+import { memo, signal } from "@reactre/core/features/memo";
 ```
 
 `onSettled`, `flush`, `createRoot`, `getOwner` and `runWithOwner` are Solid 2.0's, and `reaction` is its `createEffect(compute, apply)`, under MobX's name. `<Dynamic>` stays in `@reactre/core`, since it is compiled away; `dynamic()` is the runtime function beside it. Rows with several selector keys are a feature module too (see [What an app ships](#what-an-app-ships)).
+
+The store APIs are Solid 2.0's, under its names: setters are draft-first (`setStore((s) => { s.todos.push(todo) })`, with a block body, since an object the setter returns replaces the store's contents). `memo` and `signal` from `@reactre/core/features/memo` take core's arguments as core's do, plus Solid 2.0's options; its `lazy` and `unobserved` are left out, since core's signals do not count their readers. In TSX, a store read is reactive where the compiler sees a call, as a signal read is:
+
+```tsx
+<p>{store.count}</p>              // written once: the hole calls nothing
+<p>{store.count.toString()}</p>   // follows store.count
+<For each={[...store.todos]} key={(t) => t.id}>   {/* a new array, read tracked: follows pushes and removals */}
+  {(t) => <li class={t.done ? "done" : ""}>{t.title.trim()}</li>}   {/* the title follows t.title; the class is written once */}
+</For>
+```
+
+`each={store.todos}` renders the array once and then only when `store.todos` is given a new array, since a `<For>` reads the array it is given untracked and needs a new one for each render; spread it. A row's hole that reads only its item is compared when the row gets a new item, and a store's items change in place, keeping their proxies, so such a hole is written once: make it call something.
 
 ## Timing
 
