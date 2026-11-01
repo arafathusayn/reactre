@@ -123,18 +123,37 @@ The template is parsed once. `mount` clones it with values for its holes, in ord
 
 ## API
 
-| Export               | What it does                                                                                    |
-| -------------------- | ----------------------------------------------------------------------------------------------- |
-| `signal(value)`      | A getter and a setter. Reading the getter inside an effect or a hole subscribes it.             |
-| `effect(fn)`         | Runs `fn` now, and again whenever a signal it read changes.                                     |
-| `memo(fn)`           | A derived value, recomputed when what it reads changes.                                         |
-| `batch(fn)`          | Runs `fn` and applies its writes together, so effects run once.                                 |
-| `untrack(fn)`        | Reads signals without subscribing to them.                                                      |
-| `selector(source)`   | `isSelected(key)`, where a change of selection re-runs only the readers of the old and new key. |
-| `onCleanup(fn)`      | Runs `fn` when the effect, component or row it was called in re-runs or goes away.              |
-| `<For each key>`     | A keyed list in TSX.                                                                            |
-| `render(view, root)` | Mounts a TSX view into an element, for good.                                                    |
-| `attach(view, root)` | `render`, returning a function that removes the view and stops its effects.                     |
+| Export                     | What it does                                                                                                                                  |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `signal(value)`            | A getter and a setter. Reading the getter inside an effect or a hole subscribes it.                                                           |
+| `effect(fn)`               | Runs `fn` now, and again whenever a signal it read changes.                                                                                   |
+| `memo(fn)`                 | A derived value, recomputed when what it reads changes.                                                                                       |
+| `batch(fn)`                | Runs `fn` and applies its writes together, so effects run once.                                                                               |
+| `untrack(fn)`              | Reads signals without subscribing to them.                                                                                                    |
+| `selector(source)`         | `isSelected(key)`, where a change of selection re-runs only the readers of the old and new key.                                               |
+| `onCleanup(fn)`            | Runs `fn` when the effect, component or row it was called in re-runs or goes away.                                                            |
+| `onSettled(fn)`            | Runs `fn` once, untracked, when the work under way has finished and the DOM shows it ([timing](#timing)). A function it returns is a cleanup. |
+| `reaction(compute, apply)` | An effect in two halves: `compute` is tracked, `apply(value, prev)` runs untracked when the value changes, and may return a cleanup.          |
+| `flush(fn?)`               | `flush(fn)` runs `fn` and applies its writes before it returns, inside a batch too. `flush()` applies what the current batch has queued.      |
+| `createRoot(fn)`           | Runs `fn(dispose)` under a new owner; `dispose` stops what it made. It goes with the owner it was made in.                                    |
+| `getOwner()`               | The current owner, or null.                                                                                                                   |
+| `runWithOwner(o, fn)`      | Runs `fn`, untracked, with `o` as the owner of what it makes; null makes it belong to nothing.                                                |
+| `<For each key>`           | A keyed list in TSX.                                                                                                                          |
+| `render(view, root)`       | Mounts a TSX view into an element, for good.                                                                                                  |
+| `attach(view, root)`       | `render`, returning a function that removes the view and stops its effects.                                                                   |
+
+`onSettled`, `flush`, `createRoot`, `getOwner` and `runWithOwner` are Solid 2.0's, and `reaction` is its `createEffect(compute, apply)`, under MobX's name. An app that does not call them ships none of their code, and its updates run as before.
+
+## Timing
+
+Writes apply at once: a signal's write re-runs its readers before it returns. In a `batch` (and in a `<For>` row's handler, which is batched), they apply when the outermost batch ends, each effect once. `flush(fn)` is `batch(fn)` that applies before it returns even inside another batch, and `flush()` in a batch applies what it has queued so far.
+
+`onSettled(fn)` runs `fn` once the work under way has finished:
+
+- Called in a batch or a `flush(fn)`, or in an effect that their writes re-ran (a slot rendering new content), `fn` runs at the batch's end, after every effect its writes queued, before `batch` or `flush` returns.
+- Called anywhere else (a component rendered by `render` or `attach`, an effect re-run by a write outside any batch), `fn` runs in a microtask: after the code that called it has returned, and before the browser paints. `flush(() => render(App, el))` runs it before `flush` returns.
+
+In a component, the view is in the page either way. `fn` runs under the component's owner, and not at all if the owner goes first (a slot replaced the content); a function it returns runs when the owner goes.
 
 ## What an app ships
 

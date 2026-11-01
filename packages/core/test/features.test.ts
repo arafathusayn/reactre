@@ -12,6 +12,21 @@
 //   selectors  <For> rows that read several selector keys: @reactre/core/features/selectors,
 //              imported by the compiler for a row whose reactive holes make two or more calls
 //              with arguments, or by the app. Without it, a row's second key throws.
+//   owner and timing APIs
+//              `createRoot`, `getOwner`, `runWithOwner`, `onSettled`, `flush` and `reaction`
+//              (Solid 2.0's). Each comes only with its import and hooks into nothing that runs
+//              without it: an app that does not call them ships the same code as before.
+//              `createRoot` and `reaction` bring ownership, as `attach` and `effect` do.
+//
+// The size profiles (../sizes.json), one app each:
+//   jfb       the js-framework-benchmark app (apps/jfb/app/reactre.tsx): no opt-in at all.
+//   plain     holes, a list, a selector and delegated handlers: the benchmark's features.
+//   slot      a slot whose content has an effect and a cleanup: ownership by usage.
+//   attach    `attach` alone.
+//   imported  rows with several selector keys, by importing the feature.
+//   root      `createRoot` around a `render`, with `getOwner` and `runWithOwner`.
+//   settled   `onSettled` in a slot's content, rendered in a `flush(fn)`.
+//   reaction  `reaction` beside a `render`.
 //
 // The size budgets live in ../sizes.json. When a change is worth its bytes, record the new sizes:
 //
@@ -140,6 +155,48 @@ const apps = {
     render(App, root);
     globalThis.api = { setA, setB };
   `,
+  /** A root around a render, disposed by hand, and a cleanup added to it later through its owner. */
+  root: `
+    import { createRoot, getOwner, onCleanup, render, runWithOwner, signal } from "@reactre/core";
+    const [n, setN] = signal(0);
+    let cleaned = 0;
+    const [dispose, owner] = createRoot((dispose) => {
+      render(() => <p>{n()}</p>, root);
+      return [dispose, getOwner()];
+    });
+    const later = () => runWithOwner(owner, () => onCleanup(() => cleaned++));
+    globalThis.api = { setN, dispose, later, cleaned: () => cleaned };
+  `,
+  /** onSettled in a slot's content: rendered in a flush, then swapped in and out by writes. */
+  settled: `
+    import { batch, flush, onSettled, render, signal } from "@reactre/core";
+    const log = [];
+    const [show, setShow] = signal(true);
+    function A() {
+      onSettled(() => {
+        log.push("in " + root.textContent);
+        return () => log.push("out");
+      });
+      return <b>A</b>;
+    }
+    flush(() => render(() => <p>{show() ? <A /> : "none"}</p>, root));
+    globalThis.api = { log, setShow, batch };
+  `,
+  /** A reaction, which applies only on a change of value, beside a view of the same signal. */
+  reaction: `
+    import { reaction, render, signal } from "@reactre/core";
+    const [id, setId] = signal(1);
+    const log = [];
+    reaction(
+      () => id() % 10,
+      (v, prev) => {
+        log.push(prev + ">" + v);
+        return () => log.push("cleanup " + v);
+      },
+    );
+    render(() => <p>{id()}</p>, root);
+    globalThis.api = { setId, log };
+  `,
 };
 
 describe("ownership", () => {
@@ -213,6 +270,54 @@ describe("selectors", () => {
   });
 });
 
+describe("owner and timing APIs", () => {
+  test("off: an app that does not call them ships none of their code", async () => {
+    for (const name of ["plain", "slot", "attach"] as const) {
+      const code = await bundle(name, apps[name], false);
+      for (const fn of ["createRoot", "getOwner", "runWithOwner", "onSettled", "flush", "reaction"])
+        expect(code).not.toContain(`function ${fn}(`);
+      expect(code).not.toContain("settler");
+      expect(code).not.toContain("queueMicrotask");
+    }
+  });
+
+  test("createRoot: its dispose stops the holes rendered in it, and runWithOwner adds to it later", async () => {
+    const code = await bundle("root", apps.root, false);
+    // A root owns the runtime's own effects too, so it brings ownership.
+    expect(code).toContain("class OwnedEffect");
+    const { root, api } = run(await bundle("root", apps.root));
+    api.setN!(1);
+    expect(text(root)).toBe("1");
+    api.later!();
+    api.dispose!();
+    expect(api.cleaned!()).toBe(1);
+    api.setN!(2);
+    expect(text(root)).toBe("1");
+  });
+
+  test("onSettled: before flush returns, at a batch's end, or at the next microtask; its cleanup goes with the content", async () => {
+    const { root, api } = run(await bundle("settled", apps.settled));
+    const log = api.log as unknown as string[];
+    expect(log).toEqual(["in A"]);
+    api.batch!(() => api.setShow!(false));
+    expect(text(root)).toBe("none");
+    expect(log).toEqual(["in A", "out"]);
+    api.setShow!(true);
+    expect(log).toEqual(["in A", "out"]);
+    await Promise.resolve();
+    expect(log).toEqual(["in A", "out", "in A"]);
+  });
+
+  test("reaction: apply runs on a change of compute's value, after the last apply's cleanup", async () => {
+    const { root, api } = run(await bundle("reaction", apps.reaction));
+    const log = api.log as unknown as string[];
+    api.setId!(2);
+    api.setId!(12);
+    expect(text(root)).toBe("12");
+    expect(log).toEqual(["undefined>1", "cleanup 1", "1>2"]);
+  });
+});
+
 describe("sizes", () => {
   test("each profile stays within its gzip budget", async () => {
     const jfb = Bun.fileURLToPath(new URL("../../../apps/jfb/app/reactre.tsx", import.meta.url));
@@ -221,7 +326,8 @@ describe("sizes", () => {
       (sizes[name] = { min: code.length, gzip: gzipSync(code, { level: 9 }).length });
     // The benchmark app: what an app with no opt-in ships.
     measure("jfb", await bundle("jfb", await Bun.file(jfb).text()));
-    for (const name of ["plain", "slot", "attach", "imported"] as const) measure(name, await bundle(name, apps[name]));
+    for (const name of ["plain", "slot", "attach", "imported", "root", "settled", "reaction"] as const)
+      measure(name, await bundle(name, apps[name]));
     if (process.env.UPDATE_SIZES) {
       await Bun.write(budgets, JSON.stringify(sizes, null, 2) + "\n");
       return;

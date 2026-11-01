@@ -6,6 +6,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### @reactre/core
+
+- Added: `createRoot(fn)`, which runs `fn(dispose)` under a new owner; `dispose` stops the effects and runs the cleanups `fn` made. As in Solid 2.0, a root made inside an owner is disposed with it; one made under `runWithOwner(null, ...)` lives until `dispose`.
+- Added: `getOwner()` and `runWithOwner(owner, fn)`, to make things later that belong to an owner kept from earlier. `runWithOwner` runs `fn` untracked; with null, what `fn` makes belongs to nothing.
+- Added: `onSettled(fn)`, Solid 2.0's replacement for `onMount`. `fn` runs once, untracked, under the owner it was called in: at the end of the batch or `flush` it was called in, or else in a microtask, so in a component, once its view is in the page. A function it returns is a cleanup of that owner.
+- Added: `flush(fn)` and `flush()`, Solid 2.0's replacement for `batch` (which stays). `flush(fn)` runs `fn` and applies its writes before it returns, inside an outer batch too; `flush()` applies what the current batch has queued so far, and outside a batch does nothing.
+- Added: `reaction(compute, apply)`, an effect in two halves, as Solid 2.0's `createEffect(compute, apply)`: `compute` is tracked, and `apply(value, prev)` runs untracked when its value changes, returning a cleanup if it likes. `effect(fn)` is unchanged.
+- Changed: none of these hooks into the code that runs without them. An app that does not call them ships the same code as before: the existing size profiles' minified bundles are the same size, byte for byte, and the same code once local names are left unminified. Their gzipped sizes move by up to 3 bytes either way, as Bun's minifier picks local names from the letters of the whole source file, code it drops included. `test/features.test.ts` adds three profiles: `root`, `settled` and `reaction`.
+
 ## [0.0.3] - 2026-11-01
 
 ### Every package
