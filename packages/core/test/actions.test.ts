@@ -143,6 +143,52 @@ describe("action", () => {
     await p;
     expect(seen).toEqual(["a", "b"]);
   });
+
+  test("an action called in another's code settles as it returns, so the other can yield it", async () => {
+    const [v, setV] = createOptimistic(0);
+    const seen: number[] = [];
+    effect(() => void seen.push(v()));
+    const log: string[] = [];
+    const inner = action(function* (fail: boolean) {
+      setV((n) => n + 10);
+      yield Promise.resolve();
+      if (fail) throw new Error("inner failed");
+      return "inner";
+    });
+    const outer = action(function* () {
+      setV(1);
+      log.push((yield inner(false)) as string);
+      try {
+        yield inner(true);
+      } catch (e) {
+        log.push((e as Error).message);
+      }
+      // The inner actions' optimistic writes show until the shared transition ends.
+      log.push("v " + v());
+      return "outer";
+    });
+    expect(await outer()).toBe("outer");
+    expect(log).toEqual(["inner", "inner failed", "v 21"]);
+    // Reverted together, at the end.
+    expect(v()).toBe(0);
+    expect(seen.at(-1)).toBe(0);
+    // Called outside an action's code, its Promise still settles when the transition ends.
+    const gate = deferred<void>();
+    const order: string[] = [];
+    const slow = action(function* () {
+      yield gate.p;
+    });
+    const quick = action(function* () {
+      yield Promise.resolve();
+    });
+    const a = slow().then(() => order.push("slow")),
+      b = quick().then(() => order.push("quick"));
+    await tick();
+    expect(order).toEqual([]);
+    gate.ok();
+    await Promise.all([a, b]);
+    expect(order.sort()).toEqual(["quick", "slow"]);
+  });
 });
 
 describe("createOptimisticStore", () => {

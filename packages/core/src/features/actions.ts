@@ -9,8 +9,9 @@
 //     (`__act`): an optimistic write made there is the transition's, and a `refresh` made there
 //     joins it. A yielded value is awaited, and what it resolves to (or throws) goes back in.
 //   - The transition ends once no action runs in it and no async memo it waits for is pending:
-//     the optimistic writes revert, what it held runs, and the actions' Promises settle. One
-//     transition is open at a time, so actions that overlap end together.
+//     the optimistic writes revert, what it held runs, and the actions' Promises settle (but
+//     those of actions called in another action's code, which settle as they return, for it to
+//     yield). One transition is open at a time, so actions that overlap end together.
 //   - An optimistic value is a base value with an override per transition: reads see the
 //     override; a write in an action sets it, a write elsewhere sets the base.
 //
@@ -57,7 +58,9 @@ const inc = (n: number): number => n + 1;
 /**
  * An action: a mutation written as a generator (or an async generator), run in a transition.
  * Calling it starts the generator and returns a Promise of what it returns, settled when the
- * transition ends. Each value it yields is awaited, and goes back in (a rejection is thrown in).
+ * transition ends; called in another action's code, it joins that action's transition, and its
+ * Promise settles when it returns, so that the other may yield it. Each value it yields is
+ * awaited, and goes back in (a rejection is thrown in).
  *
  * In the code of an action, a write to an optimistic value (`createOptimistic`,
  * `createOptimisticStore`) shows at once and reverts when the transition ends, and a `refresh` is
@@ -84,11 +87,16 @@ export function action<A extends unknown[], R>(
 ): (...args: A) => Promise<R> {
   return (...args) =>
     new Promise<R>((ok, no) => {
-      const t = core.__transition();
+      // Called in another action's code, it settles when its generator ends, for that action to
+      // yield: settled with the transition, which waits for that action, it never would.
+      const inner = core.__acting() !== null,
+        t = core.__transition();
       t.holds++;
       let it: Generator<unknown, R, unknown> | AsyncGenerator<unknown, R, unknown> | undefined;
       const end = (failed: boolean, v: unknown): void => {
-        t.done.push(() => (failed ? no(v) : ok(v as R)));
+        const settle = (): void => (failed ? no(v) : ok(v as R));
+        if (inner) settle();
+        else t.done.push(settle);
         t.holds--;
         core.__settle(t);
       };

@@ -1044,41 +1044,36 @@ describe("signals/tests/action.test.ts", () => {
       expect($x()).toBe(11);
     });
 
-    gap(
-      "bug",
-      "an action that yields another action's Promise never settles: both wait for the one transition",
-      "should support yielding another action's promise",
-      async () => {
-        const [$x, setX] = signal(0);
-        const steps: string[] = [];
-        const innerAction = action(function* () {
-          steps.push("inner-start");
-          setX((v) => v + 10);
-          yield Promise.resolve();
-          steps.push("inner-end");
-          return "inner-result";
-        });
-        const outerAction = action(function* () {
-          steps.push("outer-start");
-          setX(1);
-          const innerResult: unknown = yield innerAction();
-          steps.push("got: " + String(innerResult));
-          setX((v) => v + 100);
-          steps.push("outer-end");
-          return "outer-result";
-        });
-        // reactre's Promise never settles here: a timer ends the wait, so the port fails fast.
-        const result = await Promise.race([
-          outerAction(),
-          tick(50).then(() => {
-            throw new Error("the outer action never settled");
-          }),
-        ]);
-        expect(result).toBe("outer-result");
-        expect(steps).toEqual(["outer-start", "inner-start", "inner-end", "got: inner-result", "outer-end"]);
-        expect($x()).toBe(111);
-      },
-    );
+    test("should support yielding another action's promise", async () => {
+      const [$x, setX] = signal(0);
+      const steps: string[] = [];
+      const innerAction = action(function* () {
+        steps.push("inner-start");
+        setX((v) => v + 10);
+        yield Promise.resolve();
+        steps.push("inner-end");
+        return "inner-result";
+      });
+      const outerAction = action(function* () {
+        steps.push("outer-start");
+        setX(1);
+        const innerResult: unknown = yield innerAction();
+        steps.push("got: " + String(innerResult));
+        setX((v) => v + 100);
+        steps.push("outer-end");
+        return "outer-result";
+      });
+      // Should the Promise never settle (both waiting for the one transition), a timer ends the wait.
+      const result = await Promise.race([
+        outerAction(),
+        tick(50).then(() => {
+          throw new Error("the outer action never settled");
+        }),
+      ]);
+      expect(result).toBe("outer-result");
+      expect(steps).toEqual(["outer-start", "inner-start", "inner-end", "got: inner-result", "outer-end"]);
+      expect($x()).toBe(111);
+    });
 
     test("should resolve immediately for sync actions", async () => {
       const myAction = action(function* () {
