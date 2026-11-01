@@ -85,6 +85,29 @@ describe("compile errors", () => {
     expect(out).toContain(".parentNode, ");
     expect(out).not.toContain("__p.removeChild");
   });
+
+  test("JSX the compiler does not reach, and a <For> in a fragment, are compile errors", () => {
+    // Inside a template literal's hole, a JSX element would be left as a jsx() call.
+    fails("export const x = `${<b />}`;", /jsx left uncompiled/);
+    fails(
+      `export const x = <><For each={[]} key={(r) => r}>{(r) => <li />}</For></>;`,
+      /<For> must be the child of an element/,
+    );
+  });
+
+  test("an empty fragment, a row in parentheses, and a row with a style and a property compile", () => {
+    expect(compileSource(`export const x = <div><></></div>; export const y = <></>;`)).toContain("__rrFrag([])");
+    // Bun's transpiler drops a row's parentheses; another tool's output may keep them.
+    const list = (row: string) =>
+      compileJs(
+        `const x = jsx_aaaaaaaa("ul", { children: jsx_aaaaaaaa(For, { each: [], key: (r) => r, children: (r) => ${row} }) });`,
+      );
+    expect(list(`((jsx_aaaaaaaa("li", { children: r })))`)).toBe(list(`jsx_aaaaaaaa("li", { children: r })`));
+    const parts = compileSource(
+      `export const x = <ul><For each={[]} key={(r) => r.id}>{(r) => <li style={{ color: r.c }}><input value={r.v} /></li>}</For></ul>;`,
+    );
+    expect(parts).toContain("__rrForM(");
+  });
 });
 
 // #endregion

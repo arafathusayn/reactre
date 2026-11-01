@@ -33,6 +33,8 @@ async function bundle(
   try {
     const r = await Bun.build({
       entrypoints: [join(sub, Object.keys(files)[0]!)],
+      // The packages' sources, as the repository's own builds resolve them: dist may not be built.
+      conditions: ["reactre-source"],
       format: "esm",
       // Minified, as an app's build is: the class code goes only where dead code is dropped.
       minify: true,

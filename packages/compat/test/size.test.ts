@@ -49,6 +49,8 @@ const profiles: Record<string, () => Promise<Bun.BuildOutput>> = {
   full: () =>
     Bun.build({
       entrypoints: [src("index.ts")],
+      // The packages' sources, as the repository's own builds resolve them: dist may not be built.
+      conditions: ["reactre-source"],
       minify: true,
       target: "browser",
       format: "esm",
@@ -57,6 +59,8 @@ const profiles: Record<string, () => Promise<Bun.BuildOutput>> = {
   core: () =>
     Bun.build({
       entrypoints: [src("core.ts")],
+      // The packages' sources, as the repository's own builds resolve them: dist may not be built.
+      conditions: ["reactre-source"],
       minify: true,
       target: "browser",
       format: "esm",
@@ -65,6 +69,8 @@ const profiles: Record<string, () => Promise<Bun.BuildOutput>> = {
   jfb: () =>
     Bun.build({
       entrypoints: [Bun.fileURLToPath(new URL("../../../apps/jfb/app/main.jsx", import.meta.url))],
+      // The packages' sources, as the repository's own builds resolve them: dist may not be built.
+      conditions: ["reactre-source"],
       minify: true,
       target: "browser",
       format: "esm",
@@ -74,6 +80,8 @@ const profiles: Record<string, () => Promise<Bun.BuildOutput>> = {
   "full-compat": () =>
     Bun.build({
       entrypoints: [Bun.fileURLToPath(new URL("../../full-compat/src/index.ts", import.meta.url))],
+      // The packages' sources, as the repository's own builds resolve them: dist may not be built.
+      conditions: ["reactre-source"],
       minify: true,
       target: "browser",
       format: "esm",

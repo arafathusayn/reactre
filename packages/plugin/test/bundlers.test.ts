@@ -125,6 +125,8 @@ const bundlers: Record<string, Bundle> = {
   bun: async (entry, file, options) => {
     const r = await Bun.build({
       entrypoints: [entry],
+      // The packages' sources, as the repository's own builds resolve them: dist may not be built.
+      conditions: ["reactre-source"],
       outdir: join(file, ".."),
       naming: file.split("/").pop()!,
       target: "browser",

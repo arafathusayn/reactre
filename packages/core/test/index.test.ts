@@ -298,6 +298,36 @@ describe("reactre: runtime helpers", () => {
 });
 
 describe("reactre: selectors", () => {
+  test("a row that reads one pair again, after several, records it once", () => {
+    const root = box();
+    const api = run<{ setSel: (n: number) => void }>(
+      `
+      import { For, render, selector, signal } from "@reactre/core";
+      const [sel, setSel] = signal(0);
+      const isSel = selector(sel);
+      const rows = [1, 2, 3].map((id) => ({ id }));
+      function App() {
+        return (
+          <ul>
+            <For each={rows} key={(r) => r.id}>
+              {(r) => <li>{isSel(r.id) ? "me" : isSel(r.id + 1) ? (isSel(r.id) ? "?" : "next") : "-"}</li>}
+            </For>
+          </ul>
+        );
+      }
+      render(App, root);
+      return { setSel };
+    `,
+      root,
+    );
+    const texts = () => [...(root.firstChild as FakeElement).childNodes].map((li) => li.textContent);
+    expect(texts()).toEqual(["-", "-", "-"]);
+    api.setSel(2);
+    expect(texts()).toEqual(["next", "me", "-"]);
+    api.setSel(3);
+    expect(texts()).toEqual(["-", "next", "me"]);
+  });
+
   test("a row keeps every selector and key it reads", () => {
     const root = box();
     const api = run<{ setSel: (n: number) => void; setHover: (n: number) => void }>(
@@ -574,6 +604,38 @@ describe("reactre: compiler coverage", () => {
     api.setV("b");
     expect(input!.value).toBe("b");
     expect(input!.checked).toBe(true);
+  });
+
+  test("a reactive style moves between a string, an object and nothing; spread props set value and checked", () => {
+    const root = box();
+    const api = run<{ setS: (s: unknown) => void }>(
+      `
+      import { render, signal } from "@reactre/core";
+      const [s, setS] = signal("color: red");
+      const extra = { value: "x", checked: true };
+      function App() {
+        return <form><p style={s()}>x</p><input {...extra} /></form>;
+      }
+      render(App, root);
+      return { setS };
+    `,
+      root,
+    );
+    const [p, input] = (root.firstChild as FakeElement).childNodes as FakeElement[];
+    const style = (el: FakeElement) => el.style as { getPropertyValue(k: string): string; cssText: string };
+    expect(style(p!).cssText).toBe("color: red;");
+    // A camelCase name is set by its CSS name.
+    api.setS({ color: "blue", marginTop: "1px", margin: "0" });
+    expect(style(p!).cssText).toBe("color: blue; margin-top: 1px; margin: 0;");
+    // A property the next object leaves out is removed.
+    api.setS({ margin: "0" });
+    expect(style(p!).getPropertyValue("color")).toBe("");
+    expect(style(p!).cssText).toBe("margin: 0;");
+    api.setS(null);
+    expect(style(p!).cssText).toBe("");
+    expect(input!.value).toBe("x");
+    expect(input!.checked).toBe(true);
+    expect(input!.getAttribute("value")).toBeNull();
   });
 
   test("SVG elements get the SVG namespace, whatever the template's root", () => {

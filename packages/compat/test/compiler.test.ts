@@ -14,7 +14,7 @@ import { join } from "node:path";
 
 import { FakeElement, installFakeDocument } from "@reactre/testdom";
 
-import { compileSource, reactreCompatCompiler } from "../src/compiler.ts";
+import { compileJs, compileSource, reactreCompatCompiler } from "../src/compiler.ts";
 import { __block, __defaults, __key, __template, createRoot, flushSync, Fragment, jsx, jsxs } from "../src/core.ts";
 
 // The descriptions of the templates hoisted in compiled output, parsed back from their JSON.
@@ -156,6 +156,17 @@ describe("@reactre/compat/compiler", () => {
     const out = compileSource(`export const A = (p) => <B {...p} />;`);
     expect(templates(out)).toEqual([]);
     expect(out).toMatch(/^import \{ jsx as jsx_\w+ \} from "react\/jsx-runtime";\nexport/);
+  });
+
+  test("a list row in parentheses becomes a loop too", () => {
+    // Bun's transpiler drops the parentheses; another tool's output may keep them.
+    const head = `import { jsx as jsx_a1b2c3d4 } from "react/jsx-runtime";\nconst Row = () => null;\n`;
+    const row = `jsx_a1b2c3d4(Row, { row: r }, r.id)`;
+    const out = compileJs(
+      head + `export const L = ({ rows }) => jsx_a1b2c3d4("ul", { children: rows.map((r) => ((${row}))) });`,
+    );
+    expect(out).toContain("__hrL0(");
+    expect(out).not.toContain("jsx_a1b2c3d4(Row");
   });
 
   test("a list's map becomes a loop with map's results", () => {
