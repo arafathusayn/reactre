@@ -375,6 +375,18 @@ const apps = {
     render(App, root);
     globalThis.api = { setTodos, gone };
   `,
+  /**
+   * A <For> that is the component's whole view, with fragment rows, and a <Repeat> of text rows in
+   * an element: @reactre/core/features/for. Not a size profile: what it ships is that module.
+   */
+  anyList: `
+    import { For, render, Repeat, signal } from "@reactre/core";
+    const [todos, setTodos] = signal(["a", "b"]);
+    const App = () => <For each={todos()} key={(t) => t}>{(t) => <><b>{t}</b>{t}</>}</For>;
+    render(App, root);
+    render(() => <p><Repeat count={todos().length}>{(i) => i + ";"}</Repeat></p>, root);
+    globalThis.api = { setTodos };
+  `,
   /** A store's todos in a <For>, pushed to, toggled in place, and reconciled. */
   store: `
     import { For, render } from "@reactre/core";
@@ -701,6 +713,17 @@ describe("render and tracked effects, and list functions", () => {
     expect(text(root)).toBe("0:b,1:c,2:a *0*1*2");
     api.setTodos!(["c"]);
     expect([text(root), api.gone as unknown]).toEqual(["0:c *0", ["b", "a"]]);
+  });
+
+  test("lists anywhere: an app whose lists are all of element rows in an element ships no features/for", async () => {
+    for (const name of ["plain", "show", "index", "store", "storeEach"] as const)
+      expect(await bundle(name, apps[name], false)).not.toContain("function __each(");
+    expect(await bundle("hydrate", apps.hydrate, false, false, false, true)).not.toContain("function __each(");
+    expect(await bundle("anyList", apps.anyList, false)).toContain("function __each(");
+    const { root, api } = run(await bundle("anyList", apps.anyList));
+    expect(text(root)).toBe("aabb0;1;");
+    api.setTodos!(["b", "c", "a"]);
+    expect(text(root)).toBe("bbccaa0;1;2;");
   });
 });
 

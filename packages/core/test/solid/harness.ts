@@ -34,6 +34,7 @@ import { test } from "bun:test";
 import { compileSource } from "@reactre/compiler";
 
 import * as dynamic from "../../src/features/dynamic.ts";
+import * as forAny from "../../src/features/for.ts";
 import * as index from "../../src/features/index.ts";
 import * as memo from "../../src/features/memo.ts";
 import * as owner from "../../src/features/owner.ts";
@@ -140,6 +141,7 @@ export function gap(kind: Gap, why: string, name: string, fn: () => unknown): vo
 export const base: Record<string, unknown> = {
   "@reactre/core": core,
   "@reactre/core/features/dynamic": dynamic,
+  "@reactre/core/features/for": forAny,
   "@reactre/core/features/index": index,
   "@reactre/core/features/memo": memo,
   "@reactre/core/features/owner": owner,

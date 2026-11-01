@@ -250,9 +250,10 @@ describe("what it writes", () => {
 describe("compile errors, as the client's", () => {
   test("lists", () => {
     fails(
-      `export const A = () => <For each={[]} key={(r) => r}>{(r) => <li />}</For>;`,
-      /<For> must be the child of an element/,
+      `export const A = () => <For each={[]} key={(r) => r}>{row}</For>;`,
+      /a <For> row must be \(item, i\) => its content, written in place, or the content: row/,
     );
+    fails(`export const A = () => <For each={[]}>{(r) => <li />}</For>;`, /<For> needs each, key and a row function/);
     fails(
       `export const A = () => <ul><For each={[]}>{(r) => <li />}</For></ul>;`,
       /<For> needs each, key and a row function/,

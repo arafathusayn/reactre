@@ -11,7 +11,8 @@
 // component across a describe ("Create", then the permutations, then "dispose"); the ports keep
 // that order, and the last test of each describe disposes. The "multi child" describes insert the
 // list before a text node that is already there (Solid's `insert(div, <Component />, marker)`);
-// reactre has no public `insert`, so a port mounts the component with `attach`, which appends.
+// reactre has no public `insert`, so a port mounts the component with `attach`, which appends,
+// and then moves that text node after it.
 // `innerHTML` is `html()`, which the fake DOM lacks.
 //
 // for.nonkeyed.spec.tsx's and repeat.spec.tsx's "fragment children" and "array children"
@@ -27,7 +28,7 @@ import { reaction } from "../../src/features/reaction.ts";
 import { createStore } from "../../src/features/store.ts";
 import { flush } from "../../src/features/timing.ts";
 import { signal } from "../../src/index.ts";
-import { base, compile, type Gap, gap } from "./harness.ts";
+import { base, compile } from "./harness.ts";
 
 beforeEach(installFakeDocument);
 
@@ -72,11 +73,12 @@ const [n1, n2, n3, n4] = ["a", "b", "c", "d"] as const;
 
 /**
  * The permutation tests Solid runs on each list ("1 missing" to "swap backward edge"), over a
- * component that renders `list`: `shown` is what the page shows for a list, `marker` what follows
- * it ("z" in the "multi child" describes). With `kind`, each is a gap of that kind.
+ * component that renders `list`: `shown` is what the page shows for a list, with what follows it
+ * ("z" in the "multi child" describes).
  */
-function permutations(name: string, src: string, shown: (a: string[]) => string, gapOf?: [Gap, string]): void {
-  const it = (title: string, fn: () => void): void => (gapOf ? gap(gapOf[0], gapOf[1], title, fn) : test(title, fn));
+function permutations(name: string, src: string, shown: (a: string[]) => string): void {
+  // Solid's `it`.
+  const it = test;
   describe(name, () => {
     let t: Api;
     const view = (): string => html(t.div());
@@ -144,18 +146,21 @@ const onlyChild = (imports: string, jsx: string): string => `
   return { setList, div: () => div, dispose: attach(Component, root) };
 `;
 
-/** A source whose component is `list`, written as `jsx`, mounted into `host` after its "z". */
+/**
+ * A source whose component is `list`, written as `jsx`, mounted into `host` before its "z": `attach`
+ * appends, so the "z" is moved after what it mounted.
+ */
 const multiChild = (imports: string, jsx: string): string => `
   import { attach, ${imports}, signal } from "@reactre/core";
   const [list, setList] = signal(["a", "b", "c", "d"]);
   const Component = () => ${jsx};
-  return { setList, div: () => host, dispose: attach(Component, host) };
+  const dispose = attach(Component, host);
+  host.appendChild(host.firstChild);
+  return { setList, div: () => host, dispose };
 `;
 
 const joined = (a: string[]): string => a.join("");
 const doubled = (a: string[]): string => a.map((p) => `${p}${p}`).join("");
-const rowShape = (what: string): [Gap, string] => ["row-shape", `a ${what} row is refused`];
-const placement: [Gap, string] = ["for-placement", "a list that is a component's whole view is refused"];
 
 /** The "fallback", "maps to undefined" and "indexes" describes, over an empty list and `jsx`. */
 const empty = (imports: string, jsx: string): string => `
@@ -173,29 +178,25 @@ describe("for.spec.tsx", () => {
     "Testing an only child each control flow",
     onlyChild("For", `<For each={list()} key={(x) => x}>{(item) => item}</For>`),
     joined,
-    rowShape("text"),
   );
   permutations(
     "Testing an multi child each control flow",
     multiChild("For", `<For each={list()} key={(x) => x}>{(item) => item}</For>`),
     (a) => `${joined(a)}z`,
-    placement,
   );
   permutations(
     "Testing an only child each control flow with fragment children",
     onlyChild("For", `<For each={list()} key={(x) => x}>{(item) => <>{item}{item}</>}</For>`),
     doubled,
-    rowShape("fragment"),
   );
   permutations(
     "Testing an only child each control flow with array children",
     onlyChild("For", `<For each={list()} key={(x) => x}>{(item) => [item, item]}</For>`),
     doubled,
-    rowShape("array"),
   );
 
   describe("Testing each control flow with fallback", () => {
-    gap("row-shape", "a text row is refused", "Create each control flow", () => {
+    test("Create each control flow", () => {
       const t = mount(empty("For", `<For each={list()} key={(x) => x} fallback={"Empty"}>{(item) => item}</For>`));
       expect(html(t.div())).toBe("Empty");
       t.setList([n1, n2, n3, n4]);
@@ -209,7 +210,7 @@ describe("for.spec.tsx", () => {
   });
 
   describe("Testing each that maps to undefined", () => {
-    gap("row-shape", "a row of undefined is refused", "Create each control flow", () => {
+    test("Create each control flow", () => {
       const t = mount(empty("For", `<For each={list()} key={(x) => x}>{(item) => undefined}</For>`));
       expect(html(t.div())).toBe("");
       t.setList([n1, n2, n3, n4]);
@@ -221,7 +222,7 @@ describe("for.spec.tsx", () => {
   });
 
   describe("Testing each with indexes", () => {
-    gap("for-index", "a keyed row gets no index", "Create each control flow", () => {
+    test("Create each control flow", () => {
       const t = mount(
         empty(
           "For",
@@ -261,17 +262,15 @@ describe("for.nonkeyed.spec.tsx", () => {
     "Testing an only child each control flow",
     onlyChild("For", `<For each={list()} keyed={false}>{(item) => <>{item()}</>}</For>`),
     joined,
-    rowShape("fragment"),
   );
   permutations(
     "Testing an multi child each control flow",
     multiChild("For", `<For each={list()} keyed={false}>{(item) => <>{item()}</>}</For>`),
     (a) => `${joined(a)}z`,
-    placement,
   );
 
   describe("Testing each control flow with fallback", () => {
-    gap("row-shape", "a fragment row is refused", "Create each control flow", () => {
+    test("Create each control flow", () => {
       const t = mount(
         empty("For", `<For each={list()} fallback={"Empty"} keyed={false}>{(item) => <>{item()}</>}</For>`),
       );
@@ -287,7 +286,7 @@ describe("for.nonkeyed.spec.tsx", () => {
   });
 
   describe("Testing each that maps to undefined", () => {
-    gap("row-shape", "a row of undefined is refused", "Create each control flow", () => {
+    test("Create each control flow", () => {
       const t = mount(empty("For", `<For each={list()} keyed={false}>{(item) => undefined}</For>`));
       expect(html(t.div())).toBe("");
       t.setList([n1, n2, n3, n4]);
@@ -385,17 +384,15 @@ describe("repeat.spec.tsx", () => {
     "Testing an only child each control flow",
     onlyChild("Repeat", `<Repeat count={list().length}>{(i) => <>{list()[i]}</>}</Repeat>`),
     joined,
-    rowShape("fragment"),
   );
   permutations(
     "Testing an multi child each control flow",
     multiChild("Repeat", `<Repeat count={list().length}>{(i) => <>{list()[i]}</>}</Repeat>`),
     (a) => `${joined(a)}z`,
-    placement,
   );
 
   describe("Testing each control flow with fallback", () => {
-    gap("row-shape", "a fragment row is refused", "Create each control flow", () => {
+    test("Create each control flow", () => {
       const t = mount(
         empty("Repeat", `<Repeat count={list().length} fallback={"Empty"}>{(i) => <>{list()[i]}</>}</Repeat>`),
       );
@@ -411,7 +408,7 @@ describe("repeat.spec.tsx", () => {
   });
 
   describe("Testing each that maps to undefined", () => {
-    gap("row-shape", "a row of undefined is refused", "Create each control flow", () => {
+    test("Create each control flow", () => {
       const t = mount(empty("Repeat", `<Repeat count={list().length}>{(i) => undefined}</Repeat>`));
       expect(html(t.div())).toBe("");
       t.setList([n1, n2, n3, n4]);
@@ -425,7 +422,7 @@ describe("repeat.spec.tsx", () => {
   });
 
   describe("Testing each without callback", () => {
-    gap("row-shape", "an element child (no row function) is refused", "Create each control flow", () => {
+    test("Create each control flow", () => {
       const t = mount(empty("Repeat", `<Repeat count={list().length}><span>Hello</span></Repeat>`));
       const hello = (k: number): string => "<span>Hello</span>".repeat(k);
       expect(html(t.div())).toBe("");
@@ -448,7 +445,7 @@ describe("repeat.spec.tsx", () => {
     });
   });
 
-  gap("row-shape", "an element child (no row function) is refused", "element children run once per row", () => {
+  test("element children run once per row", () => {
     const t = compile<{
       runs: () => number;
       setCount: (n: number) => void;

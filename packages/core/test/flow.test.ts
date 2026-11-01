@@ -14,6 +14,8 @@ import { compileSource } from "@reactre/compiler";
 import { FakeElement, FakeEvent, installFakeDocument } from "@reactre/testdom";
 
 import * as dynamicFeature from "../src/features/dynamic.ts";
+import * as forFeature from "../src/features/for.ts";
+import * as storeFeature from "../src/features/store.ts";
 import * as runtime from "../src/index.ts";
 
 const SVG = "http://www.w3.org/2000/svg";
@@ -63,6 +65,8 @@ beforeEach(() => {
 const modules: Record<string, unknown> = {
   "@reactre/core": runtime,
   "@reactre/core/features/dynamic": dynamicFeature,
+  "@reactre/core/features/for": forFeature,
+  "@reactre/core/features/store": storeFeature,
 };
 
 /**
@@ -555,6 +559,316 @@ describe("<Repeat>", () => {
     expect(html(root)).toBe("<div><p><b>1.0</b><b>1.1</b></p></div>");
     api.setRows([{ id: 1, n: 1 }]);
     expect(html(root)).toBe("<div><p><b>1.0</b></p></div>");
+  });
+});
+
+// #endregion
+
+// #region Lists anywhere, rows of any shape
+
+describe("<For> and <Repeat> anywhere, with rows of any shape (features/for)", () => {
+  /** Tags, classes and text of `n`'s children, through a list's markers (empty text). */
+  const nodes = (n: FakeElement): FakeElement[] => n.childNodes.filter((c) => c instanceof FakeElement);
+
+  test("a component's whole view: rows keep their elements as they move; the disposer takes them out", () => {
+    const root = box();
+    const api = run<{ set: (v: string[]) => void; dispose: () => void; built: () => number }>(
+      `
+      import { attach, For, signal } from "@reactre/core";
+      const [list, set] = signal(["a", "b", "c"]);
+      let built = 0;
+      const App = () => <For each={list()} key={(x) => x}>{(x) => <li class={(built++, x)}>{x}</li>}</For>;
+      return { set, dispose: attach(App, root), built: () => built };
+    `,
+      root,
+    );
+    expect(html(root)).toBe('<li class="a">a</li><li class="b">b</li><li class="c">c</li>');
+    const [a, b, c] = nodes(root);
+    api.set(["c", "a", "d", "b"]);
+    expect(html(root)).toBe('<li class="c">c</li><li class="a">a</li><li class="d">d</li><li class="b">b</li>');
+    expect(nodes(root)[0]).toBe(c!);
+    expect(nodes(root)[1]).toBe(a!);
+    expect(nodes(root)[3]).toBe(b!);
+    expect(api.built()).toBe(4);
+    api.set([]);
+    expect(html(root)).toBe("");
+    api.set(["x"]);
+    expect(html(root)).toBe('<li class="x">x</li>');
+    api.dispose();
+    expect(root.childNodes.length).toBe(0);
+    api.set(["y"]);
+    expect(root.childNodes.length).toBe(0);
+  });
+
+  test("in a fragment beside other children, and in an element beside them", () => {
+    const root = box();
+    const api = run<{ set: (v: string[]) => void }>(
+      `
+      import { For, render, Repeat, signal } from "@reactre/core";
+      const [list, set] = signal(["a", "b"]);
+      render(() => (
+        <>
+          head
+          <For each={list()} key={(x) => x}>{(x) => <i>{x}</i>}</For>
+          <ul><li>h</li><For each={list()} key={(x) => x}>{(x) => <><li>{x}</li><li>{x}!</li></>}</For><li>t</li></ul>
+          <Repeat count={list().length} from={1}>{(i) => <b>{i}</b>}</Repeat>
+          tail
+        </>
+      ), root);
+      return { set };
+    `,
+      root,
+    );
+    expect(html(root)).toBe(
+      "head<i>a</i><i>b</i><ul><li>h</li><li>a</li><li>a!</li><li>b</li><li>b!</li><li>t</li></ul><b>1</b><b>2</b>tail",
+    );
+    api.set(["b", "c", "a"]);
+    expect(html(root)).toBe(
+      "head<i>b</i><i>c</i><i>a</i><ul><li>h</li><li>b</li><li>b!</li><li>c</li><li>c!</li><li>a</li><li>a!</li><li>t</li></ul><b>1</b><b>2</b><b>3</b>tail",
+    );
+  });
+
+  test("as the only child of <Show> and <Switch>: rows added later go with it", () => {
+    const root = box();
+    const api = run<{ set: (v: string[]) => void; on: (v: boolean) => void }>(
+      `
+      import { For, Match, render, Show, signal, Switch } from "@reactre/core";
+      const [list, set] = signal(["a"]);
+      const [shown, on] = signal(true);
+      render(() => (
+        <div>
+          <Show when={shown()}><For each={list()} key={(x) => x}>{(x) => <i>{x}</i>}</For></Show>
+          <Switch><Match when={shown()}><For each={list()} key={(x) => x}>{(x) => x}</For></Match></Switch>
+        </div>
+      ), root);
+      return { set, on };
+    `,
+      root,
+    );
+    expect(html(root)).toBe("<div><i>a</i>a</div>");
+    api.set(["a", "b"]);
+    expect(html(root)).toBe("<div><i>a</i><i>b</i>ab</div>");
+    api.on(false);
+    expect(html(root)).toBe("<div></div>");
+    api.set(["c"]);
+    api.on(true);
+    expect(html(root)).toBe("<div><i>c</i>c</div>");
+  });
+
+  test("rows of text, fragments, arrays, nothing, components and other lists", () => {
+    const root = box();
+    const api = run<{ set: (v: string[]) => void }>(
+      `
+      import { For, render, signal } from "@reactre/core";
+      const [list, set] = signal(["a", "b"]);
+      const Pair = (p) => <>{p.x}<b>{p.x}</b></>;
+      const Text = (p) => p.x;
+      const Both = (p) => [p.x, <u>{p.x}</u>];
+      render(() => (
+        <div>
+          <p><For each={list()} key={(x) => x}>{(x) => x}</For></p>
+          <p><For each={list()} key={(x) => x}>{(x) => [x, "-"]}</For></p>
+          <p><For each={list()} key={(x) => x}>{(x) => null}</For></p>
+          <p><For each={list()} key={(x) => x}>{(x) => <Pair x={x} />}</For></p>
+          <p><For each={list()} key={(x) => x}>{(x) => <Text x={x} />}</For></p>
+          <p><For each={list()} key={(x) => x}>{(x) => <Both x={x} />}</For></p>
+          <p><For each={list()} key={(x) => x}>{(x) => <For each={[x, x]} key={(y) => y}>{(y) => y + "."}</For>}</For></p>
+          <p><For each={list()} key={(x) => x}>{(x) => { const y = x + x; return <s>{y}</s>; }}</For></p>
+        </div>
+      ), root);
+      return { set };
+    `,
+      root,
+    );
+    const ps = (): string[] => nodes(root.firstChild as FakeElement).map(html);
+    expect(ps()).toEqual([
+      "ab",
+      "a-b-",
+      "",
+      "a<b>a</b>b<b>b</b>",
+      "ab",
+      "a<u>a</u>b<u>b</u>",
+      "a.a.b.b.",
+      "<s>aa</s><s>bb</s>",
+    ]);
+    api.set(["b", "c", "a"]);
+    expect(ps()).toEqual([
+      "bca",
+      "b-c-a-",
+      "",
+      "b<b>b</b>c<b>c</b>a<b>a</b>",
+      "bca",
+      "b<u>b</u>c<u>c</u>a<u>a</u>",
+      "b.b.c.c.a.a.",
+      "<s>bb</s><s>cc</s><s>aa</s>",
+    ]);
+  });
+
+  test("a row that changes shape is a slot; the row moves with all it holds", () => {
+    const root = box();
+    const api = run<{ set: (v: string[]) => void; big: (v: boolean) => void }>(
+      `
+      import { For, render, signal } from "@reactre/core";
+      const [list, set] = signal(["a", "b"]);
+      const [big, setBig] = signal(false);
+      render(() => <div><For each={list()} key={(x) => x}>{(x) => (big() ? <b>{x}</b> : [x, "!"])}</For></div>, root);
+      return { set, big: setBig };
+    `,
+      root,
+    );
+    expect(html(root)).toBe("<div>a!b!</div>");
+    api.big(true);
+    expect(html(root)).toBe("<div><b>a</b><b>b</b></div>");
+    api.set(["b", "a"]);
+    expect(html(root)).toBe("<div><b>b</b><b>a</b></div>");
+    api.big(false);
+    api.set(["a", "c", "b"]);
+    expect(html(root)).toBe("<div>a!c!b!</div>");
+  });
+
+  test("keyed: an item new for its key builds its row again; a row's index accessor follows its moves", () => {
+    const root = box();
+    const api = run<{ set: (v: { id: number; t: string }[]) => void; runs: () => number }>(
+      `
+      import { For, render, signal } from "@reactre/core";
+      const [list, set] = signal([{ id: 1, t: "a" }, { id: 2, t: "b" }]);
+      let runs = 0;
+      render(() => <div><For each={list()} key={(x) => x.id}>{(x, i) => (runs++, <><i>{i()}</i>{x.t}</>)}</For></div>, root);
+      return { set, runs: () => runs };
+    `,
+      root,
+    );
+    expect(html(root)).toBe("<div><i>0</i>a<i>1</i>b</div>");
+    const [one, two] = nodes(root.firstChild as FakeElement);
+    const b = { id: 2, t: "B" };
+    api.set([b, { id: 1, t: "a" }]);
+    expect(html(root)).toBe("<div><i>0</i>B<i>1</i>a</div>");
+    expect(api.runs()).toBe(4);
+    expect(nodes(root.firstChild as FakeElement)).not.toContain(two!);
+    expect(nodes(root.firstChild as FakeElement)).not.toContain(one!);
+    api.set([{ id: 3, t: "c" }, b]);
+    const kept = nodes(root.firstChild as FakeElement)[1];
+    expect(html(root)).toBe("<div><i>0</i>c<i>1</i>B</div>");
+    api.set([b]);
+    expect(html(root)).toBe("<div><i>0</i>B</div>");
+    expect(nodes(root.firstChild as FakeElement)[0]).toBe(kept!);
+  });
+
+  test("two items of one key are two rows", () => {
+    const root = box();
+    const api = run<{ set: (v: string[]) => void }>(
+      `
+      import { For, render, signal } from "@reactre/core";
+      const [list, set] = signal(["a", "a", "b"]);
+      render(() => <div><For each={list()} key={(x) => x}>{(x) => <>{x}</>}</For></div>, root);
+      return { set };
+    `,
+      root,
+    );
+    expect(html(root)).toBe("<div>aab</div>");
+    api.set(["b", "a", "a", "a"]);
+    expect(html(root)).toBe("<div>baaa</div>");
+    api.set(["a"]);
+    expect(html(root)).toBe("<div>a</div>");
+  });
+
+  test("by position: a row's item accessor takes a new item in place; the fallback while empty", () => {
+    const root = box();
+    const api = run<{ set: (v: string[] | null) => void; runs: () => number }>(
+      `
+      import { For, render, signal } from "@reactre/core";
+      const [list, set] = signal(["a", "b"]);
+      let runs = 0;
+      render(() => (
+        <For each={list()} keyed={false} fallback={<em>none</em>}>{(x, i) => (runs++, <>{i}:{x()} </>)}</For>
+      ), root);
+      return { set, runs: () => runs };
+    `,
+      root,
+    );
+    expect(html(root)).toBe("0:a 1:b ");
+    api.set(["c", "b", "d"]);
+    expect(html(root)).toBe("0:c 1:b 2:d ");
+    expect(api.runs()).toBe(3);
+    api.set(null);
+    expect(html(root)).toBe("<em>none</em>");
+    api.set([]);
+    expect(html(root)).toBe("<em>none</em>");
+    api.set(["e"]);
+    expect(html(root)).toBe("0:e ");
+  });
+
+  test("<Repeat> with children that are not a function: a row each, built per row", () => {
+    const root = box();
+    const api = run<{ set: (n: number) => void }>(
+      `
+      import { render, Repeat, signal } from "@reactre/core";
+      const [n, set] = signal(2);
+      render(() => (
+        <>
+          <Repeat count={n()} fallback="none"><i>x</i>y</Repeat>
+          <Repeat count={n()}>z</Repeat>
+          <Repeat count={n()}>{1}</Repeat>
+        </>
+      ), root);
+      return { set };
+    `,
+      root,
+    );
+    expect(html(root)).toBe("<i>x</i>y<i>x</i>yzz11");
+    api.set(0);
+    expect(html(root)).toBe("none");
+    api.set(1);
+    expect(html(root)).toBe("<i>x</i>yz1");
+  });
+
+  test("a store's array: pushes and writes to its items render", () => {
+    const root = box();
+    const api = run<{ add: (t: string) => void; rename: (i: number, t: string) => void }>(
+      `
+      import { For, render } from "@reactre/core";
+      import { createStore } from "@reactre/core/features/store";
+      const [s, set] = createStore({ todos: [{ t: "a" }] });
+      render(() => <For each={s.todos} key={(x) => x}>{(x) => <>{x.t};</>}</For>, root);
+      return {
+        add: (t) => set((d) => { d.todos.push({ t }); }),
+        rename: (i, t) => set((d) => { d.todos[i].t = t; }),
+      };
+    `,
+      root,
+    );
+    expect(html(root)).toBe("a;");
+    api.add("b");
+    expect(html(root)).toBe("a;b;");
+    api.rename(0, "A");
+    expect(html(root)).toBe("A;b;");
+  });
+
+  test("a row's cleanups run when it leaves and with its list; a row that throws leaves the list as it was", () => {
+    const root = box();
+    const api = run<{ set: (v: string[]) => void; log: string[]; dispose: () => void }>(
+      `
+      import { attach, For, onCleanup, signal } from "@reactre/core";
+      const [list, set] = signal(["a", "b"]);
+      const log = [];
+      const Row = (p) => {
+        if (p.x === "bad") throw new Error("bad row");
+        onCleanup(() => log.push(p.x));
+        return <i>{p.x}</i>;
+      };
+      const dispose = attach(() => <For each={list()} key={(x) => x}>{(x) => <Row x={x} />}</For>, root);
+      return { set, log, dispose };
+    `,
+      root,
+    );
+    api.set(["b"]);
+    expect(api.log).toEqual(["a"]);
+    expect(() => api.set(["c", "bad", "b"])).toThrow("bad row");
+    expect(api.log).toEqual(["a", "c"]);
+    expect(html(root)).toBe("<i>b</i>");
+    api.dispose();
+    expect(api.log).toEqual(["a", "c", "b"]);
+    expect(root.childNodes.length).toBe(0);
   });
 });
 

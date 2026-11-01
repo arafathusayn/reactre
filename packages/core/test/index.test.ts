@@ -908,14 +908,11 @@ describe("reactre: ownership", () => {
 
 describe("@reactre/compiler: errors", () => {
   test("constructs it does not compile are errors, not a runtime fallback", () => {
-    expect(() => compileSource(`const x = <For each={[]} key={(r) => r}>{(r) => <b />}</For>;`)).toThrow(
+    // A row the compiler cannot see is not run as a function at runtime.
+    expect(() => compileSource(`const x = <For each={[]} key={(r) => r}>{row}</For>;`)).toThrow(ReactreCompileError);
+    expect(() => compileSource(`const x = <ul><For each={[]} key={(r) => r}>{(r, i, j) => <b />}</For></ul>;`)).toThrow(
       ReactreCompileError,
     );
-    expect(() => compileSource(`const x = <ul><For each={[]} key={(r) => r}>{(r) => <><b /></>}</For></ul>;`)).toThrow(
-      ReactreCompileError,
-    );
-    expect(() => compileSource(`const x = <For each={[]} key={(r) => r}>{(r) => <b />}</For>;`)).toThrow(
-      ReactreCompileError,
-    );
+    expect(() => compileSource("const x = `${<b />}`;")).toThrow(ReactreCompileError);
   });
 });

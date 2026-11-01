@@ -192,7 +192,7 @@ export class ServerEmit {
         ? `__rrsS(${this.host({ ...x, key: undefined, keyAt: -1 })})`
         : this.host(x);
     const f = c.kind(x.type);
-    if (f === "For" || f === "Repeat") throw new ReactreCompileError(`reactre: <${f}> must be the child of an element`);
+    if (f === "For" || f === "Repeat") return c.anyList(x, f);
     if (f !== null) {
       const flow = this.flow(x, f);
       return "host" in flow ? this.host(flow.host) : flow.code;
@@ -378,7 +378,9 @@ export class ServerEmit {
         continue;
       }
       const f = inner === null ? null : c.kind(inner.type);
-      if (f === "For" || f === "Repeat") this.hole(t, this.list(inner!, f), false);
+      // As on the client: a list whose row is not one element is content, in a slot.
+      if ((f === "For" || f === "Repeat") && !c.elementRows(inner!, f)) this.slot(t, c.anyList(inner!, f), false);
+      else if (f === "For" || f === "Repeat") this.hole(t, this.list(inner!, f), false);
       else if (f !== null) {
         const flow = this.flow(inner!, f);
         if ("host" in flow) this.element(flow.host, t, svg);
@@ -417,6 +419,23 @@ export class ServerEmit {
       changes = c.changes(each[0]);
     }
     return changes ? `__rrsL(() => ${code})` : code;
+  }
+
+  /**
+   * The client's `anyList` on the server: its rows' content (or while there are none, its
+   * fallback's) in one pair of markers, as the client's list renders between its two. A row
+   * gets its item and an accessor of its index, or by position (`index`), an accessor of its item
+   * and its index.
+   *
+   * @param each The items, compiled; `row` the row's function and `fallback` its content, compiled.
+   * @param changes Whether the items may change: the list is then a thunk, which may wait.
+   */
+  anyList(each: string, index: boolean, row: string, fallback: string | null, changes: boolean): string {
+    const args = index ? "() => __rrX, __rrI" : "__rrX, () => __rrI";
+    const rows =
+      `((__rrW, __rrL) => (__rrL && __rrL.length ? Array.from(__rrL, (__rrX, __rrI) => __rrW(${args})) : ` +
+      `${fallback === null ? "null" : `(${fallback})`}))(${row}, ${each})`;
+    return changes ? `__rrsS(__rrsL(() => __rrsI(${rows})))` : `__rrsS(${rows})`;
   }
 
   /** A list's props, checked as the client checks them: what each takes, and what it needs. */

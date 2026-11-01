@@ -19,6 +19,7 @@ import { FakeElement, type FakeNode, FakeText, installFakeDocument, withStyles }
 import * as asyncApi from "../src/features/async.ts";
 import { __hooks } from "../src/features/async.ts";
 import { configureClientErrors, Errored } from "../src/features/errors.ts";
+import * as forApi from "../src/features/for.ts";
 import * as indexApi from "../src/features/index.ts";
 import * as memoApi from "../src/features/memo.ts";
 import * as timing from "../src/features/timing.ts";
@@ -91,6 +92,7 @@ const clientModules: Record<string, unknown> = {
   "@reactre/core/features/memo": memoApi,
   "@reactre/core/features/async": asyncApi,
   "@reactre/core/features/index": indexApi,
+  "@reactre/core/features/for": forApi,
 };
 
 /** Run compiled module `js` (a body ending in `return { ... }`), its imports bound to `modules`. */
@@ -312,6 +314,41 @@ describe("server output is the client's DOM", () => {
     `);
     expect(html).toContain('<li class="a">0:a</li>');
     expect(html).toContain("<ol><li>none</li></ol>");
+  });
+
+  test("lists anywhere, with rows of any shape, as the client renders them (features/for)", () => {
+    const html = same(`
+      import { For, Repeat, Show, signal } from "@reactre/core";
+      const [items] = signal(["a", "b"]);
+      const Pair = (p) => <>{p.x}<b>{p.x}</b></>;
+      const App = () => (
+        <>
+          <For each={items()} key={(s) => s}>{(s, i) => <i>{i()}{s}</i>}</For>
+          <p><For each={items()} key={(s) => s}>{(s) => [s, "-"]}</For><For each={[]} key={(s) => s} fallback="none">{(s) => s}</For></p>
+          <p><For each={items()} keyed={false}>{(s, i) => <>{i}{s()}</>}</For><For each={null} keyed={false}>{(s) => s()}</For></p>
+          <Show when={true}><For each={items()} key={(s) => s}>{(s) => <Pair x={s} />}</For></Show>
+          <Repeat count={2} from={3}>{(i) => <u>{i}</u>}</Repeat>
+          <Repeat count={1}><s>x</s></Repeat>
+        </>
+      );
+      return { App };
+    `);
+    expect(html).toBe("<i>0a</i><i>1b</i><p>a-b-none</p><p>0a1b</p>a<b>a</b>b<b>b</b><u>3</u><u>4</u><s>x</s>");
+    const { App } = ssr<{ App: () => unknown }>(`
+      import { For, signal } from "@reactre/core";
+      const [items] = signal(["a"]);
+      const App = () => (
+        <div>
+          <For each={items()} key={(s) => s}>{(s) => s}</For>
+          <For each={["b"]} keyed={false}>{(s) => <>{s()}</>}</For>
+        </div>
+      );
+      return { App };
+    `);
+    // In one pair each; a row that may change in a pair of its own.
+    expect(server.renderToString(App, { hydrate: true })).toBe(
+      "<div><!--[--><!--[-->a<!--]--><!--]--><!--[--><!--[--><!--[-->b<!--]--><!--]--><!--]--></div>",
+    );
   });
 
   test("a keyed element, and an expression that holds JSX", () => {

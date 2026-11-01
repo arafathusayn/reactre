@@ -132,6 +132,16 @@ const accepted = (): Node[] => {
         {(row) => <li>{row.label}</li>}
       </For>
     </ul>,
+    // Anywhere content goes, with rows of any shape, and a keyed row's index accessor.
+    <>
+      <For each={rows()} key={(row) => row.id}>
+        {(row, i) => [i().toFixed(0), row.label]}
+      </For>
+      <Repeat count={2}>{(i) => i + 1}</Repeat>
+      <Repeat count={2}>
+        <hr />
+      </Repeat>
+    </>,
   ];
 };
 void accepted;

@@ -214,7 +214,7 @@ describe("compiling keyed", () => {
     expect(() => compileSource(list("keyed={byId}"))).toThrow("keyed must be written as false");
     expect(() => compileSource(list("keyed"))).toThrow("keyed must be written as false");
     expect(() => compileSource(list("keyed={false}", "(a, i, x) => <li />"))).toThrow(
-      "row must be (item, i) => <element />",
+      "row must be (item, i) => its content",
     );
   });
 });

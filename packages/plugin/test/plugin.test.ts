@@ -62,7 +62,7 @@ describe("transform", () => {
   test("core mode names the file in a compile error", () => {
     const t = transform({})!;
     expect(() =>
-      t.handler(`export const A = () => <For each={[]} key={(r) => r}>{(r) => <b />}</For>;`, "/app/a.tsx?v=1"),
+      t.handler(`export const A = () => <For each={[]} key={(r) => r}>{row}</For>;`, "/app/a.tsx?v=1"),
     ).toThrow(/^\/app\/a\.tsx: reactre: /);
   });
 

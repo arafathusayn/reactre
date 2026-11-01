@@ -118,7 +118,8 @@ export function Match(_props: unknown): unknown {
  * `<Repeat count from fallback>`: a row for each index from `from` (0 by default) to
  * `from + count - 1`, with `fallback` while `count` is 0; compiled away to a keyed `<For>` over
  * the indexes, so a row is built once per index and kept while the count keeps it. Calling it at
- * runtime throws. Like a `<For>`, it is the child of an element, and a row is one element.
+ * runtime throws. Like a `<For>`, it stands anywhere content does, and a row is any content;
+ * children that are not a function are each row's.
  *
  * @example
  *   <ul>
@@ -129,7 +130,7 @@ export function Repeat(_props: {
   count: number;
   from?: number;
   fallback?: Child;
-  children: (index: number) => JSX.Element;
+  children: Child | ((index: number) => unknown);
 }): unknown {
   return uncompiled("Repeat");
 }

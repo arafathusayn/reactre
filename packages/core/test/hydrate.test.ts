@@ -24,6 +24,7 @@ import * as hydrateApi from "../src/features/hydrate.ts";
 import * as indexApi from "../src/features/index.ts";
 import * as hydrateAsync from "../src/hydrate/async.ts";
 import * as hydrateErrors from "../src/hydrate/errors.ts";
+import * as hydrateFor from "../src/hydrate/for.ts";
 import * as core from "../src/index.ts";
 import * as server from "../src/server.ts";
 import * as serverAsync from "../src/server/async.ts";
@@ -63,6 +64,7 @@ const clientModules: Record<string, unknown> = {
   "@reactre/core/features/async": asyncApi,
   "@reactre/core/hydrate/async": hydrateAsync,
   "@reactre/core/hydrate/errors": hydrateErrors,
+  "@reactre/core/hydrate/for": hydrateFor,
   "@reactre/core/server": { isServer: false },
 };
 
@@ -360,6 +362,70 @@ describe("lists", () => {
     p.app.set(["b"]);
     expect(shown(p.root)).toBe("<ul><li>b</li></ul>");
     expect(String(warn.mock.calls[0]![0])).toContain("where a slot renders something else");
+    warn.mockRestore();
+  });
+
+  test("lists anywhere, with rows of any shape (features/for): the server's nodes are claimed, text rows split", () => {
+    const p = page<{ App: () => unknown; set: (r: string[]) => void; on: (v: boolean) => void }>(`
+      import { For, Repeat, Show, signal } from "@reactre/core";
+      const [items, set] = signal(["a", "b"]);
+      const [on, setOn] = signal(true);
+      const Pair = (props) => <>{props.x}<b>{props.x}</b></>;
+      const App = () => (
+        <>
+          <For each={items()} key={(s) => s}>{(s) => <i>{s}</i>}</For>
+          <p><For each={items()} key={(s) => s}>{(s) => s}</For></p>
+          <p><For each={items()} key={(s) => s}>{(s) => <Pair x={s} />}</For></p>
+          <p><For each={items()} keyed={false} fallback="none">{(s, i) => <>{i}{s()}</>}</For></p>
+          <Show when={on()}><Repeat count={items().length}>{(i) => <u>{i}</u>}</Repeat></Show>
+        </>
+      );
+      return { App, set, on: setOn };
+    `);
+    const { root, before, app } = p;
+    expect(kept(root, before)).toBe(true);
+    expect(shown(root)).toBe("<i>a</i><i>b</i><p>ab</p><p>a<b>a</b>b<b>b</b></p><p>0a1b</p><u>0</u><u>1</u>");
+    const text = (root.childNodes.filter((n) => n instanceof FakeElement)[2] as FakeElement).childNodes.filter(
+      (n) => n instanceof FakeText,
+    );
+    expect(text.map((n) => (n as FakeText).data).filter(Boolean)).toEqual(["a", "b"]);
+    app.set(["b", "c"]);
+    expect(shown(root)).toBe("<i>b</i><i>c</i><p>bc</p><p>b<b>b</b>c<b>c</b></p><p>0b1c</p><u>0</u><u>1</u>");
+    app.set([]);
+    expect(shown(root)).toBe("<p></p><p></p><p>none</p>");
+    app.on(false);
+    app.set(["d"]);
+    app.on(true);
+    expect(shown(root)).toBe("<i>d</i><p>d</p><p>d<b>d</b></p><p>0d</p><u>0</u>");
+  });
+
+  test("features/for's list: a row that does not match and those after it are built afresh; rows only on the server go", () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const SRC = `
+      import { For, signal } from "@reactre/core";
+      import { isServer } from "@reactre/core/server";
+      const [items, set] = signal(isServer ? ["a", "b", "c", "d"] : ["a", "b", "c"]);
+      const App = () => <div><For each={items()} key={(s) => s}>{(s) => <><i>{s}</i>!</>}</For></div>;
+      return { App, set };
+    `;
+    const p = page<{ App: () => unknown; set: (r: string[]) => void }>(SRC, (h) => h.replace("<i>b</i>", "<b>b</b>"));
+    expect(shown(p.root)).toBe("<div><i>a</i>!<i>b</i>!<i>c</i>!</div>");
+    const is = all(p.root).filter((n) => n instanceof FakeElement && n.tagName === "I");
+    expect(is.map((n) => p.before.includes(n))).toEqual([true, false, false]);
+    expect(String(warn.mock.calls[0]![0])).toContain("the page has <b> where a <For> row renders something else");
+    p.app.set(["c", "a"]);
+    expect(shown(p.root)).toBe("<div><i>c</i>!<i>a</i>!</div>");
+    // No pair where the list goes: the slot it is in renders afresh.
+    const q = page<{ App: () => unknown }>(
+      `
+      import { For, Show } from "@reactre/core";
+      const App = () => <main><Show when={true}><For each={["x"]} key={(s) => s}>{(s) => s}</For></Show></main>;
+      return { App };
+    `,
+      (h) => h.replace("<!--[--><!--[-->x<!--]--><!--]-->", "<!--[-->y<!--]-->"),
+    );
+    expect(shown(q.root)).toBe("<main>x</main>");
+    expect(String(warn.mock.calls[1]![0])).toContain('the page has the text "y" where a slot renders something else');
     warn.mockRestore();
   });
 });
@@ -963,5 +1029,46 @@ describe("built apps: a context, <Errored> and <Loading>", () => {
     expect(all(root).includes(word)).toBe(true);
     // A boundary that is gone before its content comes is not hydrated.
     (globalThis as unknown as { $rrh: (i: number) => void }).$rrh(0);
+  });
+
+  test("a list of features/for as the only child of a provider, an <Errored> and a <Loading>: its rows are claimed", async () => {
+    const LISTS = `
+      import { For, signal } from "@reactre/core";
+      import { Loading } from "@reactre/core/features/async";
+      import { createContext } from "@reactre/core/features/context";
+      import { Errored } from "@reactre/core/features/errors";
+      const Theme = createContext("light");
+      export const [items, setItems] = signal(["a", "b"]);
+      export const App = () => (
+        <main>
+          <Theme value="dark"><For each={items()} key={(s) => s}>{(s) => <i>{s}</i>}</For></Theme>
+          <Errored fallback="failed"><For each={items()} key={(s) => s}>{(s) => s}</For></Errored>
+          <Loading fallback="wait"><For each={items()} keyed={false}>{(s) => <>{s()}!</>}</For></Loading>
+        </main>
+      );
+    `;
+    await run(
+      "lists-server",
+      `${LISTS} globalThis.lists = { html: () => renderToString(App, { hydrate: true }) };`.replace(
+        "import {",
+        'import { renderToString } from "@reactre/core/server"; import {',
+      ),
+      { server: true },
+    );
+    const html = (globalThis as unknown as { lists: { html(): string } }).lists.html();
+    const root = new FakeElement("DIV");
+    body.appendChild(root);
+    root.innerHTML = html;
+    const before = all(root).filter((n) => n.nodeType !== 8);
+    (globalThis as unknown as { root: FakeElement }).root = root;
+    await run(
+      "lists-client",
+      `${LISTS} import { hydrate } from "@reactre/core/features/hydrate"; hydrate(App, globalThis.root); globalThis.lists = { setItems };`,
+      { hydrate: true },
+    );
+    expect(kept(root, before)).toBe(true);
+    expect(shown(root)).toBe("<main><i>a</i><i>b</i>aba!b!</main>");
+    (globalThis as unknown as { lists: { setItems(v: string[]): void } }).lists.setItems(["b", "c"]);
+    expect(shown(root)).toBe("<main><i>b</i><i>c</i>bcb!c!</main>");
   });
 });

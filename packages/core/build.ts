@@ -39,6 +39,7 @@ const features = [
   "index",
   "effects",
   "lists",
+  "for",
   // Its development blocks are stripped too (`without`); dist/dev/features/hydrate.js keeps them.
   "hydrate",
 ];
@@ -70,6 +71,7 @@ for (const r of [
       // Hydration's <Loading> and <Errored>, which import the feature modules as an app does.
       "hydrate/async.ts",
       "hydrate/errors.ts",
+      "hydrate/for.ts",
     ].map((f) => join(dir, "src", f)),
     outdir: join(dir, "dist"),
     plugins: [withoutAsync],

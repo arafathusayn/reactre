@@ -100,14 +100,10 @@ describe("compile errors", () => {
     fails(withImport("Match", `export const x = <Match when={1}>x</Match>;`), /<Match> must be a child of <Switch>/);
   });
 
-  test("a <Repeat> is the child of an element, with a count and a row of one element", () => {
+  test("a <Repeat> takes a count and a row written in place, wherever it stands", () => {
     fails(
-      withImport("Repeat", `export const x = <Repeat count={1}>{(i) => <li />}</Repeat>;`),
-      /<Repeat> must be the child of an element/,
-    );
-    fails(
-      withImport("Repeat", `export const x = <><Repeat count={1}>{(i) => <li />}</Repeat></>;`),
-      /<Repeat> must be the child of an element/,
+      withImport("Repeat", `export const x = <Repeat>{(i) => <li />}</Repeat>;`),
+      /<Repeat> takes count, from, fallback and a row function as its child$/,
     );
     fails(
       withImport("Repeat", `export const x = <ul><Repeat>{(i) => <li />}</Repeat></ul>;`),
@@ -121,22 +117,19 @@ describe("compile errors", () => {
       withImport("Repeat", `export const x = <ul><Repeat count={1} key={1}>{(i) => <li />}</Repeat></ul>;`),
       /, not key/,
     );
-    fails(
-      withImport("Repeat", `export const x = <ul><Repeat count={1}>{(i) => <><li /></>}</Repeat></ul>;`),
-      /a <Repeat> row must be one element/,
-    );
+    fails(withImport("Repeat", `export const x = <Repeat count={1} key={1}>{(i) => <li />}</Repeat>;`), /, not key/);
+    fails(withImport("Repeat", `export const x = <Repeat count={1} each={[]}>{(i) => <li />}</Repeat>;`), /, not each/);
     fails(
       withImport("Repeat", `export const x = <ul><Repeat count={1}>{row}</Repeat></ul>;`),
-      /a <Repeat> row must be \(i\) => <element \/>/,
+      /a <Repeat> row must be \(i\) => its content, written in place, or the content: row$/,
     );
-    // A <For> inside control flow has no element of its own to render into.
     fails(
-      withImport(
-        "Show",
-        `export const x = <ul><Show when={1}><For each={[]} key={(r) => r}>{(r) => <li />}</For></Show></ul>;`,
-      ),
-      /<For> must be the child of an element/,
+      withImport("Repeat", `export const x = <Repeat count={1}>{(i, j) => <li />}</Repeat>;`),
+      /a <Repeat> row must be \(i\) => its content/,
     );
+    fails(`export const x = <For each={[]} key={(r) => r}>{(a, b, c) => <li />}</For>;`, /\(item, i\) => its content/);
+    fails(`export const x = <For each={[]}>{(r) => r}</For>;`, /<For> needs each, key and a row function/);
+    fails(`export const x = <For key={(r) => r}>{(r) => r}</For>;`, /<For> needs each, key and a row function/);
   });
 
   test("a <Portal>'s children are content, and a <Dynamic> needs a component and takes no key", () => {
@@ -166,6 +159,48 @@ describe("output", () => {
     const out = compileSource(withImport("Show", `const X = (p) => <Show when={p.on}>x</Show>;`));
     expect(out).toContain('__rrFrag([((__rrX0) => () => (__rrX0 ? "x" : null))(p.on)])');
     expect(out).not.toContain("__rrMemo");
+  });
+
+  test("a list of element rows in an element is the core's; any other is features/for's, imported only then", () => {
+    const plain = compileSource(
+      `export const x = <ul><For each={rows()} key={(r) => r}>{(r) => <li>{r}</li>}</For><Repeat count={2}>{(i) => <li />}</Repeat></ul>;`,
+    );
+    expect(plain).not.toContain("features/for");
+    expect(plain).not.toContain("__rrEach");
+    const views = [
+      `export const x = <For each={rows()} key={(r) => r}>{(r) => <li>{r}</li>}</For>;`,
+      `export const x = <><For each={rows()} key={(r) => r}>{(r) => <li>{r}</li>}</For>z</>;`,
+      `export const x = <ul><For each={rows()} key={(r) => r}>{(r) => r}</For></ul>;`,
+      `export const x = <ul><For each={rows()} key={(r) => r}>{(r, i) => <li>{i()}</li>}</For></ul>;`,
+      withImport("Repeat", `export const x = <Repeat count={n()}>{(i) => <li />}</Repeat>;`),
+      withImport(
+        "Show",
+        `export const x = <Show when={a()}><For each={rows()} key={(r) => r}>{(r) => r}</For></Show>;`,
+      ),
+    ];
+    for (const v of views) {
+      const out = compileSource(v);
+      expect(out).toContain('import { __each as __rrEach } from "@reactre/core/features/for";');
+      expect(out).toContain("__rrEach({ each: () => (");
+      // In hydrate mode, the list that claims; on the server, its markup in one pair.
+      expect(compileSource(v, "tsx", { hydrate: true })).toContain(
+        'import { __each as __rrEach } from "@reactre/core/hydrate/for";',
+      );
+      const ssr = compileSource(v, "tsx", { server: true });
+      expect(ssr).toContain("__rrsS(");
+      expect(ssr).not.toContain("__rrEach");
+    }
+    // An element child whose row is a fragment is content in its element's hole.
+    expect(compileSource(views[2]!)).toContain("__rrInsert(__n[0], __rrEach(");
+    // The row of a store's array reads a copy, and its item is a store root.
+    const store = compileSource(
+      `import { createStore } from "@reactre/core/features/store"; const [s] = createStore({ l: [] });` +
+        `export const x = <For each={s.l} key={(t) => t}>{(t) => <>{t.title}</>}</For>;`,
+    );
+    expect(store).toContain("each: () => ([...(s.l)])");
+    expect(store).toContain("() => (t.title)");
+    // A row the compiler cannot read as a function written in place, or of too many parameters.
+    fails(`export const x = <For each={[]} key={(r) => r}>{rowOf}</For>;`, /row must be \(item, i\) => its content/);
   });
 
   test("a <For> with a fallback keeps its anchor, as the only child of its element", () => {

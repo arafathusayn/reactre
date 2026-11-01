@@ -564,7 +564,9 @@ function compile(
     if (new RegExp(`\\b${alias}\\b`).test(code)) names += `, ${name} as ${alias}`;
   const features =
     (c.selectors ? `import "@reactre/core/features/selectors";\n` : "") +
-    (c.index ? `import { __index as __rrIndex } from "@reactre/core/features/index";\n` : "");
+    (c.index ? `import { __index as __rrIndex } from "@reactre/core/features/index";\n` : "") +
+    // Hydrating, from the module whose list claims the page.
+    (c.forAny ? `import { __each as __rrEach } from "@reactre/core/${hydrate ? "hydrate" : "features"}/for";\n` : "");
   if (hydrate) {
     // The core from the module that re-exports it with a `__frag` that claims, with its helpers.
     for (const [name, alias] of HYDRATE_HELPERS)
@@ -631,6 +633,8 @@ export class Compiler {
   selectors = false;
   /** Whether a `<For keyed={false}>` is in the file, so it imports @reactre/core/features/index. */
   index = false;
+  /** Whether a list of `anyList` is in the file, so it imports @reactre/core/features/for. */
+  forAny = false;
   /** Whether the output carries marks for a source map (./map.ts). */
   readonly map: boolean;
   /** The control flow the file imports, by the type its jsx calls name (see `flowNames`). */
@@ -816,8 +820,8 @@ export class Compiler {
       return keyed === null ? this.host(c) : `__rrFrag([() => (${keyed})])`;
     }
     const f = this.kind(c.type);
-    // A list renders into a parent element, before an anchor in it, so it cannot stand alone.
-    if (f === "For" || f === "Repeat") throw new ReactreCompileError(`reactre: <${f}> must be the child of an element`);
+    // A list outside an element is its nodes, between markers of its own (features/for).
+    if (f === "For" || f === "Repeat") return this.anyList(c, f);
     // Control flow that stands alone is a one-slot fragment, or for a <Portal> or a <Dynamic> of
     // a component that calls nothing, the expression itself.
     if (f !== null) {
@@ -868,10 +872,12 @@ export class Compiler {
       }
       const inner = this.only(child, at);
       const f = inner === null ? null : this.kind(inner.type);
-      if (f === "For" || f === "Repeat")
-        throw new ReactreCompileError(`reactre: <${f}> must be the child of an element`);
-      // A slot of control flow joins the fragment's slots, not a fragment of its own.
-      const flow = inner !== null && f !== null ? this.flowOf(inner, f, false) : null;
+      // A slot of control flow joins the fragment's slots, not a fragment of its own; a list is
+      // content, its nodes (`call`). On the server, control flow is its markup (`call`).
+      const flow =
+        this.server === null && inner !== null && f !== null && f !== "For" && f !== "Repeat"
+          ? this.flowOf(inner, f, false)
+          : null;
       if (flow !== null)
         kids.push(this.m(at) + ("fn" in flow ? flow.fn : now("host" in flow ? this.call(flow.host) : flow.expr)));
       else if (inner !== null) kids.push(this.m(at) + now(this.call(inner)));
@@ -1173,7 +1179,10 @@ export class Compiler {
         continue;
       }
       const f = inner === null ? null : this.kind(inner.type);
-      if (f === "For" || f === "Repeat")
+      // A list whose row is not one element is content, as outside an element.
+      if ((f === "For" || f === "Repeat") && !this.elementRows(inner!, f))
+        this.hole(t, { kind: "slot", slot: "comp", expr: this.m(at) + this.anyList(inner!, f), only, at: -1 });
+      else if (f === "For" || f === "Repeat")
         this.hole(t, {
           kind: "slot",
           slot: "for",
@@ -1313,6 +1322,136 @@ export class Compiler {
   // #region Lists
 
   /**
+   * Whether a `<For>` or `<Repeat>` child of an element is the core's list of elements (`forList`):
+   * its row is a function of the row (and by position, its index) whose body is one host element.
+   * Any other is content (`anyList`). It reads the source only, so a list the core's list takes
+   * compiles as it always did, and a server build decides as the client's does.
+   */
+  elementRows(c: Call, f: "For" | "Repeat"): boolean {
+    const p = new Map(this.object(c.props, false, c.propsAt).map(([k, v, at]) => [k, [v, at] as const]));
+    const children = p.get("children")?.[0];
+    // What `forList` refuses, it refuses as it always has.
+    if (children === undefined) return true;
+    const index = f === "For" && forIndex(p, c.key);
+    const ch = children.trim();
+    const two = index ? /^\(\s*([A-Za-z_$][\w$]*)\s*,\s*([A-Za-z_$][\w$]*)\s*\)\s*=>\s*([\s\S]*)$/.exec(ch) : null;
+    const fn = two !== null ? [two[0], two[1], two[3]] : /^\(?\s*([A-Za-z_$][\w$]*)\s*\)?\s*=>\s*([\s\S]*)$/.exec(ch);
+    if (fn === null) return false;
+    let body = fn[2]!.trim();
+    while (body.startsWith("(") && until(body, 1, "") === body.length - 1) body = body.slice(1, -1).trim();
+    const row = this.only(body, -1);
+    return row !== null && row.type.startsWith('"');
+  }
+
+  /**
+   * A `<For>` or `<Repeat>` that is not the core's list of elements in its element: a list outside
+   * an element (a component's whole view, a fragment's child, control flow's content, a prop), or
+   * one whose rows are text, fragments, arrays, nothing, components or content that changes.
+   * @reactre/core/features/for's `__each` renders it, as its nodes between markers of its own: an
+   * expression of content, which goes where content goes. A row's function returns its content,
+   * compiled as control flow's (`content`): one element or component is itself, text a string,
+   * several children a fragment's nodes, and an expression that may change a slot. A function
+   * with a block body returns what it returns. Children that are not a function are each row's
+   * content, built once per row. Keyed, a row is built again for an item new for its key; with
+   * `keyed={false}`, rows are by position and a row gets an accessor of its item and its index.
+   *
+   * On the server, the list is its rows' content, or its fallback's, in one pair of markers.
+   *
+   * @throws ReactreCompileError for props a list does not take or lacks, as `forList`, and for a
+   *   row that is neither a function written in place nor content.
+   */
+  anyList(c: Call, f: "For" | "Repeat"): string {
+    const repeat = f === "Repeat";
+    const p = new Map(this.object(c.props, false, c.propsAt).map(([k, v, at]) => [k, [v, at] as const]));
+    const [children, childrenAt] = p.get("children") ?? [];
+    const index = !repeat && forIndex(p, c.key);
+    let each: string,
+      key: string | null,
+      store = false,
+      // Whether the items may change: on the server, the list is then a thunk.
+      changes: boolean;
+    if (repeat) {
+      const [count, countAt] = p.get("count") ?? [];
+      const other = [...p.keys()].find((k) => !["count", "from", "fallback", "children"].includes(k));
+      if (count === undefined || children === undefined || c.key !== undefined || other !== undefined)
+        throw new ReactreCompileError(
+          "reactre: <Repeat> takes count, from, fallback and a row function as its child" +
+            (other !== undefined ? `, not ${other}` : c.key !== undefined ? ", not key" : ""),
+        );
+      const from = p.get("from");
+      const range = `Array.from({ length: ${this.rewrite(count, countAt!)} }, (__rrU, __rrI) => `;
+      each =
+        from === undefined
+          ? `${range}__rrI)`
+          : `((__rrF) => ${range}__rrF + __rrI))(${this.rewrite(from[0], from[1])})`;
+      key = "(__rrI) => __rrI";
+      changes = this.changes(count) || (from !== undefined && this.changes(from[0]));
+    } else {
+      const [e, eAt] = p.get("each") ?? [],
+        [k, kAt] = c.key !== undefined ? [c.key, c.keyAt] : index ? ["", -1] : (p.get("key") ?? p.get("keyed") ?? []);
+      if (e === undefined || k === undefined || children === undefined)
+        throw new ReactreCompileError("reactre: <For> needs each, key and a row function as its child");
+      // A store's array is read through a copy, as `forList` reads it.
+      store = this.readsStore(e);
+      each = store && !isLiteral(e, "[") ? `[...(${this.rewrite(e, eAt!)})]` : this.rewrite(e, eAt!);
+      key = index ? null : this.rewrite(k, kAt!);
+      changes = this.changes(e);
+    }
+    const row = this.anyRow(children, childrenAt!, f, store && !index);
+    const fb = p.get("fallback");
+    const fallback = fb === undefined ? null : this.content([[fb[0], fb[1]]], null);
+    if (this.server !== null) return this.server.anyList(each, index, row, fallback, changes);
+    const spec =
+      `{ each: () => (${each}), ${key === null ? "" : `key: ${key}, `}row: ${row}` +
+      (fallback === null ? "" : `, fallback: () => (${fallback})`) +
+      " }";
+    this.forAny = true;
+    return `__rrEach(${spec})`;
+  }
+
+  /**
+   * An `anyList` row: the function of its children, compiled. A row over a store's items, with
+   * `store`, has its item a store root (as `forList`'s row has).
+   */
+  private anyRow(children: string, at: number, f: "For" | "Repeat", store: boolean): string {
+    const ch = trimAt(children, at);
+    const fn = /^(?:\(([^()]*)\)|([A-Za-z_$][\w$]*))\s*=>\s*([\s\S]*)$/.exec(ch[0]);
+    const params = fn === null ? "" : (fn[1] ?? fn[2]!);
+    // A <Repeat>'s row takes its index; a <For>'s its item, and an index or accessor of it.
+    if (fn === null || splitAt(params, 0, params.length).length > (f === "Repeat" ? 1 : 2)) {
+      // Children that are not a function: each row's content.
+      const lit = literal(ch[0]);
+      if (
+        fn === null &&
+        (this.only(ch[0], ch[1]) !== null ||
+          isLiteral(ch[0], "[") ||
+          typeof lit === "string" ||
+          typeof lit === "number")
+      )
+        return `() => (${this.content(this.items(ch[0], ch[1]), null)})`;
+      throw new ReactreCompileError(
+        `reactre: a <${f}> row must be ${f === "Repeat" ? "(i)" : "(item, i)"} => its content, written in place, or the content: ${children}`,
+      );
+    }
+    let [body, bodyAt] = trimAt(fn[3]!, ch[1] < 0 ? -1 : ch[1] + ch[0].length - fn[3]!.length);
+    while (body.startsWith("(") && until(body, 1, "") === body.length - 1)
+      [body, bodyAt] = trimAt(body.slice(1, -1), bodyAt < 0 ? -1 : bodyAt + 1);
+    // The item of a row over a store is a store root in the row's own code.
+    const item = store ? /^\s*([A-Za-z_$][\w$]*)\s*(?:,|$)/.exec(params)?.[1] : undefined;
+    const add = item !== undefined && !this.stores.has(item);
+    if (add) this.stores.add(item);
+    try {
+      if (body.startsWith("{")) return `(${params}) => ${this.rewrite(body, bodyAt)}`;
+      const kids: [string, number][] = isLiteral(body, "[")
+        ? splitAt(body, 1, body.length - 1).map(([s, i]) => [s, bodyAt < 0 ? -1 : bodyAt + i])
+        : [[body, bodyAt]];
+      return `(${params}) => (${this.content(kids, null)})`;
+    } finally {
+      if (add) this.stores.delete(item);
+    }
+  }
+
+  /**
    * `<For each key>{(row) => <tr/>}</For>` in the slot at `anchor`: a statement that starts the
    * keyed list, with a spec in the shape of reactre's ForSpec. A `<Repeat count from>` is the
    * same list over the indexes, keyed by the index. With `keyed={false}`, the list is by position:
@@ -1337,7 +1476,6 @@ export class Compiler {
     only: boolean,
     repeat = false,
   ): string {
-    const name = repeat ? "Repeat" : "For";
     const p = new Map(this.object(props, false, propsAt).map(([k, v, at]) => [k, [v, at] as const]));
     const [children, childrenAt] = p.get("children") ?? [];
     // The list's each and key, compiled where the spec is written (after the row's template).
@@ -1383,23 +1521,19 @@ export class Compiler {
     const two = index
       ? /^\(\s*([A-Za-z_$][\w$]*)\s*,\s*([A-Za-z_$][\w$]*)\s*\)\s*=>\s*([\s\S]*)$/.exec(children.trim())
       : null;
-    const fn =
+    // A list of another row is `anyList`'s: `elementRows` sends only this shape here.
+    const fn = (
       two !== null
         ? [two[0], two[1], two[3]]
-        : /^\(?\s*([A-Za-z_$][\w$]*)\s*\)?\s*=>\s*([\s\S]*)$/.exec(children.trim());
-    if (fn === null)
-      throw new ReactreCompileError(
-        `reactre: a <${name}> row must be (${repeat ? "i" : index ? "item, i" : "row"}) => <element />: ${children}`,
-      );
+        : /^\(?\s*([A-Za-z_$][\w$]*)\s*\)?\s*=>\s*([\s\S]*)$/.exec(children.trim())
+    )!;
     const param = index ? `{ v: ${fn[1]!}${two !== null ? `, i: ${two[2]!}` : ""} }` : fn[1]!;
     // The body ends where children does (children is trimmed already).
     let [body, bodyAt] = trimAt(fn[2]!, childrenAt! < 0 ? -1 : childrenAt! + children.length - fn[2]!.length);
     // Strip any parentheses around the body.
     while (body.startsWith("(") && until(body, 1, "") === body.length - 1)
       [body, bodyAt] = trimAt(body.slice(1, -1), bodyAt < 0 ? -1 : bodyAt + 1);
-    const row = this.only(body, bodyAt);
-    if (row === null || !row.type.startsWith('"'))
-      throw new ReactreCompileError(`reactre: a <${name}> row must be one element: ${body}`);
+    const row = this.only(body, bodyAt)!;
     // In a row over a store, the item is a store root: a hole that reads it (`t.done`) is reactive,
     // since a store's item changes in place and the row never gets a new item for it. Only the
     // row's own code sees it so; `each`, `key` and `fallback` are compiled after.

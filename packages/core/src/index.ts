@@ -2034,7 +2034,8 @@ export function For<T>(props: {
   key: (item: T) => string | number;
   /** Shown while `each` is empty. */
   fallback?: Child;
-  children: (item: T) => unknown;
+  /** A row: its content, for the item (and an accessor of its index), or the content itself. */
+  children: ((item: T, index: () => number) => unknown) | Child;
 }): unknown;
 export function For<T>(props: {
   each: readonly T[];
@@ -2042,7 +2043,8 @@ export function For<T>(props: {
   keyed: (item: T) => string | number;
   /** Shown while `each` is empty. */
   fallback?: Child;
-  children: (item: T) => unknown;
+  /** A row: its content, for the item (and an accessor of its index), or the content itself. */
+  children: ((item: T, index: () => number) => unknown) | Child;
 }): unknown;
 export function For<T>(props: {
   each: readonly T[];

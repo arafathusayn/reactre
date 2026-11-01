@@ -69,8 +69,11 @@ describe("compile errors", () => {
     fails(`export const x = <ul><For each={[]}>{(r) => <li />}</For></ul>;`, /needs each, key and a row function/);
   });
 
-  test("a <For> row is one element; one that holds a component takes the list with mounts", () => {
-    fails(`export const x = <ul><For each={[]} key={(r) => r}>{(r) => <Row />}</For></ul>;`, /row must be one element/);
+  test("a <For> row of one element is the core's list, with mounts for a component; another row is features/for's", () => {
+    const any = compileSource(`export const x = <ul><For each={[]} key={(r) => r}>{(r) => <Row />}</For></ul>;`);
+    expect(any).toContain("__rrEach(");
+    expect(any).toContain('import { __each as __rrEach } from "@reactre/core/features/for";');
+    expect(any).not.toContain("__rrFor(");
     const out = compileSource(
       `const C = () => null; export const x = <ul><For each={[]} key={(r) => r}>{(r) => <li><C /></li>}</For></ul>;`,
     );
@@ -86,13 +89,11 @@ describe("compile errors", () => {
     expect(out).not.toContain("__p.removeChild");
   });
 
-  test("JSX the compiler does not reach, and a <For> in a fragment, are compile errors", () => {
+  test("JSX the compiler does not reach is a compile error; a <For> in a fragment is features/for's", () => {
     // Inside a template literal's hole, a JSX element would be left as a jsx() call.
     fails("export const x = `${<b />}`;", /jsx left uncompiled/);
-    fails(
-      `export const x = <><For each={[]} key={(r) => r}>{(r) => <li />}</For></>;`,
-      /<For> must be the child of an element/,
-    );
+    const frag = compileSource(`export const x = <><For each={[]} key={(r) => r}>{(r) => <li />}</For></>;`);
+    expect(frag).toContain("__rrFrag([__rrEach(");
   });
 
   test("an empty fragment, a row in parentheses, and a row with a style and a property compile", () => {
