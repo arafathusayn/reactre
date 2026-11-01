@@ -67,7 +67,8 @@
 //   storeEach the store app with `each={s.todos}` and holes that read only the row's item: the
 //             compiler copies the array and binds the holes, as `store` writes them by hand.
 //   memo      a memo with `equals`, and a writable derived signal of it.
-//   lazyMemo  a lazy memo read only while a condition holds, and a signal with `unobserved`.
+//   lazyMemo  a lazy memo read only while a condition holds, and a signal with `unobserved`: the
+//             compiler sends both calls to features/memo's reader-counting entries.
 //   context   a provider, and lookups in its children and in a slot's content made later.
 //   errors    an <Errored> whose child's hole throws on an update, and its reset.
 //   props     reactive props: holes that follow a prop, spread props passing them on (`__props`),
@@ -358,13 +359,13 @@ const apps = {
   `,
   /** A lazy memo read only while a <Show> is open, and a signal with `unobserved`. */
   lazyMemo: `
-    import { render, signal } from "@reactre/core";
-    import { createMemo, createSignal } from "@reactre/core/features/memo";
-    const [n, setN] = signal(1);
-    const [open, setOpen] = signal(false);
+    import { render, signal as base } from "@reactre/core";
+    import { memo, signal } from "@reactre/core/features/memo";
+    const [n, setN] = base(1);
+    const [open, setOpen] = base(false);
     let runs = 0, gone = 0;
-    const doubled = createMemo(() => (runs++, n() * 2), { lazy: true });
-    const [label] = createSignal("x", { unobserved: () => gone++ });
+    const doubled = memo(() => (runs++, n() * 2), { lazy: true });
+    const [label] = signal("x", { unobserved: () => gone++ });
     render(() => <p>{open() ? doubled() + label() : "closed"}</p>, root);
     globalThis.api = { setN, setOpen, runs: () => runs, gone: () => gone };
   `,
@@ -635,16 +636,25 @@ describe("stores and memo options", () => {
     expect([text(root), api.runs!()]).toEqual(["c:c", 2]);
   });
 
-  test("off: memo and signal alone ship none of createMemo's reader count", async () => {
+  test("off: memo and signal without lazy and unobserved ship none of the reader count, nor its check", async () => {
     for (const name of ["memo", "plain", "store"] as const) {
       const code = await bundle(name, apps[name], false);
-      for (const s of ["function createMemo(", "function observed(", "Symbol.species", "queueMicrotask"])
+      for (const s of [
+        "function __observedMemo(",
+        "function observed(",
+        "Symbol.species",
+        "queueMicrotask",
+        "uncompiled",
+      ])
         expect(code).not.toContain(s);
     }
   });
 
   test("lazyMemo: computed when first read, stopped once nothing reads it; unobserved after the last reader", async () => {
-    expect(await bundle("lazyMemo", apps.lazyMemo, false)).toContain("function observed(");
+    // The compiler sends both calls to the reader-counting entries.
+    const code = await bundle("lazyMemo", apps.lazyMemo, false);
+    expect(code).toContain("__observedMemo(() =>");
+    expect(code).toContain('__observedSignal("x"');
     const { root, api } = run(await bundle("lazyMemo", apps.lazyMemo));
     expect([text(root), api.runs!()]).toEqual(["closed", 0]);
     api.setOpen!(true);

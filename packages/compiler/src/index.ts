@@ -97,7 +97,8 @@ import { dirname, resolve } from "node:path";
 
 import type { BunPlugin } from "bun";
 
-import { hasMarks, mark, type SourceMapV3, unmark } from "./map.ts";
+import { hasMarks, mark, remark, type SourceMapV3, unmark } from "./map.ts";
+import { observedCalls } from "./observed.ts";
 import {
   analyze,
   CORE_RUNTIME,
@@ -226,7 +227,9 @@ export function reactreCompiler(options: ReactreCompilerOptions = {}): BunPlugin
       // one, `async: false`).
       build.onLoad({ filter: CORE_RUNTIME }, async ({ path }) => {
         if (!isCore(path)) return undefined;
-        const out = await coreRuntime(path, () => Bun.file(path).text(), await keep, options.async === false);
+        let out = await coreRuntime(path, () => Bun.file(path).text(), await keep, options.async === false);
+        // A feature module that is both (features/memo, stripped) is a server build's, as below.
+        if (out !== null && options.server === true && CORE_FEATURE.test(path)) out = serverImports(out, false);
         return out === null ? undefined : { contents: out, loader: path.endsWith(".ts") ? "ts" : "js" };
       });
       // A server build: the core's feature modules import @reactre/core/server for the core.
@@ -242,7 +245,9 @@ export function reactreCompiler(options: ReactreCompilerOptions = {}): BunPlugin
       const server = options.server === true ? { server: true } : {};
       build.onLoad({ filter }, async ({ path }) => {
         if (path.includes("/node_modules/")) return undefined;
-        const js = transpileSource(await Bun.file(path).text(), path.endsWith(".tsx") ? "tsx" : "jsx");
+        // A .ts file a filter of the caller's takes (for features/memo's options) is TypeScript without JSX.
+        const loader = path.endsWith(".tsx") ? "tsx" : /\.[cm]?ts$/.test(path) ? "ts" : "jsx";
+        const js = transpileSource(await Bun.file(path).text(), loader);
         const props = await factsFor(await program, path, js, host);
         // The output is plain JavaScript: TypeScript and JSX are already gone.
         return { contents: compileJs(js, props === undefined ? server : { props, ...server }), loader: "js" };
@@ -436,8 +441,11 @@ export class ReactreCompileError extends Error {}
  */
 export function compileJs(js: string, options?: CompileOptions): string {
   // A server build compiles the module with its imports pointed at the server.
-  if (options?.server === true) return compile(serverImports(js), false, options, flowNames(js));
-  return compile(js, false, options);
+  const src = options?.server === true ? serverImports(js) : js;
+  // Calls of features/memo's `memo` and `signal` that pass `lazy` or `unobserved` go to the
+  // reader-counting entry (./observed.ts); a file without them is compiled as it was.
+  const observed = observedCalls(src);
+  return compile(observed?.code ?? src, false, options, flowNames(js), observed !== null);
 }
 
 /**
@@ -452,9 +460,11 @@ export function compileJsWithMap(js: string, options?: CompileOptions): { code: 
   // after its imports are the module's own.
   const src = options?.server === true ? serverImports(js) : js;
   if (hasMarks(src)) return { code: compileJs(js, options), map: null };
-  const marked = compile(src, true, options, flowNames(js));
+  // The marks of a compile of the rewritten calls are moved back to `src` (see `observedCalls`).
+  const observed = observedCalls(src);
+  const marked = compile(observed?.code ?? src, true, options, flowNames(js), observed !== null);
   if (marked === src) return { code: src, map: null };
-  return unmark(marked, src);
+  return unmark(observed === null ? marked : remark(marked, observed.back), src);
 }
 
 /**
@@ -462,13 +472,24 @@ export function compileJsWithMap(js: string, options?: CompileOptions): { code: 
  *
  * @param flow The control flow the module imports: a server build's are read before its imports
  *   are pointed at the server.
+ * @param rewritten Whether `js` is a rewrite of the input (its calls of features/memo's), so a
+ *   file without jsx calls is still marked for its map.
  */
-function compile(js: string, map: boolean, options: CompileOptions = {}, flow = flowNames(js)): string {
+function compile(
+  js: string,
+  map: boolean,
+  options: CompileOptions = {},
+  flow = flowNames(js),
+  rewritten = false,
+): string {
   // Bun's transpiler names the runtime's helpers with a hash suffix (jsx_w77yafs4, ...); those
   // names are what the compiler looks for.
   const helpers = new Set<string>();
   for (const m of js.matchAll(/\b(jsxs|jsx|jsxDEV)_[a-z0-9]{8}\b/g)) helpers.add(m[0]);
-  if (helpers.size === 0) return js;
+  if (helpers.size === 0)
+    return rewritten && map
+      ? new Compiler(helpers, helpers, true, new Map(), [], new Map(), helpers).rewrite(js, 0)
+      : js;
   const fragments = new Set<string>();
   for (const m of js.matchAll(/\bFragment_[a-z0-9]{8}\b/g)) fragments.add(m[0]);
   // The components the file defines, and which of their props may be passed reactively.

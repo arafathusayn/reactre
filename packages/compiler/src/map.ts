@@ -43,6 +43,13 @@ export const mark = (at: number): string => OPEN + at + CLOSE;
 /** Whether `src` holds a mark's characters, so a compile of it cannot be mapped. */
 export const hasMarks = (src: string): boolean => src.includes(OPEN) || src.includes(CLOSE);
 
+/**
+ * `marked` with each mark's offset moved by `back`: marks into a rewrite of an input made into
+ * marks into that input, for a compile of the rewrite (see @reactre/compiler's observed.ts).
+ */
+export const remark = (marked: string, back: (at: number) => number): string =>
+  marked.replace(MARKS, (_, at: string) => mark(back(Number(at))));
+
 /** `src` with its marks taken out. */
 export const plain = (src: string): string => (src.includes(OPEN) ? src.replace(MARKS, "") : src);
 

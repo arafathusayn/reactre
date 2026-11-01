@@ -17,6 +17,7 @@ import * as asyncApi from "../src/features/async.ts";
 import { __hooks } from "../src/features/async.ts";
 import { configureClientErrors } from "../src/features/errors.ts";
 import * as indexApi from "../src/features/index.ts";
+import * as memoApi from "../src/features/memo.ts";
 import * as core from "../src/index.ts";
 import * as browser from "../src/server.browser.ts";
 import * as server from "../src/server.ts";
@@ -73,10 +74,13 @@ const serverModules: Record<string, unknown> = {
   "@reactre/core/server/async": serverAsync,
   "@reactre/core/server/dynamic": serverDynamic,
   "@reactre/core/features/errors": {},
+  // Unbundled, features/memo's core is the one the server's re-exports.
+  "@reactre/core/features/memo": memoApi,
 };
 /** What a client-compiled source's imports bind to. */
 const clientModules: Record<string, unknown> = {
   "@reactre/core": core,
+  "@reactre/core/features/memo": memoApi,
   "@reactre/core/features/async": asyncApi,
   "@reactre/core/features/index": indexApi,
 };
@@ -317,6 +321,32 @@ describe("server output is the client's DOM", () => {
       );
       return { App };
     `);
+  });
+
+  test("features/memo's lazy memo and unobserved signal render as the client renders them", async () => {
+    let runs = 0;
+    const counted = { count: () => runs++ };
+    Object.assign(serverModules, { counted });
+    Object.assign(clientModules, { counted });
+    const src = `
+      import { signal as base } from "@reactre/core";
+      import { memo, signal } from "@reactre/core/features/memo";
+      const { count } = rr.counted;
+      const [n] = base(2);
+      const doubled = memo(() => (count(), n() * 2), { lazy: true, equals: (a, b) => a === b });
+      const [label] = signal("x", { unobserved: () => {} });
+      const App = () => <p>{doubled()}{label()}</p>;
+      return { App };
+    `;
+    // Both compiles call features/memo's reader-counting entries, which run on the server's core.
+    expect(compileSource(src, "tsx", { server: true })).toContain("__observedMemo as __rrObsMemo");
+    expect(same(src)).toBe("<p>4x</p>");
+    // Lazy on the server too: nothing computed it before the render read it.
+    runs = 0;
+    const { App } = ssr<{ App: () => unknown }>(src);
+    expect(runs).toBe(0);
+    expect(server.renderToString(App)).toBe("<p>4x</p>");
+    await tick();
   });
 });
 

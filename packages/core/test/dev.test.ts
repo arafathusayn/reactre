@@ -256,6 +256,19 @@ describe("coreRuntime: the development build for a dev server, a production one 
     }
   });
 
+  test("features/memo: its source stripped of its types, as it is for a dev server", async () => {
+    const memo = join(core, "src/features/memo.ts");
+    const readMemo = () => Bun.file(memo).text();
+    // A dev server: the source as it is.
+    expect(await coreRuntime(memo, readMemo, true, false, true)).toBeNull();
+    // A production build: as features/memo was before its types were added.
+    const code = (await coreRuntime(memo, readMemo, false, false))!;
+    expect(code).toBe(strip(await readMemo(), ["DEV", "TYPES"]));
+    expect(code).not.toContain("readonly unobserved");
+    expect(code).not.toContain("readonly lazy");
+    expect(code).toContain("export function memo<T>(fn: (prev: T | undefined) => T, options?: SignalOptions<T>)");
+  });
+
   test("a core whose stripper knows only async blocks: stripped of those, else as it is", async () => {
     const at = mkdtempSync(join(tmpdir(), "reactre-core-old-stripper-"));
     try {

@@ -1,5 +1,8 @@
-// Solid 2.0's `createSignal` and `createMemo`, with their `unobserved` and `lazy` options, which
-// @reactre/core/features/memo exports (this file is not an entry of its own).
+// The reader-counting entries of @reactre/core/features/memo's `memo` and `signal`, which take
+// their `lazy` and `unobserved` options: `__observedMemo` and `__observedSignal`, exported by that
+// module (this file is not an entry of its own). @reactre/compiler sends a call that passes either
+// option, or options it cannot read, to them (its observed.ts); every other call stays `memo`'s or
+// `signal`'s. Each is right for any options: without either, it is `memo` or `signal`.
 //
 // Both options need to know when a signal loses its last reader, and the core's signals keep no
 // count of their readers: counting every subscribe and unsubscribe would cost every app. So only
@@ -19,32 +22,12 @@
 //   - In its own file, out of features/memo.ts, which re-exports it: an app that imports only
 //     `memo` and `signal` from that module bundles the same code as before, and, since Bun's
 //     minifier names locals by the letters of every file in the bundle, the same names.
-//   - `memo` and `signal` stay as they are, and the options go to Solid 2.0's names: an app that
-//     uses neither option pays nothing for them, in bytes or time.
+//   - `memo` and `signal` stay as they are, and the options go to these entries, which only the
+//     compiler names: an app that passes neither option pays nothing for them, in bytes or time.
 
 import { __Owned, __Root, effect, onCleanup, type Setter, signal as coreSignal } from "@reactre/core";
 
 import { memo, signal, type SignalOptions } from "./features/memo.ts";
-
-/** Options of `createSignal`: `signal`'s, and `unobserved`. */
-export interface ObservedOptions<T> extends SignalOptions<T> {
-  /**
-   * Called when the last reader stops reading: in a microtask after it did, if no reader has
-   * read it again by then. A reader that runs again drops its reads and makes them anew, so the
-   * count is taken once that is over.
-   */
-  readonly unobserved?: () => void;
-}
-
-/** Options of `createMemo`: `memo`'s, `unobserved`, and `lazy`. */
-export interface MemoOptions<T> extends ObservedOptions<T> {
-  /**
-   * Run `fn` first when the memo is first read, not when it is made; and once it has no readers
-   * (when `unobserved` would be called), stop following what it read, keeping its value, until
-   * it is read again, when `fn` runs again.
-   */
-  readonly lazy?: boolean;
-}
 
 /** What a counted list of readers tells: that it had a reader, and that it has none left. */
 interface Watch {
@@ -100,7 +83,10 @@ function counted(w: Watch): [() => number, Setter<number>, Subs] {
   return [read, write, subs];
 }
 
-/** `createSignal` and `createMemo` with `unobserved` or `lazy`. */
+/** `memo`'s options. */
+type MemoOptions<T> = Parameters<typeof memo<T>>[1] & {};
+
+/** `signal` and `memo` with `unobserved` or `lazy`. */
 function observed<T>(
   init: T | ((prev: T | undefined) => T),
   options: MemoOptions<T>,
@@ -164,36 +150,23 @@ function observed<T>(
 }
 
 /**
- * Solid 2.0's `createSignal`: `signal` from @reactre/core/features/memo, which it is without
- * `unobserved`. `unobserved` is called when the last reader stops reading it (see
- * `ObservedOptions`).
- *
- * @example
- *   import { createSignal } from "@reactre/core/features/memo";
- *
- *   const [ticks, setTicks] = createSignal(0, { unobserved: () => clearInterval(timer) });
+ * `signal`, with `unobserved` (see `SignalOptions`): what @reactre/compiler calls in its place
+ * where the options may hold it. Internal: not part of the package's API, and may change in any
+ * release.
  */
-export function createSignal<T>(fn: (prev: T | undefined) => T, options?: ObservedOptions<T>): [() => T, Setter<T>];
-export function createSignal<T>(value: T, options?: ObservedOptions<T>): [() => T, Setter<T>];
-export function createSignal<T>(
+export function __observedSignal<T>(
   init: T | ((prev: T | undefined) => T),
-  options?: ObservedOptions<T>,
+  options?: SignalOptions<T>,
 ): [() => T, Setter<T>] {
   return options?.unobserved === undefined ? signal(init as T, options) : observed(init, options, false);
 }
 
 /**
- * Solid 2.0's `createMemo`: `memo` from @reactre/core/features/memo, which it is without `lazy`
- * and `unobserved`. A lazy memo runs `fn` first when it is first read, and stops following what
- * it read once no reader is left, until it is read again; `unobserved` is called when the last
- * reader stops reading it (see `MemoOptions`).
- *
- * @example
- *   import { createMemo } from "@reactre/core/features/memo";
- *
- *   const total = createMemo(() => sum(items()), { lazy: true }); // sums when first read
+ * `memo`, with `lazy` and `unobserved` (see its options): what @reactre/compiler calls in its
+ * place where the options may hold either. Internal: not part of the package's API, and may
+ * change in any release.
  */
-export function createMemo<T>(fn: (prev: T | undefined) => T, options?: MemoOptions<T>): () => T {
+export function __observedMemo<T>(fn: (prev: T | undefined) => T, options?: MemoOptions<T>): () => T {
   return options?.lazy !== true && options?.unobserved === undefined
     ? memo(fn, options)
     : observed(fn, options!, options!.lazy === true)[0];
