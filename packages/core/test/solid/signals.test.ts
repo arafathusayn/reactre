@@ -81,39 +81,49 @@ describe("createSignal.test.ts", () => {
     expect($y()).toBe(3);
   });
 
-  gap("fold", "waits on the signal/memo fold", "should call unobserved callback when subscriber is disposed", () => {
-    const unobserved = mock();
-    const [$x, setX] = folded.signal(1, { unobserved });
+  gap(
+    "unobserved-timing",
+    "unobserved runs in a microtask after the last reader left, not as it leaves",
+    "should call unobserved callback when subscriber is disposed",
+    () => {
+      const unobserved = mock();
+      const [$x, setX] = folded.signal(1, { unobserved });
 
-    const disposer = createRoot((dispose) => {
-      memo(() => $x());
-      return dispose;
-    });
+      const disposer = createRoot((dispose) => {
+        memo(() => $x());
+        return dispose;
+      });
 
-    expect(unobserved).not.toHaveBeenCalled();
-    disposer();
-    expect(unobserved).toHaveBeenCalledTimes(1);
+      expect(unobserved).not.toHaveBeenCalled();
+      disposer();
+      expect(unobserved).toHaveBeenCalledTimes(1);
 
-    setX(2);
-    flush();
-    expect(unobserved).toHaveBeenCalledTimes(1);
-  });
+      setX(2);
+      flush();
+      expect(unobserved).toHaveBeenCalledTimes(1);
+    },
+  );
 
-  gap("fold", "waits on the signal/memo fold", "should call unobserved callback when signal is unobserved", () => {
-    const unobserved = mock();
-    const [$x, setX] = signal(true);
-    const [$y] = folded.signal(1, { unobserved });
+  gap(
+    "unobserved-timing",
+    "unobserved runs in a microtask after the last reader left, not as it leaves",
+    "should call unobserved callback when signal is unobserved",
+    () => {
+      const unobserved = mock();
+      const [$x, setX] = signal(true);
+      const [$y] = folded.signal(1, { unobserved });
 
-    createRoot(() => {
-      memo(() => ($x() ? $y() : null));
-    });
+      createRoot(() => {
+        memo(() => ($x() ? $y() : null));
+      });
 
-    expect(unobserved).not.toHaveBeenCalled();
+      expect(unobserved).not.toHaveBeenCalled();
 
-    setX(false);
-    flush();
-    expect(unobserved).toHaveBeenCalledTimes(1);
-  });
+      setX(false);
+      flush();
+      expect(unobserved).toHaveBeenCalledTimes(1);
+    },
+  );
 
   gap(
     "held-writes",

@@ -273,61 +273,51 @@ describe("createMemo.test.ts", () => {
     },
   );
 
-  gap(
-    "fold",
-    "waits on the signal/memo fold",
-    "should compute lazy memo when first read inside another computation",
-    () => {
-      const [$x, setX] = signal(0);
-      let innerRuns = 0;
-      let outer!: () => number;
+  test("should compute lazy memo when first read inside another computation", () => {
+    const [$x, setX] = signal(0);
+    let innerRuns = 0;
+    let outer!: () => number;
 
-      createRoot(() => {
-        const lazy = folded.memo(
-          () => {
-            innerRuns++;
-            return $x() + 1;
-          },
-          { lazy: true },
-        );
+    createRoot(() => {
+      const lazy = folded.memo(
+        () => {
+          innerRuns++;
+          return $x() + 1;
+        },
+        { lazy: true },
+      );
 
-        expect(innerRuns).toBe(0);
+      expect(innerRuns).toBe(0);
 
-        outer = memo(() => lazy() * 2);
+      outer = memo(() => lazy() * 2);
 
-        expect(innerRuns).toBe(1);
-        expect(outer()).toBe(2);
-      });
+      expect(innerRuns).toBe(1);
+      expect(outer()).toBe(2);
+    });
 
-      setX(5);
-      flush();
-      expect(innerRuns).toBe(2);
-      expect(outer()).toBe(12);
-    },
-  );
+    setX(5);
+    flush();
+    expect(innerRuns).toBe(2);
+    expect(outer()).toBe(12);
+  });
 
-  gap(
-    "fold",
-    "waits on the signal/memo fold",
-    "should compute nested lazy memos when first read inside another computation",
-    () => {
-      const [$x, setX] = signal(0);
-      let eager!: () => number;
+  test("should compute nested lazy memos when first read inside another computation", () => {
+    const [$x, setX] = signal(0);
+    let eager!: () => number;
 
-      createRoot(() => {
-        const lazyOuter = folded.memo(() => $x() + 1, { lazy: true });
-        const lazyInner = folded.memo(() => lazyOuter() * 10, { lazy: true });
+    createRoot(() => {
+      const lazyOuter = folded.memo(() => $x() + 1, { lazy: true });
+      const lazyInner = folded.memo(() => lazyOuter() * 10, { lazy: true });
 
-        eager = memo(() => lazyInner() + 100);
+      eager = memo(() => lazyInner() + 100);
 
-        expect(eager()).toBe(110);
-      });
+      expect(eager()).toBe(110);
+    });
 
-      setX(5);
-      flush();
-      expect(eager()).toBe(160);
-    },
-  );
+    setX(5);
+    flush();
+    expect(eager()).toBe(160);
+  });
 
   describe("writable memos (createSignal of a function)", () => {
     test("a source change in the write's flush re-runs the memo; a prev-ignoring memo discards the write (core R31, #3733 rule B)", () => {

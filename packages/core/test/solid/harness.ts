@@ -60,7 +60,7 @@ export const GAPS = {
   "for-placement": "<For> and <Repeat> stand only as an element's direct child",
   "jsx-props": "JSX in a prop other than children",
   "store-alias": "a store read through an alias, a box, a function or props.list",
-  fold: "createSignal/createMemo's options folded into signal/memo",
+  "unobserved-timing": "Solid calls unobserved as the last reader leaves; reactre in a microtask after",
   "list-functions": "mapArray and repeat, the runtime list functions under <For> and <Repeat>",
   bug: "a reactre bug, with its repro in plans/solid-parity.md under Bugs found",
   "glitch-free": "memos updated once each, in topological order, never seeing half an update",
@@ -120,15 +120,13 @@ export type Gap = keyof typeof GAPS;
 
 /**
  * A port that fails until reactre has `kind`: `test.failing`, so it runs and must fail (and is
- * reported once it passes), or for "fold" `test.todo`, which waits on another change. The test's
- * name carries the target and `why`, one line.
+ * reported once it passes). The test's name carries the target and `why`, one line.
  *
  * With SOLID_STRICT=1 in the environment, each runs as a plain test, to see why it fails.
  */
 export function gap(kind: Gap, why: string, name: string, fn: () => unknown): void {
   const label = `${name} [${kind}: ${why}]`;
   if (process.env["SOLID_STRICT"] === "1") test(label, fn as () => void);
-  else if (kind === "fold") test.todo(label, fn as () => void);
   else test.failing(label, fn as () => void);
 }
 
@@ -151,21 +149,16 @@ export const base: Record<string, unknown> = {
   "@reactre/core/features/timing": timing,
 };
 
-/** The options `memo` and `signal` of features/memo take once createMemo and createSignal fold into them. */
-export interface FoldedOptions<T> {
-  readonly equals?: false | ((prev: T, next: T) => boolean);
-  readonly lazy?: boolean;
-  readonly unobserved?: () => void;
-}
-
 /**
- * features/memo's `memo` and `signal`, typed as they will be once createMemo's and createSignal's
- * options fold into them (`memo(fn, { lazy })`, `signal(v, { unobserved })`): the ports of those
- * options are written against these, as `gap("fold", ...)` tests.
+ * features/memo's `memo(fn, { lazy })` and `signal(v, { unobserved })` as compiled code calls them.
+ * @reactre/compiler sends a call that passes either option to the module's reader-counting entries,
+ * `__observedMemo` and `__observedSignal`; the ports are TypeScript the compiler does not see, so
+ * they call the entries, as a .tsx file's calls become. (`memo` and `signal` themselves throw for
+ * the options in the development build, which `bun test` runs.)
  */
-export const folded = memo as unknown as {
-  memo<T>(fn: (prev: T | undefined) => T, options?: FoldedOptions<T>): () => T;
-  signal<T>(value: T, options?: FoldedOptions<T>): [() => T, core.Setter<T>];
+export const folded = { memo: memo.__observedMemo, signal: memo.__observedSignal } as {
+  memo: typeof memo.memo;
+  signal: <T>(value: T, options?: memo.SignalOptions<T>) => [() => T, core.Setter<T>];
 };
 
 /**
