@@ -44,12 +44,12 @@
     "gzip": 2954
   },
   "context": {
-    "min": 7805,
-    "gzip": 3365
+    "min": 7813,
+    "gzip": 3368
   },
   "errors": {
-    "min": 8029,
-    "gzip": 3459
+    "min": 8037,
+    "gzip": 3462
   },
   "props": {
     "min": 5775,

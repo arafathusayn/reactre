@@ -283,10 +283,7 @@ const apps = {
     render(() => <p>{(runs++, current().name)}:{label()}</p>, root);
     globalThis.api = { setUser, setLabel, runs: () => runs };
   `,
-  /**
-   * A provider whose children read it, in its body and in a slot's content made later. The
-   * provider gets its children as a getter, as lazy children compile.
-   */
+  /** A provider whose children read it, in its body and in a slot's content made later. */
   context: `
     import { render, signal } from "@reactre/core";
     import { createContext, useContext } from "@reactre/core/features/context";
@@ -298,7 +295,7 @@ const apps = {
       return (
         <div>
           <Label />
-          {Theme({ value: "dark", get children() { return <p><Label />{more() ? <Label /> : null}</p>; } })}
+          <Theme value="dark"><p><Label />{more() ? <Label /> : null}</p></Theme>
         </div>
       );
     }
@@ -317,10 +314,9 @@ const apps = {
     render(
       () => (
         <div>
-          {Errored({
-            fallback: (err, reset) => ((retry = reset), <i>{err.message}</i>),
-            get children() { return <Count />; },
-          })}
+          <Errored fallback={(err, reset) => ((retry = reset), <i>{err.message}</i>)}>
+            <Count />
+          </Errored>
         </div>
       ),
       root,

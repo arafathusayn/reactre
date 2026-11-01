@@ -89,7 +89,8 @@ const App = () => (
 - A prop whose expression calls a function (`text={name()}`) is passed as a getter, so `Label` reads it where it uses it: `{props.text}` and its `class` update when `name` changes, and `Label` does not run again. A literal, a plain name and a function (`onClick={() => save()}`) are passed as they are.
 - Children that hold JSX are a getter too: they are built when the component reads `props.children`, after the code it runs before that. A provider can set things up first and then return `props.children`. `{props.children}` in an element inserts them, nodes or text.
 - Read props through the object: `props.text`. Destructuring (`({ text }) =>`), or `const { text } = props`, reads each value once, when the component runs, and it then stays the value it had.
-- `<Child {...props} />` passes the props on, getters included.
+- `<Child {...props} />` passes the props on, getters included, and so does `<Child title={props.title} />`: a prop that reads a prop is passed as a getter, so children passed on (`<Theme value="dark">{props.children}</Theme>`) are built inside the component they are passed to.
+- `merge` and `omit` from `@reactre/core/features/store` keep the getters too: `const p = merge({ size: "m" }, props)` gives defaults, and a hole that reads `p.size` follows the prop, as one that reads `props.size` does.
 - What it costs: a hole that reads a prop is bound (an effect that rewrites it) only if some call site of the component may pass that prop reactively. Above, `{props.text}` is bound because one call passes `name()`; if every call passed text, it would be written once, as before. @reactre/plugin and the compiler's Bun plugin read the whole program at a production build's start to know this. A component whose callers cannot all be seen is treated as getting every prop reactively: one an entry exports (a library's API), one used as a value (`<Dynamic component={Label}>`, `const C = Label`), one called with spread props, and, on a dev server or in watch mode, where each file is compiled alone, every component the file exports.
 
 ## Control flow and elements
@@ -303,7 +304,7 @@ A provider and a boundary read their children inside themselves, so they need th
 
 An effect's own handler is an option of the effect, as Solid 2.0's `createEffect` has it: `effect(fn, { error })` from this module hands what a run of `fn` throws to `error` (untracked), and the effect keeps following what the run read before it threw. Without a boundary or `onError`, an error is thrown on to the write or the `render` that caused it, as without the module.
 
-Each module installs itself as it loads: context makes every owner keep the scope it was made in, and errors puts a try around every effect's run and a row's re-run. Neither is in the code of an app that does not import it: the size profiles without them are the same code as before, byte for byte with local names left unminified. With them, [`sizes.json`](sizes.json)'s `context` profile (a provider and its lookups) is 3,365 bytes gzipped, and `errors` (a boundary and its reset) 3,459: about 0.46 KB and 0.56 KB over the `slot` profile, an app with ownership alone.
+Each module installs itself as it loads: context makes every owner keep the scope it was made in, and errors puts a try around every effect's run and a row's re-run. Neither is in the code of an app that does not import it: the size profiles without them are the same code as before, byte for byte with local names left unminified. With them, [`sizes.json`](sizes.json)'s `context` profile (a provider and its lookups) is 3,368 bytes gzipped, and `errors` (a boundary and its reset) 3,462: about 0.47 KB and 0.56 KB over the `slot` profile, an app with ownership alone.
 
 ## Timing
 
