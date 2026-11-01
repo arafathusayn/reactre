@@ -59,6 +59,9 @@
 //     drops it (./withoutAsync.ts), so it is the code as it was before; dist/async/index.js
 //     keeps it, and @reactre/plugin picks that build for a program that imports either module.
 //     Kept in, the code does nothing until one of the modules loads.
+//   - The development build's diagnostics (warnings with a code and a fix, and a guard on
+//     `<For>` rows that never settle) are between `// #if DEV` markers: dist/dev/index.js keeps
+//     them, with the async code, and the production builds strip them (see ./withoutAsync.ts).
 //
 // The list is @reactre/dom's keyed List (reuse, minimal moves, swaps and
 // removals in place). Nothing here depends on React.
@@ -127,6 +130,42 @@ const memos: Observer[] = [];
 let mhead = 0;
 /** How many `drainAsync` calls are under way: while one is, a write queues its observers. */
 let draining = 0;
+// #endif
+// #if DEV
+
+// The development build's diagnostics (dist/dev, and the sources as `bun run` and `bun test` run
+// them): a warning names a code and how to fix what it found, once per thing it found it in; a
+// guard throws where the production build would loop. The production builds strip them all
+// (./withoutAsync.ts), so they cost those nothing.
+
+/** What each code has been warned about: each thing once. */
+const warned = new Map<string, WeakSet<object>>();
+
+/** Warn about `code`, found in `at` (once per `at`): what went wrong, and the fix. */
+function warn(code: string, at: object, what: string, fix: string): void {
+  let seen = warned.get(code);
+  if (seen === undefined) warned.set(code, (seen = new WeakSet()));
+  if (seen.has(at)) return;
+  seen.add(at);
+  console.warn(`reactre ${code}: ${what}. Fix: ${fix}.`);
+}
+
+/**
+ * How many computations that should only read are running: a memo's function, a template hole's
+ * value, a row's reactive holes. A signal written meanwhile is warned about. An effect's run is a
+ * computation of its own, which sets it to 0 while it runs (see `Effect.run`).
+ */
+let pure = 0;
+
+/** Run `fn`, a computation that should only read. */
+function reading<T>(fn: () => T): T {
+  pure++;
+  try {
+    return fn();
+  } finally {
+    pure--;
+  }
+}
 // #endif
 
 /** Tell the observers of `s` that it changed: now, or at the end of the current batch. */
@@ -281,6 +320,15 @@ export function signal<T>(v: T): [() => T, Setter<T>] {
     return s.v;
   };
   const write: Setter<T> = (next) => {
+    // #if DEV
+    if (pure !== 0)
+      warn(
+        "REACTIVE_WRITE_IN_OWNED_SCOPE",
+        s,
+        "a signal was written while a memo, a template hole or a <For> row's hole computed its value, which re-runs what read it in the middle of an update",
+        "compute the value without writing: write in an event handler or an effect, or derive the value with memo()",
+      );
+    // #endif
     const v2 = typeof next === "function" ? (next as (p: T) => T)(s.v) : next;
     if (v2 === s.v) return;
     s.v = v2;
@@ -326,6 +374,19 @@ class Effect implements Observer {
   }
   /** Run, and again while a run was notified (it wrote what it read), up to MAX_RUNS in a row. */
   run(): void {
+    // #if DEV
+    // A computation of its own: what a hole's value started (a lazy memo's first run) may write.
+    const p = pure;
+    pure = 0;
+    try {
+      this.runs();
+    } finally {
+      pure = p;
+    }
+  }
+  /** `run`, in the development build. */
+  private runs(): void {
+    // #endif
     for (let n = 0; n < MAX_RUNS; n++) {
       this.state = RUNNING;
       try {
@@ -575,7 +636,11 @@ export function memo<T>(fn: () => T): () => T {
   // #endif
   // The effect runs at once, so the placeholder undefined is never observed.
   const [read, write] = signal<T>(undefined as T);
-  effect(() => write(fn()));
+  // #if DEV
+  effect(() => write(reading(fn)));
+  // #else
+  // effect(() => write(fn()));
+  // #endif
   return read;
 }
 
@@ -1181,6 +1246,10 @@ class RowObserver implements Observer {
   /** The row has left its list: a transition that held this observer does not run it. */
   d = false;
   // #endif
+  // #if DEV
+  /** How many of its re-runs are under way, one inside another: each from a write the last made. */
+  n = 0;
+  // #endif
   constructor(list: ForList<unknown, unknown>, entry: Row<unknown>) {
     this.list = list;
     this.entry = entry;
@@ -1194,7 +1263,22 @@ class RowObserver implements Observer {
     // #if ASYNC
     if (this.d) return;
     // #endif
-    this.list.refresh(this.entry);
+    // #if DEV
+    // A hole that writes what it reads re-runs the row from inside its own run, without end; the
+    // production build overflows the stack. As an effect's run guard does, a cycle throws.
+    if (this.n === MAX_RUNS)
+      throw new Error(
+        "reactre FOR_ROW_LOOP: a <For> row's reactive hole writes a signal it reads, so the row never settles. Fix: compute the hole's value without writing; write in an event handler or an effect",
+      );
+    this.n++;
+    try {
+      this.list.refresh(this.entry);
+    } finally {
+      this.n--;
+    }
+    // #else
+    // this.list.refresh(this.entry);
+    // #endif
   }
   /** Unsubscribe from every source: before a re-run, and when the row leaves the list. */
   drop(): void {
@@ -1323,7 +1407,12 @@ class ForList<T, K> {
     current = rowContext;
     // #if ASYNC
     try {
-      this.spec.dyn!(item, out);
+      // #if DEV
+      // The development build has the async runtime: only this branch needs the check.
+      reading(() => this.spec.dyn!(item, out));
+      // #else
+      // this.spec.dyn!(item, out);
+      // #endif
       if (e.obs !== null && e.obs.nr !== null) ready(e.obs);
     } catch (err) {
       // A read that was not ready, as an effect's run takes it: the row's holes are empty until
@@ -1432,6 +1521,9 @@ class ForList<T, K> {
 
   /** Render the rows for `items`. */
   render(items: readonly T[]): void {
+    // #if DEV
+    checkKeys(this as ForList<unknown, unknown>, items);
+    // #endif
     this.list.set(items);
   }
 
@@ -1493,6 +1585,45 @@ function destroy(l: ForList<unknown, unknown>): void {
   for (const [type, fn, capture] of l.listeners) l.parent.removeEventListener(type, fn, capture);
   for (const sel of l.sels) sel.lists.splice(sel.lists.indexOf(l), 1);
 }
+// #if DEV
+
+/** By list, the key each object item had at its last render. */
+const keysOf = new WeakMap<object, WeakMap<object, unknown>>();
+
+/**
+ * Check the keys of `items`, which list `l` is about to render: two items of one key share one
+ * row, and an item whose key changed from the last render (a key made anew each time, or a
+ * position) has its row rebuilt.
+ */
+function checkKeys(l: ForList<unknown, unknown>, items: readonly unknown[]): void {
+  const key = l.spec.key,
+    seen = new Set<unknown>();
+  let last = keysOf.get(l);
+  if (last === undefined) keysOf.set(l, (last = new WeakMap()));
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i],
+      k = key(item);
+    if (seen.has(k))
+      warn(
+        "FOR_DUPLICATE_KEY",
+        l,
+        `two items of a <For> have the key ${String(k)}, and a key has one row`,
+        "give each item a key of its own, such as an id",
+      );
+    seen.add(k);
+    if (typeof item === "object" && item !== null) {
+      if (last.has(item) && last.get(item) !== k)
+        warn(
+          "FOR_UNSTABLE_KEY",
+          l,
+          "an item of a <For> got another key than at the last render, so its row was built again (keys are compared with ===)",
+          "key by something of the item that stays, such as its id, not a new object or array, its index or a counter",
+        );
+      last.set(item, k);
+    }
+  }
+}
+// #endif
 
 /**
  * A `<For>` whose rows hold mounts (see `ForSpec.mounts`). Each row gets an owner; its mounts
@@ -1543,8 +1674,48 @@ class MountList<T, K> extends ForList<T, K> {
 
 /** Internal: a template from markup strings and hole markers (@reactre/compiler). */
 export function __template(strings: readonly string[], holes: readonly number[], svg?: boolean): Prototype {
-  return new Prototype(strings, holes, svg);
+  // #if DEV
+  return checked(new Prototype(strings, holes, svg));
+  // #else
+  // return new Prototype(strings, holes, svg);
+  // #endif
 }
+// #if DEV
+
+/**
+ * Template `t`, checking the values its clones and writes give its text holes, where a function
+ * is a mistake: `{count}` for `{count()}`. (An `on...` attribute hole of a template is set as the
+ * element's property, so `onclick={fn}` listens; spread props are checked in `prop`.)
+ */
+function checked(t: Prototype): Prototype {
+  // @reactre/dom's kind code (`Prototype.kinds`) of a text hole.
+  const TEXT = 0;
+  const text: number[] = [];
+  for (let i = 0; i < t.n; i++) if (t.kinds[i] === TEXT) text.push(i);
+  if (text.length === 0) return t;
+  const clone = t.clone.bind(t),
+    write = t.write.bind(t);
+  t.clone = (values) => {
+    for (let j = 0; j < text.length; j++) if (typeof values[text[j]!] === "function") functionAsText(t);
+    return clone(values);
+  };
+  t.write = (i, node, v) => {
+    if (typeof v === "function" && t.kinds[i] === TEXT) functionAsText(t);
+    write(i, node, v);
+  };
+  return t;
+}
+
+/** Warn that a function is rendered as text, found in `at`. */
+function functionAsText(at: object): void {
+  warn(
+    "FUNCTION_AS_TEXT",
+    at,
+    "a function was rendered where text goes, so its source is shown",
+    "call it ({count()}, not {count}), or render a component as an element (<Item />)",
+  );
+}
+// #endif
 
 /** Internal: a `<For>` in `parent`, before `anchor` (null: the list is the parent's only content). */
 export function __for<T, K>(parent: Element, anchor: Node | null, spec: ForSpec<T, K>): void {
@@ -1591,6 +1762,9 @@ export function __insert(anchor: Node, value: unknown, prev: Node[] | null): Nod
       for (const y of x) add(y);
       return;
     }
+    // #if DEV
+    if (typeof x === "function") functionAsText(x);
+    // #endif
     const n = typeof x === "object" && "nodeType" in (x as object) ? (x as Node) : document.createTextNode("" + x);
     parent.insertBefore(n, anchor);
     out.push(n);
@@ -1604,7 +1778,11 @@ export function __bind(t: Prototype, hole: number, node: Node, value: () => unkn
   // NONE matches no value, so the first run writes even undefined.
   let last: unknown = NONE;
   track(() => {
-    const v = value();
+    // #if DEV
+    const v = reading(value);
+    // #else
+    // const v = value();
+    // #endif
     if (v !== last) {
       last = v;
       t.write(hole, node, v);
@@ -1655,7 +1833,11 @@ export function __frag(kids: readonly unknown[]): Node[] {
 export function __apply(node: Node, set: (node: Node, v: unknown, prev: unknown) => void, value: () => unknown): void {
   let prev: unknown;
   track(() => {
-    const v = value();
+    // #if DEV
+    const v = reading(value);
+    // #else
+    // const v = value();
+    // #endif
     set(node, v, prev);
     prev = v;
   });
@@ -1726,6 +1908,15 @@ function prop(el: Element, k: string, v: unknown, old: unknown): void {
     (el as unknown as Record<string, unknown>)[k] = v;
     return;
   }
+  // #if DEV
+  if (typeof v === "function" && /^on[a-z]/.test(k))
+    warn(
+      "ATTRIBUTE_HANDLER",
+      el,
+      `the spread prop ${k} was given a function, which becomes the text of an attribute`,
+      `to listen, write it in camelCase (on${k.charAt(2).toUpperCase()}${k.slice(3)}); an attribute takes a string`,
+    );
+  // #endif
   const name = k === "className" ? "class" : k === "htmlFor" ? "for" : k;
   if (name === "class" && el.namespaceURI !== "http://www.w3.org/2000/svg")
     el.className = v == null ? "" : "" + (v as string);

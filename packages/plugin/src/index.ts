@@ -329,11 +329,11 @@ export const reactre: UnpluginInstance<ReactreOptions | undefined, boolean> = cr
         serve = config.command === "serve";
       },
     };
-    // @reactre/core's build: whichever of its two builds the bundler resolved (its export
-    // conditions pick the async one for "development"), each becomes the one the build gets, so
-    // that every module has the same core; its sources (Bun's `bun` condition) are stripped as
-    // the default build is where that is the one; its async feature modules fail the build where
-    // that is the default one.
+    // @reactre/core's build: whichever of its three builds the bundler resolved (its export
+    // conditions pick the development one for "development"), each becomes the one the build
+    // gets (the development build on Vite's dev server), so that every module has the same core;
+    // its sources (Bun's `bun` condition) are stripped as that build is made; its async feature
+    // modules fail the build where that is the default one.
     const runtime: UnpluginOptions = {
       name: "@reactre/plugin:runtime",
       enforce: "pre",
@@ -342,7 +342,8 @@ export const reactre: UnpluginInstance<ReactreOptions | undefined, boolean> = cr
         async handler(code, id) {
           const path = id.replace(/[?#].*$/, "");
           if (!isCore(path)) return null;
-          const out = await coreRuntime(path, () => code, await asyncRuntime(this), options.async === false);
+          // Vite's dev server gets the development build, every build a production one.
+          const out = await coreRuntime(path, () => code, await asyncRuntime(this), options.async === false, serve);
           return out === null ? null : { code: out, map: null };
         },
       },

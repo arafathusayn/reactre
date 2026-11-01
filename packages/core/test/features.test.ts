@@ -45,6 +45,11 @@
 //              a Bun.build of each app ships. The "async" and "actions" profiles are bundled
 //              with it, as both plugins bundle a program that imports either module; with it
 //              stripped, importing either throws, naming the fix.
+//   dev        the development build's diagnostics, between `// #if DEV` markers in index.ts:
+//              every profile is bundled without them, as a production build is (the compiler's
+//              Bun plugin strips them from the sources). The "dev" entry is the benchmark app
+//              bundled with them, as a dev server serves it: a size note, not a budget anyone
+//              ships (test/dev.test.ts tests the diagnostics).
 //
 // The size profiles (../sizes.json), one app each:
 //   jfb       the js-framework-benchmark app (apps/jfb/app/reactre.tsx): no opt-in at all.
@@ -66,6 +71,7 @@
 //             and children built when the component reads them.
 //   async     an async memo under a <Loading>, an update that makes it pending, and isPending.
 //   actions   an action with an optimistic value, which reverts when it ends.
+//   dev       jfb with the development build (the core's index.ts as it is).
 //
 // The size budgets live in ../sizes.json. When a change is worth its bytes, record the new sizes:
 //
@@ -76,6 +82,7 @@ import { gzipSync } from "node:zlib";
 
 import { reactreCompiler } from "@reactre/compiler";
 import { FakeElement, installFakeDocument } from "@reactre/testdom";
+import type { BunPlugin } from "bun";
 
 import { stripAsync, withoutAsync } from "../src/withoutAsync.ts";
 
@@ -88,9 +95,11 @@ const budgets = Bun.fileURLToPath(new URL("../sizes.json", import.meta.url));
  * Bundle `src`, a TSX module body with `root` in scope: minified, or not to read its code. The
  * compiler's Bun plugin picks the core's runtime as it reads the program: index.ts without its
  * async code (as the default build is) for an app that imports neither async module, as it is
- * for one that does. With `stripped`, the core is stripped whatever the app imports.
+ * for one that does, and without its development code either way. With `stripped`, the core is
+ * stripped of its async code whatever the app imports; with `dev`, it is the development build,
+ * index.ts as it is.
  */
-async function bundle(name: string, src: string, minify = true, stripped = false): Promise<string> {
+async function bundle(name: string, src: string, minify = true, stripped = false, dev = false): Promise<string> {
   const entry = `${scratch}/${name}.tsx`;
   await Bun.write(entry, src);
   const r = await Bun.build({
@@ -101,11 +110,22 @@ async function bundle(name: string, src: string, minify = true, stripped = false
     // The packages' sources, as the repository's own builds resolve them.
     conditions: ["reactre-source"],
     // Bun loads a file with the first plugin's onLoad that returns it.
-    plugins: stripped ? [withoutAsync, reactreCompiler()] : [reactreCompiler()],
+    plugins: stripped ? [withoutAsync, reactreCompiler()] : dev ? [asIs, reactreCompiler()] : [reactreCompiler()],
   });
   if (!r.success) throw new Error(r.logs.join("\n"));
   return r.outputs[0]!.text();
 }
+
+/** Loads @reactre/core's index.ts as it is: the development build. */
+const asIs: BunPlugin = {
+  name: "core-as-is",
+  setup(b) {
+    b.onLoad({ filter: /[\\/]core[\\/]src[\\/]index\.ts$/ }, async (a) => ({
+      contents: await Bun.file(a.path).text(),
+      loader: "ts",
+    }));
+  },
+};
 
 /** Run a bundle with a fresh `root` (a div inside a fake document) as a global. */
 function run(code: string): { root: FakeElement; api: Record<string, (...a: unknown[]) => unknown> } {
@@ -675,6 +695,23 @@ describe("async and actions", () => {
   });
 });
 
+describe("development build", () => {
+  test("off: every profile ships none of the development code, the async ones included", async () => {
+    for (const name of ["plain", "slot", "store", "show", "props", "async", "actions"] as const) {
+      const code = await bundle(name, apps[name], false);
+      for (const s of ["REACTIVE_WRITE_IN_OWNED_SCOPE", "FOR_ROW_LOOP", "function checkKeys", "function reading"])
+        expect(code).not.toContain(s);
+    }
+  });
+
+  test("on: the benchmark app with the development build renders, and checks its lists' keys", async () => {
+    const jfb = Bun.fileURLToPath(new URL("../../../apps/jfb/app/reactre.tsx", import.meta.url));
+    const code = await bundle("dev", await Bun.file(jfb).text(), false, false, true);
+    expect(code).toContain("function checkKeys");
+    expect(code).toContain("drainAsync");
+  });
+});
+
 describe("sizes", () => {
   test("each profile stays within its gzip budget", async () => {
     const jfb = Bun.fileURLToPath(new URL("../../../apps/jfb/app/reactre.tsx", import.meta.url));
@@ -702,6 +739,8 @@ describe("sizes", () => {
       measure(name, await bundle(name, apps[name]));
     // With the core's async code, as both plugins bundle a program that imports them.
     for (const name of ["async", "actions"] as const) measure(name, await bundle(name, apps[name]));
+    // The benchmark app with the development build, as a dev server serves it.
+    measure("dev", await bundle("dev", await Bun.file(jfb).text(), true, false, true));
     if (process.env.UPDATE_SIZES) {
       await Bun.write(budgets, JSON.stringify(sizes, null, 2) + "\n");
       return;

@@ -33,7 +33,7 @@
       "types": "./dist/index.d.ts",
       "bun": "./src/index.ts",
       "reactre-async": "./dist/async/index.js",
-      "development": "./dist/async/index.js",
+      "development": "./dist/dev/index.js",
       "default": "./dist/index.js"
     },
     "./jsx-runtime": {

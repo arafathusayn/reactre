@@ -1,15 +1,21 @@
-// Builds @reactre/core's dist: the entries and the feature modules, for the browser, with
-// index.ts compiled without its async code (src/withoutAsync.ts), as it was before that existed;
-// and dist/async/index.js, index.ts as it is, the async runtime that @reactre/core/features/async
-// and features/actions need. The feature modules import "@reactre/core", which resolves to one or
-// the other (package.json's "reactre-async" and "development" conditions, or @reactre/plugin).
+// Builds @reactre/core's dist, for the browser (see src/withoutAsync.ts for the blocks each strips):
+//
+//   dist/            the entries and the feature modules, with index.ts compiled without its
+//                    async, development and type blocks, as it was before any of them existed;
+//   dist/async/      index.ts with the async runtime that @reactre/core/features/async and
+//                    features/actions need, for production: without the development blocks;
+//   dist/dev/        index.ts as it is: the async runtime and the development diagnostics.
+//
+// The feature modules import "@reactre/core", which resolves to one of the three: package.json's
+// "reactre-async" condition picks dist/async, "development" dist/dev, and @reactre/plugin picks
+// for the program it builds.
 //
 //   bun run build
 
 import { rmSync } from "node:fs";
 import { join } from "node:path";
 
-import { withoutAsync } from "./src/withoutAsync.ts";
+import { ASYNC_PRODUCTION, without, withoutAsync } from "./src/withoutAsync.ts";
 
 const dir = import.meta.dir;
 const features = [
@@ -42,6 +48,12 @@ for (const r of [
     outdir: join(dir, "dist"),
     plugins: [withoutAsync],
   }),
-  await Bun.build({ ...options, entrypoints: [join(dir, "src/index.ts")], outdir: join(dir, "dist/async") }),
+  await Bun.build({
+    ...options,
+    entrypoints: [join(dir, "src/index.ts")],
+    outdir: join(dir, "dist/async"),
+    plugins: [without(...ASYNC_PRODUCTION)],
+  }),
+  await Bun.build({ ...options, entrypoints: [join(dir, "src/index.ts")], outdir: join(dir, "dist/dev") }),
 ])
   if (!r.success) throw new AggregateError(r.logs, "@reactre/core: the build failed");

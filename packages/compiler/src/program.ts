@@ -1271,22 +1271,24 @@ function htmlScripts(file: string, html: string): string {
 // #region @reactre/core's async runtime
 
 // @reactre/core keeps the code its async feature modules (features/async, features/actions) need
-// between `// #if ASYNC` markers in src/index.ts. Its default build (dist/index.js) has it
-// stripped and dist/async/index.js keeps it; the `"development"` export condition resolves the
-// latter, and the sources (the `bun` and `"reactre-source"` conditions) hold it. A build that
-// reads its program knows whether some module imports either feature module: if none does, the
-// app gets the core without that code, whatever the conditions resolved (`coreRuntime`).
+// between `// #if ASYNC` markers in src/index.ts, and its development diagnostics between
+// `// #if DEV` markers. Its default build (dist/index.js) has both stripped, dist/async/index.js
+// keeps the async code, and dist/dev/index.js keeps both; the `"development"` export condition
+// resolves the last, and the sources (the `bun` and `"reactre-source"` conditions) hold both. A
+// build that reads its program knows whether some module imports either feature module: if none
+// does, the app gets the core without that code, whatever the conditions resolved; and a
+// production build gets no diagnostics, a dev server the development build (`coreRuntime`).
 // @reactre/plugin does this for every bundler, the compiler's Bun plugin for Bun.build.
 
 /** The specifiers of @reactre/core's async feature modules. */
 const ASYNC_FEATURE: RegExp = /^@reactre\/core\/features\/(?:async|actions)$/;
 
 /**
- * The files of @reactre/core that hold or need its async runtime, by path: its two builds, its
+ * The files of @reactre/core that hold or need its async runtime, by path: its three builds, its
  * source index.ts, and its async feature modules, built or source.
  */
 export const CORE_RUNTIME: RegExp =
-  /[\\/]core[\\/](?:dist[\\/](?:async[\\/])?index\.js|src[\\/]index\.ts|(?:dist|src)[\\/]features[\\/](?:async|actions)\.[jt]s)$/;
+  /[\\/]core[\\/](?:dist[\\/](?:(?:async|dev)[\\/])?index\.js|src[\\/]index\.ts|(?:dist|src)[\\/]features[\\/](?:async|actions)\.[jt]s)$/;
 
 /** Of those, the feature modules. */
 const ASYNC_FEATURE_FILE: RegExp = /[\\/]features[\\/](?:async|actions)\.[jt]s$/;
@@ -1297,7 +1299,7 @@ const CORE_SOURCE: RegExp = /[\\/]src[\\/]index\.ts$/;
 /** Whether file `path` (a `CORE_RUNTIME` one) is @reactre/core's: its package is named so. By package, cached. */
 const cores = new Map<string, boolean>();
 export function isCore(path: string): boolean {
-  const dir = path.slice(0, path.search(/[\\/](?:dist|src)[\\/](?:(?:async[\\/])?index\.[jt]s|features[\\/])/));
+  const dir = path.slice(0, path.search(/[\\/](?:dist|src)[\\/](?:(?:(?:async|dev)[\\/])?index\.[jt]s|features[\\/])/));
   let r = cores.get(dir);
   if (r === undefined) {
     try {
@@ -1328,25 +1330,40 @@ export function noticingAsync(host: Host, seen: { async: boolean }): Host {
 }
 
 /**
- * Code `code` of @reactre/core's source index.ts at `path`, without its async blocks, as the
- * package's default build compiles it: with the stripper the package ships beside it
- * (src/withoutAsync.ts), so the markers are read by the version of the core that wrote them. A
- * core without one has no markers, and its code is returned as it is.
+ * The code of @reactre/core's source index.ts at `path` (which `read` gives) without its blocks
+ * named `names`, as the package's builds compile it: with the stripper the package ships beside
+ * it (src/withoutAsync.ts), so the markers are read by the version of the core that wrote them. A
+ * core without one has no markers; one whose stripper knows only async blocks (`stripAsync`) has
+ * no others. Null: the file as it is, where nothing is to be stripped.
  */
-async function stripCoreAsync(path: string, code: string): Promise<string> {
+async function stripCore(path: string, read: () => string | Promise<string>, names: string[]): Promise<string | null> {
   const stripper = join(dirname(path), "withoutAsync.ts");
-  if (!existsSync(stripper)) return code;
-  const { stripAsync } = (await import(pathToFileURL(stripper).href)) as { stripAsync(source: string): string };
-  return stripAsync(code);
+  const async = names.includes("ASYNC");
+  if (!existsSync(stripper)) return async ? read() : null;
+  const m = (await import(pathToFileURL(stripper).href)) as {
+    stripAsync(source: string): string;
+    strip?(source: string, names: readonly string[]): string;
+  };
+  if (m.strip !== undefined) return m.strip(await read(), names);
+  return async ? m.stripAsync(await read()) : null;
 }
+
+/** @reactre/core's builds, by the path of each from dist/. */
+const BUILDS = { default: "index.js", async: "async/index.js", dev: "dev/index.js" } as const;
 
 /**
  * What a build loads for file `path` of @reactre/core (a `CORE_RUNTIME` one, whose code `read`
- * gives) when it gets the core's async runtime (`on`) or not, so every module of the app shares
- * one core: either build, the other one's re-export; the source index.ts, as it is or stripped
- * (`stripCoreAsync`); an async feature module, as it is. Null: the file as it is.
+ * gives), so every module of the app shares one core: the development build (`dev`), else the
+ * async build where the build gets the core's async runtime (`on`), else the default build. A
+ * build that is not the one becomes its re-export; the source index.ts is loaded stripped as
+ * that build is made (`stripCore`), or as it is for the development build; an async feature
+ * module, as it is. Null: the file as it is.
  *
  * @param forced Whether `on` is the plugin's `async` option, not what the program imports.
+ * @param dev Whether the build is a dev server's, which gets the development build; else
+ *   (the default) it is a production build, which gets neither of the core's development
+ *   blocks, whatever the bundler's conditions resolved: a `"development"` condition holds in
+ *   builds too (Bun.build's outside production, Vite's where NODE_ENV is not "production").
  * @throws Error for an async feature module where `on` is false, naming the option.
  */
 export async function coreRuntime(
@@ -1354,11 +1371,18 @@ export async function coreRuntime(
   read: () => string | Promise<string>,
   on: boolean,
   forced: boolean,
+  dev = false,
 ): Promise<string | null> {
-  if (CORE_SOURCE.test(path)) return on ? null : stripCoreAsync(path, await read());
+  if (CORE_SOURCE.test(path))
+    return dev ? null : stripCore(path, read, on ? ["DEV", "TYPES"] : ["ASYNC", "DEV", "TYPES"]);
   if (!ASYNC_FEATURE_FILE.test(path)) {
-    const isAsync = /[\\/]async[\\/]index\.js$/.test(path);
-    return on === isAsync ? null : `export * from "${on ? "./async/index.js" : "../index.js"}";\n`;
+    const is = /[\\/]dev[\\/]index\.js$/.test(path)
+      ? "dev"
+      : /[\\/]async[\\/]index\.js$/.test(path)
+        ? "async"
+        : "default";
+    const want = dev ? "dev" : on ? "async" : "default";
+    return is === want ? null : `export * from "${is === "default" ? "./" : "../"}${BUILDS[want]}";\n`;
   }
   if (on) return null;
   throw new Error(
