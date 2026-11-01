@@ -5,8 +5,10 @@
 //
 // Where a throw is caught:
 //
-//   - Building the children: `<Errored>` reads them inside a try, so a component that throws
-//     while its body runs is caught there, and what the children had made so far is disposed.
+//   - Building the children: `<Errored>` reads them in a slot of its own, an effect guarded as
+//     below, so a component that throws while its body runs is caught there, and what the
+//     children had made so far is disposed. The slot reads them again when what the read reads
+//     changes (a child that may change, `{more() ? <A /> : null}`), guarded the same way.
 //   - Running an effect: the runtime's own (a hole, a slot, a list) and the app's, at their first
 //     run and at every later one. The effect's scope (see @reactre/core/features/context, whose
 //     scopes this module shares) holds the nearest boundary's handler.
@@ -159,17 +161,11 @@ export function Errored(props: { fallback: ErroredFallback; children?: Child | (
     () => {
       version();
       asked = false;
+      // The children are read in a slot of their own, under a root whose scope holds this
+      // boundary: what their read throws, then or when it runs again, is a guarded run's.
+      if (error === OK) return __Owned.within(__root(s), () => __children(props));
+      asked = false;
       return untrack(() => {
-        if (error === OK) {
-          const r = __root(s);
-          try {
-            return __Owned.within(r, () => __children(props.children));
-          } catch (err) {
-            r.dispose();
-            if (error === OK) error = err;
-          }
-        }
-        asked = false;
         const f = props.fallback;
         return typeof f === "function" ? f(error, reset) : f;
       });

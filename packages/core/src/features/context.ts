@@ -12,7 +12,8 @@
 //     extends: a lookup is one property read, through the prototype chain of the providers
 //     above it.
 //   - A provider makes a root owner (owned by the current owner, so it goes with it) whose scope
-//     extends the current one with its value, and reads its children under that root.
+//     extends the current one with its value, and reads its children under that root, in a slot
+//     that reads them again when what they read changes.
 //   - Every other owner takes the current owner's scope the first time it is entered: an
 //     effect's first run (which is when it is made: an effect runs at once), and a root's first
 //     `within` (a row's, an `attach`'s, a `createRoot`'s). Both read the core's owner variable,
@@ -77,11 +78,19 @@ export function __root(s: Scope): Root {
 }
 
 /**
- * Internal: what a provider or a boundary renders of the children it read: a function child is a
- * slot, run now and again when what it reads changes; anything else is rendered as it is.
+ * Internal: what a provider or a boundary renders of its children, under the current owner: a
+ * slot that reads `props.children`, now and again when what the read reads changes, as an element
+ * whose hole reads `{props.children}` follows them. So a getter's child that may change
+ * (`<Ctx value={v}>{more() ? <A /> : null}</Ctx>`, compiled) is followed, and so is a function
+ * child, which the slot calls.
  */
-export function __children(c: unknown): unknown {
-  return typeof c === "function" ? __frag([c]) : c;
+export function __children(props: { readonly children?: unknown }): Node[] {
+  return __frag([
+    () => {
+      const c = props.children;
+      return typeof c === "function" ? (c as () => unknown)() : c;
+    },
+  ]);
 }
 
 /** A context's children: what a component's are, or a function, which renders as a slot. */
@@ -137,7 +146,7 @@ export function createContext<T>(defaultValue?: T): Context<T> {
   const provider = (props: { value: T; children?: ContextChildren }): unknown => {
     const s: Scope = Object.create(__scope());
     s[id] = props.value;
-    return __Owned.within(__root(s), () => __children(props.children));
+    return __Owned.within(__root(s), () => __children(props));
   };
   return Object.assign(provider, { id, defaultValue });
 }

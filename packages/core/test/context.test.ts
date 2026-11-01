@@ -165,6 +165,29 @@ describe("createContext", () => {
     expect(text(root)).toBe("dark1");
   });
 
+  test("children whose getter reads a signal are read again, under the provider, when it changes", () => {
+    const root = new FakeElement("DIV");
+    const api = run<{ setOn: (v: boolean) => void; reads: () => number }>(
+      `
+      import { render, signal } from "@reactre/core";
+      import { createContext, useContext } from "@reactre/core/features/context";
+      const Theme = createContext("light");
+      const [on, setOn] = signal(false);
+      const Label = () => <b>{useContext(Theme)}</b>;
+      let reads = 0;
+      render(() => <div>{Theme({ value: "dark", get children() { reads++; return on() ? <Label /> : "-"; } })}</div>, root);
+      return { setOn, reads: () => reads };
+    `,
+      root,
+    );
+    expect(text(root)).toBe("-");
+    api.setOn(true);
+    expect(text(root)).toBe("dark");
+    api.setOn(false);
+    expect(text(root)).toBe("-");
+    expect(api.reads()).toBe(3);
+  });
+
   test("createRoot under a provider, and runWithOwner with an owner kept from under it, find it", () => {
     const root = new FakeElement("DIV");
     const api = run<{ later: () => string; inRoot: string; dispose: () => void }>(

@@ -126,7 +126,8 @@ describe("<Errored>", () => {
       import { Errored } from "@reactre/core/features/errors";
       const boom = (m) => { throw new Error(m); };
       const Two = () => <p><b>{boom("first")}</b><b>{boom("second")}</b></p>;
-      // A hole's first run throws (caught by its effect), then the body throws (caught by the try).
+      // A hole's first run throws (caught by its effect), then the body throws (caught by the
+      // children's slot).
       const Late = () => {
         const p = <p><b>{boom("in a hole")}</b></p>;
         boom("in the body");
@@ -221,6 +222,38 @@ describe("<Errored>", () => {
     expect(text(root)).toBe("fine");
     api.setN!(1 as never);
     expect(text(root)).toBe("caught");
+  });
+
+  test("children whose getter reads a signal are read again when it changes; what that throws is caught", () => {
+    const root = new FakeElement("DIV");
+    const api = run<Api>(
+      `
+      import { render, signal } from "@reactre/core";
+      import { Errored } from "@reactre/core/features/errors";
+      const [n, setN] = signal(0);
+      const Bad = () => { throw new Error("bad " + n()); };
+      let retry;
+      render(
+        () => (
+          <div>
+            {Errored({
+              fallback: (e, reset) => ((retry = reset), e.message),
+              get children() { return n() === 1 ? <Bad /> : <b>{n()}</b>; },
+            })}
+          </div>
+        ),
+        root,
+      );
+      return { setN, retry: () => retry(), log: [] };
+    `,
+      root,
+    );
+    expect(text(root)).toBe("0");
+    api.setN!(1 as never);
+    expect(text(root)).toBe("bad 1");
+    api.setN!(2 as never);
+    api.retry!();
+    expect(text(root)).toBe("2");
   });
 
   test("what the fallback throws goes to the boundary above; a boundary in a slot waits for the slot's run", () => {
