@@ -61,8 +61,29 @@ beforeAll(async () => {
     logLevel: "silent",
     plugins: [reactre({ compat: true }), react()],
     // The temp folder reaches @reactre/compat through the plugin's own directory (see baseFor).
-    server: { port: 0, fs: { allow: [dir, PACKAGES] } },
+    // The server watches what it served and reloads the page when index.html, main.tsx or the
+    // packages' dist folders change, which only the test's own copy and builds do: Bun's file
+    // watcher can report those writes after the server starts (once earlier test files in the
+    // process have watched files), and the page reloaded mid-test. Only counter.tsx, which the
+    // test edits, is watched for the app.
+    server: {
+      port: 0,
+      fs: { allow: [dir, PACKAGES] },
+      watch: { ignored: [/\/packages\/[^/]+\/dist\//, /\/reactre-plugin-refresh-[^/]+\/(index\.html|main\.tsx)$/] },
+    },
   });
+  // A reload the server sends is logged with the file that set it off (the page's next step
+  // fails on it), and fails the test.
+  const hot = server.environments.client.hot;
+  const send = hot.send.bind(hot) as (payload: any) => void;
+  hot.send = ((payload: any) => {
+    if (payload?.type === "full-reload") {
+      const why = `full reload: ${payload.triggeredBy ?? payload.path}`;
+      console.error(why);
+      errors.push(why);
+    }
+    send(payload);
+  }) as typeof hot.send;
   await server.listen();
   browser = await puppeteer.launch({ executablePath: chrome, headless: true, args: ["--no-sandbox"] });
   page = await browser.newPage();
