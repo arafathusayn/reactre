@@ -68,10 +68,15 @@
 //
 // Design decisions that shape the code below:
 //
-//   - Reactivity is push-based and synchronous. A signal write re-runs its
-//     observers at once, or at the end of the outermost `batch`. An effect
-//     notified while it runs (it wrote what it read) runs again after, up to
-//     100 times in a row, then throws.
+//   - Reactivity is synchronous and glitch-free. A signal write applies at
+//     once and re-runs its observers before it returns, or at the end of the
+//     outermost `batch`: it queues them, marks every memo it may change, and
+//     then runs the queue, where a memo read recomputes first what it reads
+//     (push to mark, pull to compute: see "Memos"). So each memo and effect
+//     runs once per write, and none sees half of it. A write made while an
+//     observer runs queues behind it. An effect notified while it runs (it
+//     wrote what it read) runs again after, up to 100 times in a row, then
+//     throws.
 //   - An observer re-collects what it reads on every run, so a branch that
 //     stops reading a signal stops depending on it.
 //   - Rows cost as little as possible. A row is one plain object of fixed
@@ -103,11 +108,13 @@ interface Reader {
 interface Observer extends Reader {
   /** Queued in `pending`, so a batch notifies it once however often its sources change. */
   q: boolean;
-  /** A source it read has changed. */
+  /** Run again: a source it read has changed (the queue's drain calls it, or `notify` while it runs). */
   stale(): void;
+  /** An effect's (or memo's) run state: not IDLE while it runs. */
+  state?: number;
+  /** A memo's mark (CLEAN, CHECK or STALE, see "Memos"); undefined for any other observer. */
+  f?: number;
   // #if ASYNC
-  /** A memo's effect: it runs before the other observers of a batch, and is never held. */
-  m?: boolean;
   /** Never held by a transition: it reads `isPending` or `latest`. */
   lv?: boolean;
   // #endif
@@ -117,18 +124,34 @@ interface Observer extends Reader {
 let current: Reader | null = null;
 /** Depth of nested `batch` calls; observers are deferred while it is above 0. */
 let batching = 0;
-/** Observers notified during a batch, in first-notified order, each once (its `q` flag says so). */
+/**
+ * How many observer runs and drains are under way: a write made meanwhile queues its observers,
+ * which run when the outermost of them ends.
+ */
+let depth = 0;
+/**
+ * Whether a write outside a batch queued observers while a run was under way: the outermost run's
+ * end drains them. What else waits in the queue (features/effects' first applies) waits on.
+ */
+let wrote = false;
+/** Observers notified and not yet run, in first-notified order, each once (its `q` flag says so). */
 const pending: Observer[] = [];
 /** The next of `pending` to run: the ones before it have run (or are running). */
 let head = 0;
+/** The memos a write marks from clean: those it notifies, then, breadth first, the memos that read them. */
+const marked: Memo<unknown>[] = [];
+/** Marks memo `m` `f` and queues it (see "Memos"); set once the bundle holds a memo, as `spread` is. */
+let mark: ((m: Memo<unknown>, f: number) => void) | null = null;
+/** Marks CHECK, breadth first, the memos that read those in `marked`. */
+let spread: (() => void) | null = null;
 // #if ASYNC
 /** The async runtime's hooks, once @reactre/core/features/async or /actions has loaded; null until then. */
 let A: AsyncHooks | null = null;
-/** Memo effects notified in a batch: they run before the rest of `pending` (see `drainAsync`). */
+/** The memos a write marks: brought up to date before the rest of `pending` runs (see `drainAsync`). */
 const memos: Observer[] = [];
 /** The next of `memos` to run. */
 let mhead = 0;
-/** How many `drainAsync` calls are under way: while one is, a write queues its observers. */
+/** How many `drainAsync` calls are under way: a memo that goes pending meanwhile holds the drain. */
 let draining = 0;
 // #endif
 // #if DEV
@@ -168,51 +191,65 @@ function reading<T>(fn: () => T): T {
 }
 // #endif
 
-/** Tell the observers of `s` that it changed: now, or at the end of the current batch. */
+/**
+ * Tell the observers of `s` that it changed. They are queued, not run, and every memo the write
+ * may change is marked first (see "Memos"); then the queue runs, unless a batch, a run or a
+ * drain is under way, whose end runs it.
+ */
 function notify(s: Source): void {
   const subs = s.subs;
   if (subs.length === 0) return;
-  // #if ASYNC
-  if (batching || draining) {
-    // #else
-    // if (batching) {
-    // #endif
-    // The flag keeps each observer to one run per batch, without a search of the queue.
-    for (let i = 0; i < subs.length; i++) {
-      const o = subs[i]!;
-      // #if ASYNC
-      // An effect that wrote what its own run read runs again when that run ends, as below.
-      if (draining && (o as { state?: number }).state) {
-        o.stale();
-        continue;
-      }
-      // #endif
-      if (!o.q) {
-        o.q = true;
-        // #if ASYNC
-        if (A !== null && o.m) {
-          memos.push(o);
-          continue;
-        }
-        // #endif
-        pending.push(o);
-      }
+  // The flag keeps each observer to one run per drain, without a search of the queue.
+  for (let i = 0; i < subs.length; i++) {
+    const o = subs[i]!;
+    // Notified while it runs (it wrote what its run read): it runs again when that run ends.
+    if (o.state) o.stale();
+    else if (o.f !== undefined) {
+      // A memo: queued STALE where it stands, among the observers; what reads it is marked after.
+      if (!o.f) marked.push(o as Memo<unknown>);
+      mark!(o as Memo<unknown>, STALE);
+    } else if (!o.q) {
+      o.q = true;
+      pending.push(o);
     }
-    return;
   }
-  // #if ASYNC
-  // With the async runtime on, every write is a batch of its own: its memos run first, so that
-  // by its effects' turn it is known whether the write made an async memo pending.
-  if (A !== null) return batch(() => notify(s));
+  if (marked.length !== 0) spread!();
+  if (batching === 0) {
+    if (depth === 0) drain();
+    else wrote = true;
+  }
+}
+
+/**
+ * Run the queue: each observer leaves it (`head` passes it) before it runs, so one that throws
+ * leaves the rest queued, still flagged, for the next drain. A write made by what runs queues
+ * behind, and this loop runs it too: an observer's writes re-run nothing while it runs.
+ */
+function drain(): void {
+  // #if DEV
+  if (depth === 0) drains++;
   // #endif
-  // Re-running drops and re-adds subscriptions: run over a copy.
-  const run = subs.slice();
-  for (let i = 0; i < run.length; i++) run[i]!.stale();
+  depth++;
+  try {
+    // #if ASYNC
+    if (A !== null) return drainAsync();
+    // #endif
+    while (head < pending.length) {
+      const o = pending[head++]!;
+      o.q = false;
+      o.stale();
+    }
+    pending.length = head = 0;
+  } finally {
+    depth--;
+    wrote = false;
+  }
 }
 
 /**
  * Run `fn` with every effect it causes deferred to its end, each run once.
- * Batches nest: effects run when the outermost one returns (or throws).
+ * Batches nest: effects run when the outermost one returns (or throws). A
+ * batch inside an effect's run leaves them to the end of that run.
  *
  * @example
  *   const [a, setA] = signal(1);
@@ -228,38 +265,26 @@ export function batch<T>(fn: () => T): T {
   try {
     return fn();
   } finally {
-    // Flushing happens with batching back at 0, so a write made by a flushed
-    // effect notifies its observers at once instead of queueing behind it. A
-    // run that opens a batch of its own queues behind the rest, and its batch's
-    // end drains the one queue, in order. Each observer leaves the queue (`head`
-    // passes it) before it runs: one that throws leaves the rest queued, still
-    // flagged, for the next flush.
     if (--batching === 0) {
-      // #if ASYNC
-      if (A !== null) drainAsync();
-      // #endif
-      while (head < pending.length) {
-        const o = pending[head++]!;
-        o.q = false;
-        o.stale();
-      }
-      pending.length = head = 0;
+      if (depth === 0) drain();
+      else wrote = true;
     }
   }
 }
 
 /**
- * Internal (@reactre/core/features/timing's `flush`): drain the queue now, even inside a batch.
- * It runs with `batching` at 0, as the outermost batch's end does, so that the effects it runs
- * apply their own writes at once; then `batching` is put back.
+ * Internal (@reactre/core/features/timing's `flush`): drain the queue now, even inside a batch or
+ * a run. It runs as the outermost batch's end does, then `batching` and `depth` are put back.
  */
 export function __drain(): void {
-  const b = batching;
-  batching = 0;
+  const b = batching,
+    d = depth;
+  batching = depth = 0;
   try {
-    batch(() => {});
+    drain();
   } finally {
     batching = b;
+    depth = d;
   }
 }
 
@@ -344,14 +369,41 @@ const IDLE = 0,
   DIRTY = 2;
 /** Runs in a row after which an effect that keeps changing what it reads is a cycle. */
 const MAX_RUNS = 100;
+/** What a cycle throws. */
+const NEVER = "reactre: an effect writes a signal it reads, so it never settles";
+// #if DEV
+
+/** How many drains have started with none under way: the current drain's number. */
+let drains = 0;
+
+/**
+ * Count a run of `o` from the queue in the current drain. Observers that keep writing what the
+ * other reads (or a row's hole what it reads) queue each other without end, and keep the drain
+ * going: past MAX_RUNS runs of one observer in one drain, throw `message`. The development
+ * build's guard: the production build's drain runs on, as a loop of the app's own would.
+ */
+function cycle(o: { g: number; k: number }, message: string): void {
+  if (o.g !== drains) {
+    o.g = drains;
+    o.k = 0;
+  }
+  if (++o.k > MAX_RUNS) throw new Error(message);
+}
+// #endif
 
 /** An effect: a function re-run whenever a source it read last time changes. */
 class Effect implements Observer {
   protected readonly fn: () => void;
-  private sources: Source[] = [];
+  sources: Source[] = [];
   q = false;
-  private state = IDLE;
+  state: number = IDLE;
+  // #if DEV
+  /** The drain of its last run from the queue, and its runs in it (see `cycle`). */
+  g: number = 0;
+  k: number = 0;
+  // #endif
   // #if ASYNC
+  /** An async memo: a run that reads a value not ready waits under no boundary. */
   m = false;
   lv = false;
   /** While its last run read a value that was not ready: what `A.wait` gave for it. */
@@ -369,10 +421,17 @@ class Effect implements Observer {
   stale(): void {
     // A write to what it read, made by its own run (or by a run it caused),
     // does not recurse: the run ends first, then it runs again.
-    if (this.state === IDLE) this.run();
-    else this.state = DIRTY;
+    if (this.state === IDLE) {
+      // #if DEV
+      cycle(this, NEVER);
+      // #endif
+      this.run();
+    } else this.state = DIRTY;
   }
-  /** Run, and again while a run was notified (it wrote what it read), up to MAX_RUNS in a row. */
+  /**
+   * Run, and again while a run was notified (it wrote what it read), up to MAX_RUNS in a row.
+   * What its writes notify runs after it, when the outermost run (or drain) under way ends.
+   */
   run(): void {
     // #if DEV
     // A computation of its own: what a hole's value started (a lazy memo's first run) may write.
@@ -387,21 +446,18 @@ class Effect implements Observer {
   /** `run`, in the development build. */
   private runs(): void {
     // #endif
-    for (let n = 0; n < MAX_RUNS; n++) {
-      this.state = RUNNING;
-      try {
+    depth++;
+    try {
+      for (let n = 0; n < MAX_RUNS; n++) {
+        this.state = RUNNING;
         this.once();
-      } catch (err) {
-        this.state = IDLE;
-        throw err;
+        if (this.state === RUNNING) return;
       }
-      if (this.state === RUNNING) {
-        this.state = IDLE;
-        return;
-      }
+      throw new Error(NEVER);
+    } finally {
+      this.state = IDLE;
+      if (--depth === 0 && batching === 0 && wrote) drain();
     }
-    this.state = IDLE;
-    throw new Error("reactre: an effect writes a signal it reads, so it never settles");
   }
   /** One run of `fn` as the current observer, after dropping the sources of the last run. */
   protected once(): void {
@@ -619,8 +675,9 @@ export function effect(fn: () => void): void {
 
 /**
  * A derived value, recomputed when what it reads changes: a read function.
- * It is a signal written by an effect, so its readers re-run only when the
- * recomputed value differs (!==) from the last.
+ * Its readers re-run only when the recomputed value differs (!==) from the
+ * last. A write recomputes each memo it changes once, after what the memo
+ * reads, so no memo or effect sees half of the write.
  *
  * @example
  *   const [a, setA] = signal(2);
@@ -634,15 +691,123 @@ export function memo<T>(fn: () => T): () => T {
   // With the async runtime on, a memo may return a Promise or an AsyncIterable (see "Async").
   if (A !== null) return computed(fn);
   // #endif
-  // The effect runs at once, so the placeholder undefined is never observed.
-  const [read, write] = signal<T>(undefined as T);
   // #if DEV
-  effect(() => write(reading(fn)));
+  const m: Memo<T> = new Memoed<T>(() => m.put(reading(fn)));
   // #else
-  // effect(() => write(fn()));
+  // const m: Memo<T> = new Memoed<T>(() => m.put(fn()));
   // #endif
-  return read;
+  m.run();
+  return () => m.get();
 }
+
+// #endregion
+
+// #region Memos
+
+// A memo is an owned effect that computes a value, and the source its readers read. A write
+// marks, before anything runs, every memo it may change: those it notifies STALE (a source of
+// theirs changed), and, breadth first, those that read a marked memo CHECK (one of their memos
+// may change). The marked memos join the queue, so each is brought up to date once, in the order
+// they were marked; and a read of a marked memo brings it up to date first. Bringing a memo up to
+// date (`up`) brings its marked memos up to date first, then recomputes it if it is STALE (a
+// memo of it whose value changed makes it so). An effect that reads only memos is queued only
+// when one of them changes. So a join of several branches recomputes once, after them, and a
+// value read anywhere, in a run or between writes in a batch, is the write's whole result.
+//
+// The marking is installed with the first memo (`Memoed`): a bundle without one drops it.
+
+/** A memo's marks. */
+const CLEAN = 0,
+  /** A memo it reads may have changed. */
+  CHECK = 1,
+  /** A source it read has changed: it computes again. */
+  STALE = 2,
+  /** Being brought up to date: a read meanwhile (a cycle through its owner) gets its last value. */
+  UPDATING = -1;
+
+/** A memo: the effect that computes it, and the source its readers read. */
+class Memo<T> extends OwnedEffect implements Source {
+  subs: Observer[] = [];
+  v: T | undefined = undefined;
+  f: number = CLEAN;
+  /** The owner it was made in: brought up to date first, as its run may dispose this memo. */
+  readonly p: Owner | null = owner;
+  override stale(): void {
+    // Notified while it runs, it runs again as an effect does; from the queue, it is brought up to date.
+    if (this.state) super.stale();
+    else this.up();
+  }
+  /** Bring it up to date: its owner and marked memos first, then itself, if it is STALE. */
+  up(): void {
+    const f = this.f;
+    if (f <= CLEAN) return;
+    this.f = UPDATING;
+    // A memo made in a memo's run: the owner first, which disposes it if it runs again.
+    const p = this.p as Partial<Memo<unknown>> | null;
+    if (p !== null && p.f) p.up!();
+    const ss = this.sources;
+    for (let i = 0; i < ss.length; i++) {
+      const s = ss[i] as Partial<Memo<unknown>>;
+      // A source that changes makes this STALE (its `put` notifies this).
+      if (s.f) s.up!();
+    }
+    const now = this.f;
+    this.f = CLEAN;
+    // Disposed meanwhile, its run does nothing.
+    if (f === STALE || now === STALE) this.run();
+  }
+  get(): T {
+    // Up to date before the reader subscribes: a reader that runs dropped its subscriptions, so
+    // what this recomputing notifies does not run it again.
+    if (this.f) this.up();
+    if (current !== null) current.read(this);
+    return this.v as T;
+  }
+  /** What a run computed. */
+  put(v: T): void {
+    if (v === this.v) return;
+    this.v = v;
+    notify(this);
+  }
+}
+
+/** Install the marking, and ownership, which memos belong to. */
+function installMemos(): typeof Memo {
+  installOwners();
+  const m = (mark = (m, f) => {
+    m.f = f;
+    if (!m.q) {
+      m.q = true;
+      // #if ASYNC
+      // With the async runtime on, memos run before the other observers (see `drainAsync`).
+      if (A !== null) {
+        memos.push(m);
+        return;
+      }
+      // #endif
+      pending.push(m);
+    }
+  });
+  spread = () => {
+    // Breadth first, after the memos the write notifies: the queue runs them in that order. A
+    // marked memo's readers are marked already; effects wait for a memo to change.
+    for (let i = 0; i < marked.length; i++) {
+      const subs = marked[i]!.subs;
+      for (let j = 0; j < subs.length; j++) {
+        const o = subs[j]!;
+        if (o.f === CLEAN) {
+          m(o as Memo<unknown>, CHECK);
+          marked.push(o as Memo<unknown>);
+        }
+      }
+    }
+    marked.length = 0;
+  };
+  return Memo;
+}
+
+/** The memo class, with the marking installed; dropped from a bundle that makes no memo. */
+const Memoed: typeof Memo = /* @__PURE__ */ installMemos();
 
 // #endregion
 
@@ -775,13 +940,12 @@ function complete(t: __Transition): void {
 }
 
 /**
- * A memo with the async runtime on: a source its readers read, and the effect that computes it.
+ * A memo with the async runtime on: marked and brought up to date as a memo is (see "Memos").
  * Its value is what `fn` returned, or what a Promise it returned resolved to, or the last value
  * an AsyncIterable it returned gave.
  */
-class Computed<T> implements Source {
-  subs: Observer[] = [];
-  v: T | undefined = undefined;
+class Computed<T> extends Memo<T> {
+  override m = true;
   /** Whether it has a value: a readers' read before it does is not ready. */
   has = false;
   /** What its last async run failed with, thrown to its readers; NONE when it did not. */
@@ -794,12 +958,8 @@ class Computed<T> implements Source {
   it: AsyncIterator<T> | null = null;
   /** What `refresh` returned and waits for the next result. */
   w: [() => void, (e: unknown) => void][] | null = null;
-  readonly e: OwnedEffect;
-  constructor(fn: () => unknown) {
-    this.e = new Owned(() => this.set(fn()));
-    this.e.m = true;
-  }
-  get(): T {
+  override get(): T {
+    if (this.f) this.up();
     if (current !== null) current.read(this);
     if (this.err !== NONE) throw this.err;
     if (!this.has) {
@@ -881,7 +1041,7 @@ class Computed<T> implements Source {
       if (w !== null) for (const [ok, no] of w) err === NONE ? ok() : no(err);
     });
   }
-  put(v: T): void {
+  override put(v: T): void {
     if (this.has && v === this.v) return;
     this.has = true;
     this.v = v;
@@ -892,7 +1052,8 @@ class Computed<T> implements Source {
     batch(() => {
       quiet = this as Computed<unknown>;
       try {
-        this.e.stale();
+        this.f = STALE;
+        this.up();
       } finally {
         quiet = null;
       }
@@ -906,10 +1067,10 @@ export const __refreshers: WeakMap<object, () => Promise<void>> = new WeakMap();
 
 /** `memo(fn)` with the async runtime on. */
 function computed<T>(fn: () => T): () => T {
-  const c = new Computed<T>(fn);
+  const c: Computed<T> = new Computed<T>(() => c.set(fn()));
   const read = (): T => c.get();
   __refreshers.set(read, () => c.refresh());
-  c.e.run();
+  c.run();
   return read;
 }
 
@@ -931,7 +1092,7 @@ function pendingOf(s: Source): boolean {
   if (T !== null && T.affected !== null && T.affected.has(s)) return true;
   if (!(s instanceof Computed)) return false;
   if (s.pend) return true;
-  const ss = (s.e as unknown as { sources: Source[] }).sources;
+  const ss = s.sources;
   for (let i = 0; i < ss.length; i++) if (pendingOf(ss[i]!)) return true;
   return false;
 }
@@ -1110,6 +1271,8 @@ class Selector<K> {
   private wake(k: K): void {
     const src = this.byKey.get(k);
     if (src === undefined) return;
+    // Its readers run after this (the selector's own run is under way): a key they stopped asking
+    // about since it last woke is forgotten now.
     notify(src);
     if (src.subs.length === 0) this.byKey.delete(k);
   }
@@ -1239,16 +1402,17 @@ class RowObserver implements Observer {
   readonly entry: Row<unknown>;
   private sources: Source[] = [];
   q = false;
+  // #if DEV
+  /** The drain of its last run, and its runs in it (see `cycle`). */
+  g: number = 0;
+  k: number = 0;
+  // #endif
   // #if ASYNC
   lv = false;
   /** While the row's last run read a value that was not ready: what `A.wait` gave for it. */
   nr: unknown = null;
   /** The row has left its list: a transition that held this observer does not run it. */
   d = false;
-  // #endif
-  // #if DEV
-  /** How many of its re-runs are under way, one inside another: each from a write the last made. */
-  n = 0;
   // #endif
   constructor(list: ForList<unknown, unknown>, entry: Row<unknown>) {
     this.list = list;
@@ -1263,22 +1427,16 @@ class RowObserver implements Observer {
     // #if ASYNC
     if (this.d) return;
     // #endif
+    // A hole that writes what it reads queues the row again from inside its own run, without end:
+    // the development build throws, as its guard on effects that keep re-running each other does;
+    // the production build's drain runs on.
     // #if DEV
-    // A hole that writes what it reads re-runs the row from inside its own run, without end; the
-    // production build overflows the stack. As an effect's run guard does, a cycle throws.
-    if (this.n === MAX_RUNS)
-      throw new Error(
-        "reactre FOR_ROW_LOOP: a <For> row's reactive hole writes a signal it reads, so the row never settles. Fix: compute the hole's value without writing; write in an event handler or an effect",
-      );
-    this.n++;
-    try {
-      this.list.refresh(this.entry);
-    } finally {
-      this.n--;
-    }
-    // #else
-    // this.list.refresh(this.entry);
+    cycle(
+      this,
+      "reactre FOR_ROW_LOOP: a <For> row's reactive hole writes a signal it reads, so the row never settles. Fix: compute the hole's value without writing; write in an event handler or an effect",
+    );
     // #endif
+    this.list.refresh(this.entry);
   }
   /** Unsubscribe from every source: before a re-run, and when the row leaves the list. */
   drop(): void {

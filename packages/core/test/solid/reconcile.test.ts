@@ -499,9 +499,7 @@ describe("reconcile.test.ts", () => {
       expect(state.v).toBe(3);
     });
 
-    const memoWhy = "core memo stores what a function it returns returns, as a setter's updater";
-
-    gap("bug", memoWhy, "replaces a TRACKED function-valued object leaf without invoking it", () => {
+    test("replaces a TRACKED function-valued object leaf without invoking it", () => {
       const before = (): unknown => "before";
       const calls: string[] = [];
       const after = (): unknown => calls.push("after");
@@ -518,7 +516,7 @@ describe("reconcile.test.ts", () => {
       expect(calls).toEqual(["after"]);
     });
 
-    gap("bug", memoWhy, "replaces a TRACKED function-valued array item without invoking it", () => {
+    test("replaces a TRACKED function-valued array item without invoking it", () => {
       const calls: string[] = [];
       const before = [() => calls.push("a"), () => calls.push("b")];
       const after = [() => calls.push("c"), () => calls.push("d")];

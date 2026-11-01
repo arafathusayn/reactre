@@ -224,6 +224,20 @@ const apps = {
     render(() => <Card n={n()}><i>{n() * 10}</i></Card>, root);
     globalThis.api = { setN };
   `,
+  /** Not a size profile: a jagged diamond of memos under a hole and an effect, on the default build. */
+  glitch: `
+    import { batch, effect, memo, render, signal } from "@reactre/core";
+    const [x, setX] = signal(1);
+    const a = memo(() => x() * 2);
+    const b = memo(() => a() + 1);
+    const c = memo(() => x() * 3);
+    let joins = 0;
+    const d = memo(() => (joins++, x() + ":" + b() + ":" + c()));
+    const seen = [];
+    effect(() => void seen.push(d()));
+    render(() => <p>{d()}</p>, root);
+    globalThis.api = { setX, batch, seen, joins: () => joins, d };
+  `,
   /** A list by position: each row keeps its index, and a new item at it updates the row in place. */
   index: `
     import { For, render, signal } from "@reactre/core";
@@ -625,16 +639,15 @@ describe("owner and timing APIs", () => {
     expect(text(root)).toBe("1");
   });
 
-  test("onSettled: before flush returns, at a batch's end, or at the next microtask; its cleanup goes with the content", async () => {
+  test("onSettled: before flush returns, at a batch's end, or at the end of a write's effects; its cleanup goes with the content", async () => {
     const { root, api } = run(await bundle("settled", apps.settled));
     const log = api.log as unknown as string[];
     expect(log).toEqual(["in A"]);
     api.batch!(() => api.setShow!(false));
     expect(text(root)).toBe("none");
     expect(log).toEqual(["in A", "out"]);
+    // A write outside a batch runs its effects as a batch's end does, and the callback after them.
     api.setShow!(true);
-    expect(log).toEqual(["in A", "out"]);
-    await Promise.resolve();
     expect(log).toEqual(["in A", "out", "in A"]);
   });
 
@@ -963,6 +976,25 @@ describe("hydration", () => {
     ]);
     expect(text(root)).toBe("bc");
     expect((root.firstChild as FakeElement).childNodes.includes(lis[1]!)).toBe(true);
+  });
+});
+
+describe("glitch-free updates", () => {
+  test("on the default build, a jagged diamond's join recomputes once per write and is never seen half-written", async () => {
+    const code = await bundle("glitch", apps.glitch, false);
+    expect(code).not.toContain("drainAsync");
+    const { root, api } = run(await bundle("glitch", apps.glitch));
+    const seen = api.seen as unknown as string[];
+    expect([text(root), api.joins!()]).toEqual(["1:3:3", 1]);
+    api.setX!(2);
+    expect([text(root), api.joins!(), seen]).toEqual(["2:5:6", 2, ["1:3:3", "2:5:6"]]);
+    api.batch!(() => {
+      api.setX!(3);
+      // Read between a batch's writes, the memo has the write before it.
+      seen.push("read " + String(api.d!()));
+      api.setX!(4);
+    });
+    expect([text(root), api.joins!(), seen]).toEqual(["4:9:12", 4, ["1:3:3", "2:5:6", "read 3:7:9", "4:9:12"]]);
   });
 });
 

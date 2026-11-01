@@ -383,51 +383,41 @@ describe("graph.test.ts", () => {
     expect(compute).toHaveBeenCalledTimes(1);
   });
 
-  gap(
-    "glitch-free",
-    "the join re-runs once per changed branch",
-    "should only update every signal once (diamond graph)",
-    () => {
-      const [$x, setX] = signal("a");
-      const $a = memo(() => $x());
-      const $b = memo(() => $x());
+  test("should only update every signal once (diamond graph)", () => {
+    const [$x, setX] = signal("a");
+    const $a = memo(() => $x());
+    const $b = memo(() => $x());
 
-      const spy = mock(() => $a() + " " + $b());
-      const $c = memo(spy);
+    const spy = mock(() => $a() + " " + $b());
+    const $c = memo(spy);
 
-      expect($c()).toBe("a a");
-      expect(spy).toHaveBeenCalledTimes(1);
+    expect($c()).toBe("a a");
+    expect(spy).toHaveBeenCalledTimes(1);
 
-      setX("aa");
-      flush();
-      expect($c()).toBe("aa aa");
-      expect(spy).toHaveBeenCalledTimes(2);
-    },
-  );
+    setX("aa");
+    flush();
+    expect($c()).toBe("aa aa");
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
 
-  gap(
-    "glitch-free",
-    "the join re-runs once per changed branch",
-    "should only update every signal once (diamond graph + tail)",
-    () => {
-      const [$x, setX] = signal("a");
+  test("should only update every signal once (diamond graph + tail)", () => {
+    const [$x, setX] = signal("a");
 
-      const $a = memo(() => $x());
-      const $b = memo(() => $x());
-      const $c = memo(() => $a() + " " + $b());
+    const $a = memo(() => $x());
+    const $b = memo(() => $x());
+    const $c = memo(() => $a() + " " + $b());
 
-      const spy = mock(() => $c());
-      const $d = memo(spy);
+    const spy = mock(() => $c());
+    const $d = memo(spy);
 
-      expect($d()).toBe("a a");
-      expect(spy).toHaveBeenCalledTimes(1);
+    expect($d()).toBe("a a");
+    expect(spy).toHaveBeenCalledTimes(1);
 
-      setX("aa");
-      flush();
-      expect($d()).toBe("aa aa");
-      expect(spy).toHaveBeenCalledTimes(2);
-    },
-  );
+    setX("aa");
+    flush();
+    expect($d()).toBe("aa aa");
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
 
   test("should bail out if result is the same", () => {
     const [setX, $b, spy] = createRoot(() => {
@@ -450,56 +440,51 @@ describe("graph.test.ts", () => {
     expect(spy).toHaveBeenCalledTimes(1);
   });
 
-  gap(
-    "glitch-free",
-    "the join re-runs once per changed branch",
-    "should only update every signal once (jagged diamond graph + tails)",
-    () => {
-      const [setX, $d, dSpy, $e, eSpy, $f, fSpy] = createRoot(() => {
-        const [$x, setX] = signal("a");
-        const $a = memo(() => $x());
-        const $b = memo(() => $x());
-        const $c = memo(() => $b());
-        const dSpy = mock(() => $a() + " " + $c());
-        const $d = memo(dSpy);
-        const eSpy = mock(() => $d());
-        const $e = memo(eSpy);
-        const fSpy = mock(() => $d());
-        const $f = memo(fSpy);
-        return [setX, $d, dSpy, $e, eSpy, $f, fSpy] as const;
-      });
+  test("should only update every signal once (jagged diamond graph + tails)", () => {
+    const [setX, $d, dSpy, $e, eSpy, $f, fSpy] = createRoot(() => {
+      const [$x, setX] = signal("a");
+      const $a = memo(() => $x());
+      const $b = memo(() => $x());
+      const $c = memo(() => $b());
+      const dSpy = mock(() => $a() + " " + $c());
+      const $d = memo(dSpy);
+      const eSpy = mock(() => $d());
+      const $e = memo(eSpy);
+      const fSpy = mock(() => $d());
+      const $f = memo(fSpy);
+      return [setX, $d, dSpy, $e, eSpy, $f, fSpy] as const;
+    });
 
-      expect($e()).toBe("a a");
-      expect(eSpy).toHaveBeenCalledTimes(1);
+    expect($e()).toBe("a a");
+    expect(eSpy).toHaveBeenCalledTimes(1);
 
-      expect($f()).toBe("a a");
-      expect(fSpy).toHaveBeenCalledTimes(1);
+    expect($f()).toBe("a a");
+    expect(fSpy).toHaveBeenCalledTimes(1);
 
-      setX("b");
-      flush();
+    setX("b");
+    flush();
 
-      expect($d()).toBe("b b");
-      expect(dSpy).toHaveBeenCalledTimes(2);
+    expect($d()).toBe("b b");
+    expect(dSpy).toHaveBeenCalledTimes(2);
 
-      expect($e()).toBe("b b");
-      expect(eSpy).toHaveBeenCalledTimes(2);
+    expect($e()).toBe("b b");
+    expect(eSpy).toHaveBeenCalledTimes(2);
 
-      expect($f()).toBe("b b");
-      expect(fSpy).toHaveBeenCalledTimes(2);
+    expect($f()).toBe("b b");
+    expect(fSpy).toHaveBeenCalledTimes(2);
 
-      setX("c");
-      flush();
+    setX("c");
+    flush();
 
-      expect($d()).toBe("c c");
-      expect(dSpy).toHaveBeenCalledTimes(3);
+    expect($d()).toBe("c c");
+    expect(dSpy).toHaveBeenCalledTimes(3);
 
-      expect($e()).toBe("c c");
-      expect(eSpy).toHaveBeenCalledTimes(3);
+    expect($e()).toBe("c c");
+    expect(eSpy).toHaveBeenCalledTimes(3);
 
-      expect($f()).toBe("c c");
-      expect(fSpy).toHaveBeenCalledTimes(3);
-    },
-  );
+    expect($f()).toBe("c c");
+    expect(fSpy).toHaveBeenCalledTimes(3);
+  });
 
   test("should ensure subs update even if one dep is static", () => {
     const [$x, setX] = signal("a");
@@ -547,7 +532,7 @@ describe("graph.test.ts", () => {
     expect(spy).toHaveBeenCalledTimes(2);
   });
 
-  gap("glitch-free", "memos re-run depth-first, as each source writes", "propagates in topological order", () => {
+  test("propagates in topological order", () => {
     let seq = "";
     const [a1, setA1] = signal(false);
     const b1 = optionsMemo(
@@ -577,53 +562,43 @@ describe("graph.test.ts", () => {
     expect(seq).toBe("b1b2c1");
   });
 
-  gap(
-    "glitch-free",
-    "the join re-runs once per changed branch",
-    "only propagates once with linear convergences",
-    () => {
-      const [d, setD] = signal(0);
-      const f1 = memo(() => d()),
-        f2 = memo(() => d()),
-        f3 = memo(() => d()),
-        f4 = memo(() => d()),
-        f5 = memo(() => d());
-      let gcount = 0;
-      memo(() => {
-        gcount++;
-        return f1() + f2() + f3() + f4() + f5();
-      });
+  test("only propagates once with linear convergences", () => {
+    const [d, setD] = signal(0);
+    const f1 = memo(() => d()),
+      f2 = memo(() => d()),
+      f3 = memo(() => d()),
+      f4 = memo(() => d()),
+      f5 = memo(() => d());
+    let gcount = 0;
+    memo(() => {
+      gcount++;
+      return f1() + f2() + f3() + f4() + f5();
+    });
 
-      gcount = 0;
-      setD(1);
-      flush();
-      expect(gcount).toBe(1);
-    },
-  );
+    gcount = 0;
+    setD(1);
+    flush();
+    expect(gcount).toBe(1);
+  });
 
-  gap(
-    "glitch-free",
-    "the join re-runs once per changed branch",
-    "only propagates once with exponential convergence",
-    () => {
-      const [d, setD] = signal(0);
-      const f1 = memo(() => d()),
-        f2 = memo(() => d()),
-        f3 = memo(() => d()),
-        g1 = memo(() => f1() + f2() + f3()),
-        g2 = memo(() => f1() + f2() + f3()),
-        g3 = memo(() => f1() + f2() + f3());
-      let hcount = 0;
-      memo(() => {
-        hcount++;
-        return g1() + g2() + g3();
-      });
-      hcount = 0;
-      setD(1);
-      flush();
-      expect(hcount).toBe(1);
-    },
-  );
+  test("only propagates once with exponential convergence", () => {
+    const [d, setD] = signal(0);
+    const f1 = memo(() => d()),
+      f2 = memo(() => d()),
+      f3 = memo(() => d()),
+      g1 = memo(() => f1() + f2() + f3()),
+      g2 = memo(() => f1() + f2() + f3()),
+      g3 = memo(() => f1() + f2() + f3());
+    let hcount = 0;
+    memo(() => {
+      hcount++;
+      return g1() + g2() + g3();
+    });
+    hcount = 0;
+    setD(1);
+    flush();
+    expect(hcount).toBe(1);
+  });
 
   test("does not trigger downstream computations unless changed", () => {
     const [s1, set] = derivedSignal(1, { equals: false });
@@ -647,68 +622,58 @@ describe("graph.test.ts", () => {
     expect(order).toBe("t1c1");
   });
 
-  gap(
-    "glitch-free",
-    "memos re-run depth-first, as each source writes",
-    "applies updates to changed dependees in same order as createMemo",
-    () => {
+  test("applies updates to changed dependees in same order as createMemo", () => {
+    const [s1, set] = signal(0);
+    let order = "";
+    const t1 = memo(() => {
+      order += "t1";
+      return s1() === 0;
+    });
+    memo(() => {
+      order += "c1";
+      return s1();
+    });
+    memo(() => {
+      order += "c2";
+      return t1();
+    });
+    expect(order).toBe("t1c1c2");
+    order = "";
+    set(1);
+    flush();
+    expect(order).toBe("t1c1c2");
+  });
+
+  test("updates downstream pending computations", () => {
+    const [set, t2, t3, readOrder] = createRoot(() => {
       const [s1, set] = signal(0);
+      const [s2] = signal(0);
       let order = "";
       const t1 = memo(() => {
         order += "t1";
         return s1() === 0;
       });
-      memo(() => {
+      const t2 = memo(() => {
         order += "c1";
         return s1();
       });
-      memo(() => {
+      const t3 = memo(() => {
         order += "c2";
-        return t1();
+        t1();
+        return memo(() => {
+          order += "c2_1";
+          return s2();
+        });
       });
-      expect(order).toBe("t1c1c2");
       order = "";
-      set(1);
-      flush();
-      expect(order).toBe("t1c1c2");
-    },
-  );
-
-  gap(
-    "bug",
-    "memo(fn) calls a function fn returns, as a setter's updater",
-    "updates downstream pending computations",
-    () => {
-      const [set, t2, t3, readOrder] = createRoot(() => {
-        const [s1, set] = signal(0);
-        const [s2] = signal(0);
-        let order = "";
-        const t1 = memo(() => {
-          order += "t1";
-          return s1() === 0;
-        });
-        const t2 = memo(() => {
-          order += "c1";
-          return s1();
-        });
-        const t3 = memo(() => {
-          order += "c2";
-          t1();
-          return memo(() => {
-            order += "c2_1";
-            return s2();
-          });
-        });
-        order = "";
-        return [set, t2, t3, () => order] as const;
-      });
-      set(1);
-      flush();
-      t2();
-      t3()();
-      expect(readOrder()).toBe("t1c1c2c2_1");
-    },
-  );
+      return [set, t2, t3, () => order] as const;
+    });
+    set(1);
+    flush();
+    t2();
+    t3()();
+    expect(readOrder()).toBe("t1c1c2c2_1");
+  });
 
   describe("with changing dependencies", () => {
     let setI: core.Setter<boolean>;
@@ -769,48 +734,43 @@ describe("graph.test.ts", () => {
       expect(fevals).toBe(1);
     });
 
-    gap(
-      "glitch-free",
-      "the join re-runs once per changed branch",
-      "ensures that new dependencies are updated before dependee",
-      () => {
-        const [setA, c, readOrder, resetOrder] = createRoot(() => {
-          let order = "";
-          const [a, setA] = signal(0);
-          const b = memo(() => {
-            order += "b";
-            return a() + 1;
-          });
-          const c = memo(() => {
-            order += "c";
-            const check = b();
-            if (check) return check;
-            return e();
-          });
-          const d = memo(() => a());
-          const e = memo(() => {
-            order += "d";
-            return d() + 10;
-          });
-
-          expect(order).toBe("bcd");
-
-          order = "";
-          return [setA, c, () => order, () => (order = "")] as const;
+    test("ensures that new dependencies are updated before dependee", () => {
+      const [setA, c, readOrder, resetOrder] = createRoot(() => {
+        let order = "";
+        const [a, setA] = signal(0);
+        const b = memo(() => {
+          order += "b";
+          return a() + 1;
         });
-        setA(-1);
-        flush();
+        const c = memo(() => {
+          order += "c";
+          const check = b();
+          if (check) return check;
+          return e();
+        });
+        const d = memo(() => a());
+        const e = memo(() => {
+          order += "d";
+          return d() + 10;
+        });
 
-        expect(readOrder()).toBe("bcd");
-        expect(c()).toBe(9);
+        expect(order).toBe("bcd");
 
-        resetOrder();
-        setA(0);
-        flush();
-        expect(readOrder()).toBe("bdc");
-        expect(c()).toBe(1);
-      },
-    );
+        order = "";
+        return [setA, c, () => order, () => (order = "")] as const;
+      });
+      setA(-1);
+      flush();
+
+      expect(readOrder()).toBe("bcd");
+      expect(c()).toBe(9);
+
+      resetOrder();
+      setA(0);
+      flush();
+      expect(readOrder()).toBe("bdc");
+      expect(c()).toBe(1);
+    });
   });
 
   test("does not update subsequent pending computations after stale invocations", () => {
@@ -840,44 +800,39 @@ describe("graph.test.ts", () => {
     expect(count).toBe(3);
   });
 
-  gap(
-    "glitch-free",
-    "memos re-run depth-first, as each source writes",
-    "evaluates stale computations before dependees when trackers stay unchanged",
-    () => {
-      const [s1, set] = derivedSignal(1, { equals: false });
-      let order = "";
-      const t1 = memo(() => {
-        order += "t1";
-        return s1() > 2;
-      });
-      const t2 = memo(() => {
-        order += "t2";
-        return s1() > 2;
-      });
-      const c1 = optionsMemo(
-        () => {
-          order += "c1";
-          s1();
-        },
-        { equals: false },
-      );
-      memo(() => {
-        order += "c2";
-        t1();
-        t2();
-        c1();
-      });
-      order = "";
-      set(1);
-      flush();
-      expect(order).toBe("t1t2c1c2");
-      order = "";
-      set(3);
-      flush();
-      expect(order).toBe("t1t2c1c2");
-    },
-  );
+  test("evaluates stale computations before dependees when trackers stay unchanged", () => {
+    const [s1, set] = derivedSignal(1, { equals: false });
+    let order = "";
+    const t1 = memo(() => {
+      order += "t1";
+      return s1() > 2;
+    });
+    const t2 = memo(() => {
+      order += "t2";
+      return s1() > 2;
+    });
+    const c1 = optionsMemo(
+      () => {
+        order += "c1";
+        s1();
+      },
+      { equals: false },
+    );
+    memo(() => {
+      order += "c2";
+      t1();
+      t2();
+      c1();
+    });
+    order = "";
+    set(1);
+    flush();
+    expect(order).toBe("t1t2c1c2");
+    order = "";
+    set(3);
+    flush();
+    expect(order).toBe("t1t2c1c2");
+  });
 
   test("correctly marks downstream computations as stale on change", () => {
     const [s1, set] = signal(1);

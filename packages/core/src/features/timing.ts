@@ -2,13 +2,13 @@
 //
 // When an `onSettled` callback runs depends on where it was queued:
 //
-//   - In a batch (`batch`, `flush(fn)`, a row's delegated handler), or while a batch's queue
-//     drains (the effects it queued are running: a slot rendering new content for a write in a
-//     batch), it waits in `soon`, and `settler` waits in the batch's own queue. The drain reaches
+//   - In a batch (`batch`, `flush(fn)`, a row's delegated handler), or while the core's queue
+//     drains (the effects a write queued are running, in a batch or not: a slot rendering new
+//     content), it waits in `soon`, and `settler` waits in the queue. The drain reaches
 //     `settler` after every effect queued before it, and runs `soon` once nothing is queued after
-//     it: when the batch's writes have all applied.
-//   - Anywhere else (a component rendered by `render` or `attach`, an effect re-run by a write
-//     outside any batch), it gets a microtask of its own. Nothing marks the end of such work (a
+//     it: when the writes have all applied.
+//   - Anywhere else (a component rendered by `render` or `attach`), it gets a microtask of its
+//     own. Nothing marks the end of such work (a
 //     `render` may still be building the view when a batch inside it ends), but a microtask
 //     runs only once all of it has returned.
 //
@@ -119,12 +119,12 @@ const settler = {
  *
  * When `fn` runs:
  *
- * - Called in a batch, a `flush(fn)` or a `<For>` row's handler, or in an effect their writes
- *   re-ran (a slot rendering new content): when the batch's queue has drained, after every
- *   effect its writes queued, and before `batch` or `flush` returns. A `flush()` inside the
- *   batch runs those queued so far. They run in the order they were queued.
- * - Called anywhere else (a component rendered by `render` or `attach`, an effect re-run by a
- *   write outside any batch): in a microtask, once the code that called it has returned, and
+ * - Called in a batch, a `flush(fn)` or a `<For>` row's handler, or in an effect a write re-ran
+ *   (a slot rendering new content): when the queue has drained, after every effect the writes
+ *   queued, and before `batch`, `flush` or the setter returns. A `flush()` inside a batch runs
+ *   those queued so far. They run in the order they were queued.
+ * - Called anywhere else (a component rendered by `render` or `attach`): in a microtask, once
+ *   the code that called it has returned, and
  *   before the browser paints. To run them before returning, render in a flush:
  *   `flush(() => render(App, el))`.
  *

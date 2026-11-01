@@ -66,7 +66,6 @@ export const GAPS = {
   "unobserved-timing": "Solid calls unobserved as the last reader leaves; reactre in a microtask after",
   "list-functions": "mapArray and repeat, the runtime list functions under <For> and <Repeat>",
   bug: "a reactre bug, with its repro in plans/solid-parity.md under Bugs found",
-  "glitch-free": "memos updated once each, in topological order, never seeing half an update",
   "pull-memos": "a memo nothing observes recomputes when read, not when its sources change",
   "row-shape": "a <For> or <Repeat> row is (item) => <one element />: no text, fragment, array or element-child row",
   "for-index": "a keyed <For> row gets its item only, not an index accessor",

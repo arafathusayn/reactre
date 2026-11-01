@@ -1,29 +1,30 @@
 # Solid 2.0 parity, measured
 
-836 of Solid 2.0's own tests (solid-js 2.0.0-rc.20, [solidjs/solid@5e68925](https://github.com/solidjs/solid/tree/5e68925cc2fd216a9fb06345019e66d5da5c523c)), ported to reactre's API in [`packages/core/test/solid/`](../packages/core/test/solid): **656 pass** (78%), and 180 fail because reactre lacks the capability or behaves differently.
+836 of Solid 2.0's own tests (solid-js 2.0.0-rc.20, [solidjs/solid@5e68925](https://github.com/solidjs/solid/tree/5e68925cc2fd216a9fb06345019e66d5da5c523c)), ported to reactre's API in [`packages/core/test/solid/`](../packages/core/test/solid): **668 pass** (80%), and 168 fail because reactre lacks the capability or behaves differently.
 
 | Area                                                      | Files                        |  Ported |    Pass |     Gap |  Todo |
 | --------------------------------------------------------- | ---------------------------- | ------: | ------: | ------: | ----: |
-| Signals and memos                                         | signals, memo                |      72 |      53 |      19 |     0 |
+| Signals and memos                                         | signals, memo                |      72 |      63 |       9 |     0 |
 | Effects, ownership, timing                                | effects, owner, timing       |      90 |      66 |      24 |     0 |
-| Stores                                                    | store, reconcile, projection |     172 |     138 |      34 |     0 |
+| Stores                                                    | store, reconcile, projection |     172 |     140 |      32 |     0 |
 | Control flow (Show, Switch, For, Repeat, Portal, Dynamic) | show, for, portal            |     172 |     155 |      17 |     0 |
 | Context, errors, components                               | context, errors, component   |      77 |      53 |      24 |     0 |
 | Async, Loading, actions                                   | loading, actions             |     122 |      74 |      48 |     0 |
 | Server rendering, hydration                               | server, hydration            |     131 |     117 |      14 |     0 |
-| **Total**                                                 | 18 files                     | **836** | **656** | **180** | **0** |
+| **Total**                                                 | 18 files                     | **836** | **668** | **168** | **0** |
 
 The top gaps, by the ports they block:
 
 1. **`action-writes`, 19**: an action holding and batching its plain writes until it ends.
 2. **`held-writes`, 10**: reads and effects that see a write before `flush()`. By design (reactre applies writes at once), and counted once per file.
 3. **`client-error-hook`, 9**: `configureClientErrors`/`render`'s `onError` hearing what a boundary caught.
-4. **`glitch-free`, 9**: a diamond's join runs once per changed branch, and memos run depth-first; Solid's run once each, in topological order.
-5. **`dev-checks`, 7**: Solid's strict-read warnings in a component body, and its message for a component that is not a function: both need a component's body told apart from an app's `untrack`.
-6. **`match-placement`, 6**: a `<For>` or `<Show>` of `<Match>`es in a `<Switch>`.
-7. **`action-sync-yield`, 6**: a sync `yield` resuming at once.
-8. **`create-reaction`, `dispose-order`, `owner-ids`, `portal-events`, `pull-memos`, `reconcile-identity`, `store-in-place`, `symbol-keys`, 5 each**.
-9. **`bug`, 4**: two bugs still open, [below](#bugs-found); seven more are fixed.
+4. **`dev-checks`, 7**: Solid's strict-read warnings in a component body, and its message for a component that is not a function: both need a component's body told apart from an app's `untrack`.
+5. **`match-placement`, 6**: a `<For>` or `<Show>` of `<Match>`es in a `<Switch>`.
+6. **`action-sync-yield`, 6**: a sync `yield` resuming at once.
+7. **`create-reaction`, `dispose-order`, `owner-ids`, `portal-events`, `pull-memos`, `reconcile-identity`, `store-in-place`, `symbol-keys`, 5 each**.
+8. **`bug`, 1**: one bug still open, [below](#bugs-found); eight more are fixed.
+
+`glitch-free` (9) landed in the core: a write marks the memos it may change, then recomputes each once, after what it reads, so a diamond's join runs once per write, in Solid's order. Writes still apply at once (`held-writes`).
 
 `row-shape` (58) and `for-placement` (30) landed as features/for: a `<For>` or `<Repeat>` stands anywhere content does, and its rows may be text, fragments, arrays, nothing or content that changes. Their ports pass, with each of Solid's list permutations (`1 missing`, `swaps`, `rotations`...), and so does `for-index`'s: a keyed row function of two parameters gets an index accessor.
 
@@ -176,14 +177,14 @@ Each gap test names a target: what reactre would need for it to pass. The first 
 | `dev-checks`                                                                                                                                                                                          |      7 | Solid's dev warnings that need a component's body told apart (strict reads there, a non-function component); ContextNotFoundError's texts and a fallback's log landed            |
 | `held-writes`                                                                                                                                                                                         |     10 | reads and effects not seeing a write before `flush()`, by design                                                                                                                 |
 | `client-error-hook`                                                                                                                                                                                   |      9 | `configureClientErrors` and `render`'s `onError` hearing what a boundary caught                                                                                                  |
-| `glitch-free`                                                                                                                                                                                         |      9 | memos updated once each, in topological order                                                                                                                                    |
+| `glitch-free`                                                                                                                                                                                         |      0 | done: memos updated once each, in topological order                                                                                                                              |
 | `list-functions`                                                                                                                                                                                      |      0 | `mapArray`, `repeat`: landed in features/lists                                                                                                                                   |
 | `ssr-semantics`                                                                                                                                                                                       |      0 | done: server primitives as Solid's server has them                                                                                                                               |
 | `misuse-errors`                                                                                                                                                                                       |      0 | done: errors for an invalid cleanup value, `flush()` or `onCleanup` where Solid forbids them, in the development build                                                           |
 | `action-sync-yield`                                                                                                                                                                                   |      6 | a sync `yield` resuming at once                                                                                                                                                  |
 | `match-placement`                                                                                                                                                                                     |      6 | a `<For>` or `<Show>` of `<Match>`es in a `<Switch>`                                                                                                                             |
 | `create-reaction`, `dispose-order`, `owner-ids`, `pull-memos`, `portal-events`, `reconcile-identity`, `store-in-place`, `symbol-keys`                                                                 | 5 each |                                                                                                                                                                                  |
-| `bug`                                                                                                                                                                                                 |      4 | the bugs below                                                                                                                                                                   |
+| `bug`                                                                                                                                                                                                 |      1 | the bug below                                                                                                                                                                    |
 | `async-store`, `class-instances`, `merge-views`, `optimistic-outside`, `projection-chain`, `refresh-promise`, `transition-scope`                                                                      | 4 each |                                                                                                                                                                                  |
 | `cleanup-throw`, `error-accessor`, `store-direct-write`                                                                                                                                               | 3 each |                                                                                                                                                                                  |
 | `array-text`, `class-values`, `effect-errors`, `lazy-retry`, `no-owner`, `pending-signal`, `settled-async`, `unobserved-timing`                                                                       | 2 each |                                                                                                                                                                                  |
@@ -238,10 +239,9 @@ The development build has Solid's context messages now: `createContext(default, 
 - errors.test.ts, configureClientErrors does not check onError: "refuses a non-function".
 - errors.test.ts, render takes no onError: "an `<Errored>` fallback under the root reports once, with the component labels"; "the root's hook wins over the ambient one; a root without one reports ambiently".
 
-#### `glitch-free` (9)
+#### `glitch-free` (0)
 
-- signals.test.ts, the join re-runs once per changed branch: "should only update every signal once (diamond graph)"; "should only update every signal once (diamond graph + tail)"; "should only update every signal once (jagged diamond graph + tails)"; "only propagates once with linear convergences"; "only propagates once with exponential convergence"; "ensures that new dependencies are updated before dependee".
-- signals.test.ts, memos re-run depth-first, as each source writes: "propagates in topological order"; "applies updates to changed dependees in same order as createMemo"; "evaluates stale computations before dependees when trackers stay unchanged".
+Landed in the core. Its 9 ports in signals.test.ts are plain tests now: "should only update every signal once (diamond graph)"; "should only update every signal once (diamond graph + tail)"; "should only update every signal once (jagged diamond graph + tails)"; "only propagates once with linear convergences"; "only propagates once with exponential convergence"; "ensures that new dependencies are updated before dependee"; "propagates in topological order"; "applies updates to changed dependees in same order as createMemo"; "evaluates stale computations before dependees when trackers stay unchanged". glitch.test.ts has the core's own.
 
 #### `list-functions` (0)
 
@@ -331,11 +331,9 @@ Landed: `httpStatus` and `httpHeader` in @reactre/core/server, writing to the re
 - store.test.ts, deep and snapshot copy string keys only: "tracks updates in a symbol-keyed subtree".
 - reconcile.test.ts, reconcile compares and copies string keys only: "notifies an effect tracking a symbol-keyed property"; "a symbol `in` check updates when reconcile adds the key".
 
-#### `bug` (4)
+#### `bug` (1)
 
 - show.test.ts, with a function child, `when` runs twice per change: "Toggle show control flow".
-- signals.test.ts, memo(fn) calls a function fn returns, as a setter's updater: "updates downstream pending computations".
-- reconcile.test.ts, core memo stores what a function it returns returns: "replaces a TRACKED function-valued object leaf without invoking it"; "replaces a TRACKED function-valued array item without invoking it".
 
 #### `async-store` (4)
 
@@ -428,9 +426,9 @@ features/async's `memo` takes the options, and its 4 ports pass: loading.test.ts
 
 ## Bugs found
 
-Where reactre claims a capability and the port shows it wrong. Each has `gap("bug", ...)` tests, which fail until it is fixed. Bugs 2, 3, 5, 6, 7, 8 and 9 are fixed: their ports are plain tests now, and each has regression tests in the module's own test file.
+Where reactre claims a capability and the port shows it wrong. Each has `gap("bug", ...)` tests, which fail until it is fixed. Bugs 1, 2, 3, 5, 6, 7, 8 and 9 are fixed: their ports are plain tests now, and each has regression tests in the module's own test file.
 
-1. **Core `memo` treats a function its `fn` returns as a setter's updater** (3 ports: signals "updates downstream pending computations", reconcile's two "replaces a TRACKED function-valued ... without invoking it"). `memo` stores `fn()` through `signal`'s setter, which calls any function it is given. The async build (`computed`) does not, so the two builds disagree. `reaction`, built on `memo`, has it too. features/memo's `memo` does not.
+1. **Fixed.** Core `memo` stores what its `fn` returns, a function too: a memo is no longer a signal written through its setter (glitch.test.ts "a memo stores what its function returns, a function too"). Was: **Core `memo` treats a function its `fn` returns as a setter's updater** (3 ports: signals "updates downstream pending computations", reconcile's two "replaces a TRACKED function-valued ... without invoking it"). `memo` stores `fn()` through `signal`'s setter, which calls any function it is given. The async build (`computed`) does not, so the two builds disagree. `reaction`, built on `memo`, has it too. features/memo's `memo` does not.
    ```ts
    import { memo } from "@reactre/core";
    const f = () => "called";

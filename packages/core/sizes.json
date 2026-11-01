@@ -1,94 +1,94 @@
 {
   "jfb": {
-    "min": 15861,
-    "gzip": 6757
+    "min": 16030,
+    "gzip": 6815
   },
   "plain": {
-    "min": 13563,
-    "gzip": 5840
+    "min": 13731,
+    "gzip": 5900
   },
   "slot": {
-    "min": 6553,
-    "gzip": 2903
+    "min": 6763,
+    "gzip": 3015
   },
   "attach": {
-    "min": 6237,
-    "gzip": 2771
+    "min": 6447,
+    "gzip": 2889
   },
   "imported": {
-    "min": 13930,
-    "gzip": 5951
+    "min": 14098,
+    "gzip": 6009
   },
   "root": {
-    "min": 6542,
-    "gzip": 2891
+    "min": 6752,
+    "gzip": 3000
   },
   "settled": {
-    "min": 7014,
-    "gzip": 3083
+    "min": 7183,
+    "gzip": 3161
   },
   "reaction": {
-    "min": 6434,
-    "gzip": 2870
+    "min": 7303,
+    "gzip": 3224
   },
   "show": {
-    "min": 14072,
-    "gzip": 5962
+    "min": 14873,
+    "gzip": 6270
   },
   "store": {
-    "min": 16470,
-    "gzip": 6825
+    "min": 16639,
+    "gzip": 6920
   },
   "storeEach": {
-    "min": 16470,
-    "gzip": 6828
+    "min": 16639,
+    "gzip": 6922
   },
   "memo": {
-    "min": 6555,
-    "gzip": 2954
+    "min": 6765,
+    "gzip": 3067
   },
   "lazyMemo": {
-    "min": 7712,
-    "gzip": 3388
+    "min": 7926,
+    "gzip": 3503
   },
   "context": {
-    "min": 7813,
-    "gzip": 3368
+    "min": 8029,
+    "gzip": 3476
   },
   "errors": {
-    "min": 8037,
-    "gzip": 3462
+    "min": 8250,
+    "gzip": 3565
   },
   "props": {
-    "min": 5775,
-    "gzip": 2631
+    "min": 5983,
+    "gzip": 2730
   },
   "index": {
-    "min": 12775,
-    "gzip": 5488
+    "min": 12943,
+    "gzip": 5563
   },
   "effects": {
-    "min": 7438,
-    "gzip": 3303
+    "min": 7608,
+    "gzip": 3383
   },
   "lists": {
-    "min": 8742,
-    "gzip": 3849
+    "min": 9539,
+    "gzip": 4155
   },
   "async": {
-    "min": 12910,
-    "gzip": 5315
+    "min": 13645,
+    "gzip": 5571
   },
   "actions": {
-    "min": 10617,
-    "gzip": 4511
+    "min": 11301,
+    "gzip": 4757
   },
   "dev": {
-    "min": 19339,
-    "gzip": 8182
+    "min": 19470,
+    "gzip": 8245
   },
   "hydrate": {
-    "min": 19032,
-    "gzip": 7715
+    "min": 19201,
+    "gzip": 7798
   }
 }
