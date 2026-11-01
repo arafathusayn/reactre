@@ -30,6 +30,10 @@
 //     and the text beside it, `<!--rr:e:...-->` before an `<Errored>`'s fallback
 //     (@reactre/core/server/errors) and `<!--rr:b-->` around a fallback `renderToString` wrote
 //     (see plans/core-hydration.md). Without it, the HTML is plain.
+//   - `httpStatus` and `httpHeader` write the render's `response` option while the scope they are
+//     called in lives (see "The response head"), and the render's hydration writer sends values
+//     to the client in scripts of the page (see "Hydration values"), which an async memo with an
+//     `id` writes its first value with (./server/async.ts).
 //
 // Design decisions:
 //   - A module of its own: no client bundle ever includes it, and no client runtime profile
@@ -132,10 +136,27 @@ interface Sink {
 export interface RenderOptions {
   /** Write the markers a hydration step needs (see plans/core-hydration.md). Default false. */
   readonly hydrate?: boolean;
-  /** A nonce for the scripts a stream writes, for a Content Security Policy. */
+  /** A nonce for the scripts a render writes (a stream's, and the hydration values'), for a Content Security Policy. */
   readonly nonce?: string;
   /** Gets an error thrown after a stream's shell was sent, before the stream errors with it. */
   readonly onError?: (err: unknown) => void;
+  /**
+   * The head of the response the render serves, which `httpStatus` and `httpHeader` write to while
+   * the render runs. It is final once the render commits it: when `renderToString` returns, when
+   * `renderToStream` sends its shell, when `renderToStringAsync`'s Promise resolves.
+   */
+  readonly response?: ResponseHead;
+}
+
+/**
+ * The head of an HTTP response: its status and headers, which a server render's `httpStatus` and
+ * `httpHeader` declare (`RenderOptions.response`). Make the `Response` from it once the render has
+ * committed it.
+ */
+export interface ResponseHead {
+  status?: number | undefined;
+  statusText?: string | undefined;
+  readonly headers: Headers;
 }
 
 /** How a render writes boundaries that still wait: their fallback, a stream's placeholder, or not yet. */
@@ -148,6 +169,16 @@ const SWAP =
   "var p=s.parentNode;while(s.nextSibling!==e)p.removeChild(s.nextSibling);p.replaceChild(t.content,s);p.removeChild(e);t.remove();" +
   // A page that hydrates (@reactre/core/hydrate/async) hydrates the boundary's content now.
   "self.$rrh&&self.$rrh(i)})";
+
+/**
+ * The script that keeps the hydration values a render writes (`getHydrationWriter`), sent before
+ * the first of them: `$rrv(values)` puts each into `self.$rrd`, a registry of no prototype, where
+ * @reactre/core/features/hydrate's `takeHydrationValue` takes it, and tells `self.$rrw` (set
+ * there) of them, for the Promises it gave for values still to come.
+ */
+const KEEP =
+  "self.$rrv||(self.$rrv=function(o){var d=self.$rrd||(self.$rrd=Object.create(null)),k;for(k in o)d[k]=o[k];" +
+  "self.$rrw&&self.$rrw(o)});";
 
 /** One render of an app. */
 class Render {
@@ -176,6 +207,18 @@ class Render {
   ids = 0;
   /** A `check` waits for a microtask (`later`). */
   queued = false;
+  /** The response head is final: `httpStatus` and `httpHeader` no longer change it. */
+  committed = false;
+  /** Its hydration writer, once asked for. */
+  writer: Writer | null = null;
+  /** The hydration values written and not sent yet, by key: each one's JSON. */
+  readonly values: Map<string, string> = new Map();
+  /** The script that keeps them has been sent. */
+  kept = false;
+  /** How many Promises written as values have not settled: the render ends after them. */
+  held = 0;
+  /** How many of them, and of the memos with `deferStream`, the stream's shell waits for. */
+  defer = 0;
   constructor(mode: Mode, options: RenderOptions, sink: Sink | null) {
     this.mode = mode;
     this.options = options;
@@ -191,7 +234,7 @@ class Render {
       if (typeof x === "string") s += x;
       else if (x instanceof Cell) s += this.html(x.v);
       else if (x.n === 0) s += this.html(x.content);
-      else if (this.mode === "stream") {
+      else if (this.mode === "stream" && !x.f) {
         x.id = this.ids++;
         this.waiting.add(x);
         s += `<!--rr:b${x.id}-->${this.html(x.fallback)}<!--/rr:b${x.id}-->`;
@@ -203,32 +246,56 @@ class Render {
     return s;
   }
 
+  /** The nonce attribute of the scripts the render writes. */
+  nonce(): string {
+    return this.options.nonce === undefined ? "" : ` nonce="${escape(this.options.nonce)}"`;
+  }
+
+  /** The script with the hydration values written since the last one; "" with none. */
+  data(): string {
+    if (this.values.size === 0) return "";
+    let s = "";
+    for (const [k, v] of this.values) s += (s === "" ? "" : ",") + json(k) + ":" + v;
+    this.values.clear();
+    const keep = this.kept ? "" : KEEP;
+    this.kept = true;
+    return `<script${this.nonce()}>${keep}$rrv({${s}})</script>`;
+  }
+
   /** Send what is ready: the shell, then each boundary's content; end once nothing waits. */
   check(): void {
     if (this.done || this.sync) return;
     const sink = this.sink!;
     if (this.mode === "async") {
-      if (this.busy !== 0) return;
-      const s = this.html(this.shell);
+      if (this.busy !== 0 || this.held !== 0) return;
+      const s = this.html(this.shell) + this.data();
+      this.committed = true;
       this.end();
       sink.push(s);
       return sink.close();
     }
     if (!this.sent) {
-      if (this.top.n !== 0) return;
+      if (this.top.n !== 0 || this.defer !== 0) return;
       this.sent = true;
-      sink.push(this.html(this.shell));
+      // The head goes out with the shell's first bytes.
+      this.committed = true;
+      sink.push(this.html(this.shell) + this.data());
     }
     for (const b of [...this.waiting]) {
       if (b.n !== 0) continue;
       this.waiting.delete(b);
-      const nonce = this.options.nonce === undefined ? "" : ` nonce="${escape(this.options.nonce)}"`;
+      const nonce = this.nonce();
       const html = this.html(b.content);
       const swap = this.script ? "" : `<script${nonce}>${SWAP}</script>`;
       this.script = true;
-      sink.push(`${swap}<template id="rr:t${b.id}">${html}</template><script${nonce}>$rr(${b.id})</script>`);
+      // The values its content was rendered with come first: its hydration reads them.
+      sink.push(
+        `${this.data()}${swap}<template id="rr:t${b.id}">${html}</template><script${nonce}>$rr(${b.id})</script>`,
+      );
     }
-    if (this.waiting.size !== 0) return;
+    const d = this.data();
+    if (d !== "") sink.push(d);
+    if (this.waiting.size !== 0 || this.held !== 0) return;
     this.end();
     sink.close();
   }
@@ -273,14 +340,27 @@ class Boundary {
   fallback: readonly Part[] = [];
   /** In a stream, its placeholder's id, once its fallback was sent. */
   id = -1;
+  /**
+   * It reads what only the client computes (a memo with `ssrSource: "client"`): it writes its
+   * fallback, for the client to replace, and the render does not wait for it.
+   */
+  f = false;
   constructor(r: Render) {
     this.r = r;
   }
   wait(): void {
-    if (this.n++ === 0) this.r.busy++;
+    if (this.n++ === 0 && !this.f) this.r.busy++;
   }
   done(): void {
     if (--this.n !== 0) return;
+    if (!this.f) this.r.busy--;
+    this.r.later();
+  }
+  /** It reads what only the client computes (see `f`). */
+  final(): void {
+    if (this.f) return;
+    this.f = true;
+    if (this.n === 0) return;
     this.r.busy--;
     this.r.later();
   }
@@ -686,6 +766,351 @@ export function __ssrMemo<T>(fn: () => T): () => T {
 
 // #endregion
 
+// #region The response head
+
+// `httpStatus` and `httpHeader` declare, for as long as the scope they are called in lives, a
+// status or a header of the response the render serves (`RenderOptions.response`). A scope that
+// goes (an `<Errored>`'s children when it shows its fallback, a `<Show>` branch) takes back its
+// declaration alone, whatever the order scopes go in, as Solid 2.0's do: each head keeps, per
+// field, what it had before the first declaration and the declarations still live, and a
+// retraction replays the live ones over that. Once the render commits the head, nothing changes it.
+
+/** A status declaration: a code and its text. */
+type Status = { readonly code: number | undefined; readonly text: string | undefined };
+/** A header declaration: its value, and whether it was appended. */
+type Header = { readonly value: string; readonly append: boolean };
+
+/** By head: the status it had before the first declaration, and the live declarations. */
+const statuses = new WeakMap<ResponseHead, { readonly base: Status; readonly live: Status[] }>();
+/** By head and lowercased header name: the value it had before the first declaration, and the live ones. */
+const headers = new WeakMap<
+  ResponseHead,
+  Map<string, { readonly base: string | string[] | null; readonly live: Header[] }>
+>();
+
+/** The response head the render under way writes to, unless it has committed it. */
+function head(): [Render, ResponseHead] | null {
+  const r = R;
+  if (r === null || r.committed || r.options.response === undefined) return null;
+  return [r, r.options.response];
+}
+
+/**
+ * Declare the response's status (and its status text) while the calling scope lives, in a server
+ * render with a `response` option: a not-found page's 404, an error fallback's 500. When the
+ * scope goes, the status is the latest live declaration's, or the head's own. Outside a render,
+ * after the render committed the head, and in a browser bundle, it does nothing.
+ *
+ * @example
+ *   const NotFound = () => {
+ *     httpStatus(404, "Not Found");
+ *     return <h1>Not found</h1>;
+ *   };
+ *   const response = { status: 200, headers: new Headers() };
+ *   const html = renderToString(() => <NotFound />, { response });
+ *   return new Response(html, response); // 404
+ */
+export function httpStatus(code: number, text?: string): void {
+  const at = head();
+  if (at === null) return;
+  const [r, h] = at;
+  let l = statuses.get(h);
+  if (l === undefined) statuses.set(h, (l = { base: { code: h.status, text: h.statusText }, live: [] }));
+  const ledger = l,
+    d: Status = { code, text };
+  ledger.live.push(d);
+  h.status = code;
+  h.statusText = text;
+  onCleanup(() => {
+    if (r.committed) return;
+    ledger.live.splice(ledger.live.indexOf(d), 1);
+    const now = ledger.live[ledger.live.length - 1] ?? ledger.base;
+    h.status = now.code;
+    h.statusText = now.text;
+    if (ledger.live.length === 0) statuses.delete(h);
+  });
+}
+
+/**
+ * Declare a response header while the calling scope lives, in a server render with a `response`
+ * option; with `append`, add the value to the header's. When the scope goes, the header is what
+ * the live declarations make of the head's own value, in the order they were made (`set-cookie`
+ * keeps each cookie its own entry). Outside a render, after the render committed the head, and
+ * in a browser bundle, it does nothing.
+ *
+ * @throws TypeError for a name or value `Headers` refuses (one holding a line break, for one).
+ *
+ * @example
+ *   httpHeader("cache-control", "max-age=60");
+ *   httpHeader("vary", "cookie", { append: true });
+ */
+export function httpHeader(name: string, value: string, options?: { readonly append?: boolean }): void {
+  const at = head();
+  if (at === null) return;
+  const [r, h] = at;
+  const hs = h.headers,
+    key = name.toLowerCase(),
+    d: Header = { value, append: options?.append === true };
+  let names = headers.get(h);
+  const had = names?.get(key);
+  // What the head held before the first declaration: set-cookie's entries each on its own, as
+  // `get` would join them with commas, which a cookie's `Expires` holds too.
+  const base = had !== undefined ? null : key === "set-cookie" ? hs.getSetCookie() : hs.get(name);
+  // Headers checks the name and the value: one it refuses throws before anything is noted.
+  if (d.append) hs.append(name, value);
+  else hs.set(name, value);
+  if (names === undefined) headers.set(h, (names = new Map()));
+  const ledger = had ?? { base, live: [] };
+  names.set(key, ledger);
+  ledger.live.push(d);
+  const byName = names;
+  onCleanup(() => {
+    if (r.committed) return;
+    ledger.live.splice(ledger.live.indexOf(d), 1);
+    // The base, and the live declarations over it, as if this one had never been made.
+    hs.delete(name);
+    if (Array.isArray(ledger.base)) for (const c of ledger.base) hs.append(name, c);
+    else if (ledger.base !== null) hs.set(name, ledger.base);
+    for (const x of ledger.live)
+      if (x.append) hs.append(name, x.value);
+      else hs.set(name, x.value);
+    if (ledger.live.length === 0) byName.delete(key);
+  });
+}
+
+// #endregion
+
+// #region Hydration values
+
+// A render's hydration writer sends values to the client, which @reactre/core/features/hydrate's
+// `takeHydrationValue` takes by key. Each value goes into the page as JSON, in a script of the
+// render's (with its nonce), so what the page parses is data, never code:
+//
+//   - The JSON is a JavaScript expression with `<`, `>`, `&`, U+2028 and U+2029 written as JSON's
+//     unicode escapes (backslash, `u` and four hex digits) in strings, the only place JSON has
+//     them, so no value can end the script (`</script>`) or open a comment in it.
+//   - It holds no object literal with a `__proto__` key, which in JavaScript would set the
+//     object's prototype: a key named so is refused, the writer's and an object's in a value.
+//   - It holds strings, numbers, booleans, null, arrays and plain objects; and, tagged as
+//     `{"$rr": tag}` objects, what JSON has not: undefined, NaN, the infinities, -0, a bigint, a
+//     Date, a Map and a Set (and a plain object of a `$rr` key of its own). A function, a symbol,
+//     a class's instance and a cycle are refused, naming the key: nothing is sent changed.
+//   - A Promise written in a render that waits (`renderToStream`, `renderToStringAsync`) is sent
+//     as pending, then as its value, or as its rejection: the server's error is named and its
+//     message given in the development build only, as `<Errored>`'s marker is.
+
+/** What `<`, `>`, `&`, U+2028 and U+2029 are in JSON written into a script: unicode escapes. */
+const UNSAFE = new RegExp("[<>&" + String.fromCharCode(0x2028, 0x2029) + "]", "g");
+
+/** `v` as JSON that is safe in a script (see the region's comment). */
+function json(v: unknown): string {
+  return JSON.stringify(v).replace(UNSAFE, (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"));
+}
+
+/** A value to write, as JSON holds it (see the region's comment), its cycles found in `seen`. */
+function encode(v: unknown, key: string, seen: Set<object>): unknown {
+  const no = (what: string): never => {
+    throw new TypeError(`reactre: the hydration value "${key}" holds ${what}, which cannot be sent to the client`);
+  };
+  switch (typeof v) {
+    case "string":
+    case "boolean":
+      return v;
+    case "number":
+      return Number.isFinite(v) && !Object.is(v, -0) ? v : { $rr: "n", v: Object.is(v, -0) ? "-0" : "" + v };
+    case "undefined":
+      return { $rr: "u" };
+    case "bigint":
+      return { $rr: "b", v: "" + v };
+    case "object":
+      break;
+    default:
+      return no(`a ${typeof v}`);
+  }
+  if (v === null) return null;
+  if (seen.has(v)) return no("a cycle");
+  seen.add(v);
+  try {
+    if (Array.isArray(v)) return Array.from(v, (x) => encode(x, key, seen));
+    if (v instanceof Date) return { $rr: "d", v: encode(v.getTime(), key, seen) };
+    if (v instanceof Map)
+      return { $rr: "m", v: Array.from(v, ([k, x]) => [encode(k, key, seen), encode(x, key, seen)]) };
+    if (v instanceof Set) return { $rr: "s", v: Array.from(v, (x) => encode(x, key, seen)) };
+    const p = Object.getPrototypeOf(v) as unknown;
+    if (p !== Object.prototype && p !== null)
+      return no(`an instance of ${(v.constructor as { name?: string })?.name || "a class"}`);
+    const out: Record<string, unknown> = {};
+    for (const k of Object.keys(v)) {
+      if (k === "__proto__") return no('a key named "__proto__"');
+      out[k] = encode((v as Record<string, unknown>)[k], key, seen);
+    }
+    return "$rr" in out ? { $rr: "o", v: out } : out;
+  } finally {
+    seen.delete(v);
+  }
+}
+
+/** What a written Promise that has not settled is sent as. */
+const PENDING = '{"$rr":"p"}';
+
+/** What a written Promise that rejected with `err` is sent as. */
+function rejected(err: unknown): string {
+  // #if DEV
+  const e = err instanceof Error ? err : new Error(String(err));
+  return json({ $rr: "r", v: [e.name, e.message] });
+  // #else
+  // void err;
+  // return '{"$rr":"r"}';
+  // #endif
+}
+
+/** A render's keyed channel of values to the client (`getHydrationWriter`). */
+export interface HydrationWriter {
+  /** Whether the render takes Promises (`renderToStream`, `renderToStringAsync`); `renderToString` takes values only. */
+  readonly async: boolean;
+  /**
+   * Send `value` to the client under `key`, where `takeHydrationValue(key)` takes it: a value
+   * JSON holds, or undefined, NaN, the infinities, -0, a bigint, a Date, a Map or a Set, in any
+   * of them; or, with `async`, a Promise of one. Returns false, writing nothing, for a key this
+   * render wrote already (the first write wins) and once the render has ended. With
+   * `deferStream`, a stream's shell waits for the Promise. Prefix keys with your library's name
+   * (`"sq:"`).
+   *
+   * @throws TypeError for a value it cannot send (naming what), a key named `__proto__`, and a
+   *   Promise in `renderToString`.
+   */
+  write(key: string, value: unknown, options?: { readonly deferStream?: boolean }): boolean;
+}
+
+/** The writer of render `r`. */
+class Writer implements HydrationWriter {
+  readonly async: boolean;
+  private readonly r: Render;
+  private readonly keys: Set<string> = new Set();
+  constructor(r: Render) {
+    this.r = r;
+    this.async = r.mode !== "string";
+  }
+  write(key: string, value: unknown, options?: { readonly deferStream?: boolean }): boolean {
+    const r = this.r;
+    if (typeof key !== "string" || key === "__proto__")
+      throw new TypeError(`reactre: a hydration value's key is a string other than "__proto__"; got ${String(key)}`);
+    if (r.done || this.keys.has(key)) return false;
+    if (
+      value === null ||
+      (typeof value !== "object" && typeof value !== "function") ||
+      typeof (value as PromiseLike<unknown>).then !== "function"
+    ) {
+      const v = json(encode(value, key, new Set()));
+      this.keys.add(key);
+      r.values.set(key, v);
+      return true;
+    }
+    if (!this.async)
+      throw new TypeError(
+        `reactre: renderToString takes hydration values that are ready, and "${key}" is a Promise: render with renderToStream or renderToStringAsync`,
+      );
+    this.keys.add(key);
+    r.values.set(key, PENDING);
+    r.held++;
+    const defer = options?.deferStream === true;
+    if (defer) r.defer++;
+    const settle = (v: string): void => {
+      r.held--;
+      if (defer) r.defer--;
+      if (r.done) return;
+      r.values.set(key, v);
+      r.later();
+    };
+    (value as PromiseLike<unknown>).then(
+      (v) => {
+        let s: string;
+        try {
+          s = json(encode(v, key, new Set()));
+        } catch (e) {
+          // What it resolved to cannot be sent: the render fails, naming it.
+          return r.fail(e);
+        }
+        settle(s);
+      },
+      (e: unknown) => settle(rejected(e)),
+    );
+    return true;
+  }
+}
+
+/**
+ * The hydration writer of the server render the calling code runs in: its keyed channel of
+ * values to the client (see `HydrationWriter`); undefined outside a render, and in a browser
+ * bundle. Take it while the render runs (in a component), to write from code that runs later.
+ *
+ * @example
+ *   const writer = getHydrationWriter();
+ *   writer?.write("sq:" + hash, data);
+ *   // on the client, from @reactre/core/features/hydrate:
+ *   const got = takeHydrationValue("sq:" + hash); // { status: "resolved", value: data }
+ */
+export function getHydrationWriter(): HydrationWriter | undefined {
+  if (R === null) return undefined;
+  return (R.writer ??= new Writer(R));
+}
+
+/** On the server, nothing to take: the values are the client's (@reactre/core/features/hydrate). */
+export function takeHydrationValue(_key: string): undefined {
+  return undefined;
+}
+
+/** Internal (@reactre/core/server/async): whether the render under way writes the markers of hydration. */
+export function __ssrHydrating(): boolean {
+  return R !== null && R.hydrate;
+}
+
+/**
+ * Internal (@reactre/core/server/async): the boundary under way reads what only the client
+ * computes (a memo with `ssrSource: "client"`): it writes its fallback, which the client
+ * replaces, and the render does not wait for it.
+ *
+ * @throws Error outside every `<Loading>`, where nothing would ever be written.
+ */
+export function __ssrClient(): void {
+  if (R === null) return;
+  if (B === R.top)
+    throw new Error(
+      'reactre: a memo with ssrSource: "client" is read on the server outside every <Loading>, where it is never ready: put what reads it in a <Loading>, whose fallback the server writes and the client replaces',
+    );
+  B!.final();
+}
+
+/** Internal (@reactre/core/server/async): the stream under way sends its shell once `p` has settled (`deferStream`). */
+export function __ssrDefer(p: PromiseLike<unknown>): void {
+  const r = R;
+  if (r === null || r.mode !== "stream" || r.sent) return;
+  r.defer++;
+  const done = (): void => {
+    r.defer--;
+    r.later();
+  };
+  p.then(done, done);
+}
+
+// #endregion
+
+// #region clientOnly
+
+/**
+ * `clientOnly` from @reactre/core/features/hydrate, on the server: the component never renders
+ * here, and its module is never loaded; `props.fallback` is written in its place, in a slot the
+ * client claims, then replaces with the component once it has loaded and the page has hydrated.
+ */
+export function clientOnly<P>(
+  _load: () => PromiseLike<unknown>,
+  _options?: { readonly lazy?: boolean; readonly export?: string },
+): (props: P & { readonly fallback?: unknown }) => unknown {
+  return (props) => __frag([() => props.fallback]);
+}
+
+// #endregion
+
 // #region Rendering
 
 /** Render `app` under a new render's root, with the render and its top boundary current. */
@@ -711,7 +1136,8 @@ function start(mode: Mode, app: () => unknown, options: RenderOptions, sink: Sin
 /**
  * Render the component `app` to HTML, synchronously. A `<Loading>` whose children read a value
  * that is not ready yet renders its fallback; a hole that reads one outside any `<Loading>`,
- * nothing. The render's effects stop and its cleanups run before it returns.
+ * nothing. The render's effects stop and its cleanups run before it returns. The values its
+ * hydration writer was given follow the HTML, in a script.
  *
  * @example
  *   import { renderToString } from "@reactre/core/server";
@@ -721,7 +1147,10 @@ function start(mode: Mode, app: () => unknown, options: RenderOptions, sink: Sin
 export function renderToString(app: () => unknown, options: RenderOptions = {}): string {
   const r = start("string", app, options, null);
   try {
-    return r.html(r.shell);
+    const html = r.html(r.shell) + r.data();
+    // The head is final before the render's cleanups run: what is live now is the response's.
+    r.committed = true;
+    return html;
   } finally {
     r.end();
   }
@@ -731,7 +1160,8 @@ export function renderToString(app: () => unknown, options: RenderOptions = {}):
  * Render the component `app` to a stream of HTML: the shell once what it reads outside every
  * `<Loading>` is ready, with each `<Loading>` that still waits showing its fallback; then each
  * one's content as it is ready, in a `<template>` with a script that puts it in place of the
- * fallback. The stream ends when nothing waits. Cancelling it stops the render.
+ * fallback. The stream ends when nothing waits, the Promises its hydration writer was given
+ * included. Cancelling it stops the render.
  *
  * An error thrown while the shell renders errors the stream. One thrown later goes to the nearest
  * `<Errored>` inside a boundary still to come; with none, `onError` gets it and the stream errors.
@@ -765,8 +1195,9 @@ export function renderToStream(app: () => unknown, options: RenderOptions = {}):
 }
 
 /**
- * Render the component `app` to HTML once everything it reads is ready: the whole page, every
- * `<Loading>` with its children, and no script.
+ * Render the component `app` to HTML once everything it reads is ready, and every Promise its
+ * hydration writer was given has settled: the whole page, every `<Loading>` with its children,
+ * and no script but the one of its hydration values, if it wrote any.
  *
  * @example
  *   const html = await renderToStringAsync(() => <App />);

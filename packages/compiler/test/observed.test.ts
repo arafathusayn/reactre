@@ -1,8 +1,9 @@
 // The rewrite of @reactre/core/features/memo's calls (src/observed.ts): a call of `memo` or
 // `signal` that passes `lazy` or `unobserved`, or options the compiler cannot read, goes to the
 // module's reader-counting entry; every other call, and every file without the import, compiles
-// as it did. What the entries do at runtime is tested with @reactre/core (lazyMemo.test.ts, and
-// the lazyMemo profile of features.test.ts).
+// as it did. And the other way round for @reactre/core/features/async's `memo`: a call that passes
+// none of its options goes to `__memo`. What the entries do at runtime is tested with
+// @reactre/core (lazyMemo.test.ts, async.test.ts, and the profiles of features.test.ts).
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { unlinkSync } from "node:fs";
@@ -10,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { compileJs, compileJsWithMap, compileSource, reactreCompiler, transpileSource } from "../src/index.ts";
-import { remark } from "../src/map.ts";
+import { mark, remark } from "../src/map.ts";
 import { observedCalls } from "../src/observed.ts";
 import { Program, type Resolved, scanModule } from "../src/program.ts";
 
@@ -106,6 +107,43 @@ describe("calls with options the reader count needs", () => {
     for (const o of [`{ 'equals': 1 }`, `{ "\\x65quals": 1 }`])
       expect(observedCalls(`${IMPORT}memo(f, ${o});`)!.code).toContain(`__rrObsMemo(f, ${o})`);
     expect(observedCalls(`${IMPORT}memo(f, { "equals": 1 });`)).toBeNull();
+  });
+});
+
+describe("features/async's memo, whose own export takes the options", () => {
+  const ASYNC = `import { memo } from "@reactre/core/features/async";\n`;
+
+  test("when every use is a call that passes none of them, the import names the plain entry, and the calls take its name", () => {
+    expect(compiled(`export const a = memo(() => 1), b = memo(() => 2, { equals: false });`, ASYNC)).toBe(
+      `import { __memo } from "@reactre/core/features/async";\nexport const a = __memo(() => 1), b = __memo(() => 2, { equals: false });\n`,
+    );
+    // Under another local name, the import alone changes.
+    expect(
+      compiled(`export const a = m(() => 1);`, `import { memo as m } from "@reactre/core/features/async";\n`),
+    ).toBe(`import { __memo as m } from "@reactre/core/features/async";\nexport const a = m(() => 1);\n`);
+  });
+
+  test("a call that passes them, or may, and a use that is not a call keep the export, which takes any options", () => {
+    for (const o of [
+      `{ loadingValue: 1 }`,
+      `{ id: "x" }`,
+      `{ ssrSource: "client" }`,
+      `{ deferStream: true }`,
+      `{ transparent: true }`,
+      `opts`,
+    ])
+      expect(observedCalls(`${ASYNC}memo(f, ${o});`)).toBeNull();
+    expect(observedCalls(`${ASYNC}export const make = memo;`)).toBeNull();
+    // Mixed: the plain calls take the entry's own import, and the rest stay.
+    expect(compiled(`export const a = memo(() => 1), b = memo(f, { loadingValue: 0 });`, ASYNC)).toBe(
+      `import { __memo } from "@reactre/core/features/async";\nimport { memo } from "@reactre/core/features/async";\nexport const a = __memo(() => 1), b = memo(f, { loadingValue: 0 });\n`,
+    );
+    // Through a namespace, and a re-export, which hands on the export.
+    const ns = `import * as A from "@reactre/core/features/async";\n`;
+    expect(calls(`export const a = A.memo(() => 1), b = A.memo(f, { id: "b" });`, ns)).toBe(
+      `export const a = A.__memo(() => 1), b = A.memo(f, { id: "b" });`,
+    );
+    expect(observedCalls(`export { memo } from "@reactre/core/features/async";`)).toBeNull();
   });
 });
 
@@ -234,9 +272,16 @@ describe("the same code in every compile", () => {
         expect(js.split("\n")[l]!.slice(c)).toStartWith(name === "__rrObsMemo" ? "memo(" : name + "(");
       }
     }
-    // The marks of a compile of the rewrite, moved back: a mark in the added import goes to the start.
-    const r = observedCalls(transpileSource(`${IMPORT}memo(f, { lazy: true });`))!;
-    expect(remark(`3x`, r.back)).toBe(`0x`);
+    // The marks of a compile of the rewrite, moved back: a mark in the added import goes to the
+    // module's own import, its `import` and its `from` to theirs, its names to the `import`.
+    const input = transpileSource(`${IMPORT}memo(f, { lazy: true });`);
+    const r = observedCalls(input)!;
+    const added = r.code.slice(0, r.code.indexOf("\n"));
+    expect(remark(mark(3), r.back)).toBe(mark(3));
+    expect(remark(mark(added.indexOf("__observedMemo")), r.back)).toBe(mark(0));
+    expect(remark(mark(added.indexOf(" from ") + 1), r.back)).toBe(mark(input.indexOf(" from ") + 1));
+    // Not all to the start of the file, as when a map placed the import's `from` at its first token.
+    expect(remark(`3x`, r.back)).not.toBe(`0x`);
   });
 });
 

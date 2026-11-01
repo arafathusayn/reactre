@@ -231,49 +231,53 @@ The template is parsed once. `mount` clones it with values for its holes, in ord
 
 `@reactre/core` itself holds what the compiler makes free. Runtime APIs beyond it are feature modules, imported by path: an app that does not import one ships none of its code, and its updates run as before.
 
-| Import                            | Export                               | What it does                                                                                                                                             |
-| --------------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `@reactre/core/features/owner`    | `createRoot(fn)`                     | Runs `fn(dispose)` under a new owner; `dispose` stops what it made. It goes with the owner it was made in.                                               |
-|                                   | `getOwner()`                         | The current owner, or null.                                                                                                                              |
-|                                   | `runWithOwner(o, fn)`                | Runs `fn`, untracked, with `o` as the owner of what it makes; null makes it belong to nothing.                                                           |
-| `@reactre/core/features/timing`   | `onSettled(fn)`                      | Runs `fn` once, untracked, when the work under way has finished and the DOM shows it ([timing](#timing)). A function it returns is a cleanup.            |
-|                                   | `flush(fn?)`                         | `flush(fn)` runs `fn` and applies its writes before it returns, inside a batch too. `flush()` applies what the current batch has queued.                 |
-| `@reactre/core/features/reaction` | `reaction(compute, apply)`           | An effect in two halves: `compute` is tracked, `apply(value, prev)` runs untracked when the value changes, and may return a cleanup.                     |
-| `@reactre/core/features/effects`  | `bind(compute, apply)`               | A render effect: `compute` is tracked, and `apply(value, prev)` runs untracked after each of its runs, at once ([effects](#effects-and-list-functions)). |
-|                                   | `autorun(fn)`                        | A tracked effect whose first run waits for the flush: in a component, once its view is in the page. A function `fn` returns is a cleanup.                |
-|                                   | `onFlush(fn)`                        | Runs `fn` in a microtask, after the work under way, in a batch of its own, so its writes are an update of their own.                                     |
-| `@reactre/core/features/lists`    | `map(list, fn, { keyed })`           | An accessor of `list()` mapped by `fn`, a row per item, under an owner of its own, kept by the item, a key, or its position.                             |
-|                                   | `repeat(count, fn, { from })`        | An accessor of `fn(i)` for each index from `from` to `from + count - 1`, each under an owner of its own.                                                 |
-| `@reactre/core/features/dynamic`  | `dynamic(source)`                    | A component that renders what `source` returns, as `<Dynamic>` does.                                                                                     |
-| `@reactre/core/features/store`    | `createStore(value)`                 | `[store, setStore]`: a deep reactive proxy, whose reads subscribe per property (arrays by index and `length`), and a setter given a draft.               |
-|                                   | `createStore(fn, seed)`              | A derived store that can be written: `fn(draft)` runs tracked; a write holds until it runs again. `{ shallow: true }` for a one-layer store.             |
-|                                   | `createProjection(fn, s)`            | A read-only derived store: what `fn(draft)` returns is reconciled into it by `key` ("id" by default).                                                    |
-|                                   | `reconcile(value, key?)`             | A setter's function that writes only what differs, keeping items of the same key ("id"; null for by index).                                              |
-|                                   | `path(...keys, value)`               | A setter's function that writes `value` at a path: `setStore(path("user", "name", "Ada"))`. `path.DELETE` deletes.                                       |
-|                                   | `snapshot(s)`, `deep(s)`             | A plain deep copy, untracked; `deep` subscribes to every property first.                                                                                 |
-|                                   | `merge(...s)`, `omit(o,…)`           | Props helpers whose properties are getters of their sources, so reactive props stay reactive. In `merge`, a later `undefined` overrides.                 |
-| `@reactre/core/features/memo`     | `memo(fn, { equals })`               | `memo` with `prev` and an equality of its own; `equals: false` re-runs readers each time.                                                                |
-|                                   | `signal(fn)`                         | A writable derived signal: `fn(prev)` recomputes it when its sources change; a write sets it until then. `signal(v, { equals })` too.                    |
-|                                   | `memo(fn, { lazy })`                 | A memo that runs `fn` when first read, and once nothing reads it stops following its sources, keeping its value, until it is read again.                 |
-|                                   | `signal(v, { unobserved })`          | Calls `unobserved` once the last reader stops reading (`memo` takes it too). Only a call the plugin compiles may pass these two (see below).             |
-| `@reactre/core/features/context`  | `createContext(default?)`            | A context, which is a component: `<Ctx value={v}>` provides `v` to what its children make, then and later.                                               |
-|                                   | `useContext(ctx)`                    | The nearest provider's value, else the default; with no default, it throws `ContextNotFoundError`.                                                       |
-| `@reactre/core/features/errors`   | `<Errored fallback>`                 | Its children, or `fallback` (an element, or `(err, reset) => ...`) once something they made throws. `reset()` builds them again.                         |
-|                                   | `effect(fn, { error })`              | The core's `effect`, with a handler for what its runs throw.                                                                                             |
-|                                   | `configureClientErrors({ onError })` | Gets what an effect, a slot or a row throws outside any boundary.                                                                                        |
-| `@reactre/core/features/async`    | `memo(async () => ...)`              | `memo`, typed for an async function or an async iterable: it reads as what it resolves to, and before that is not ready.                                 |
-|                                   | `<Loading fallback on>`              | Its children, once nothing they read is not ready; until then, `fallback`. With `on`, a change of it during an update shows `fallback` again.            |
-|                                   | `<Reveal order>`                     | The `<Loading>` boundaries among its children shown `"natural"` (each when ready), `"sequential"` or `"together"`.                                       |
-|                                   | `isPending(fn)`, `latest(fn)`        | Whether a change to what `fn` reads is in flight; `fn()`, read so that an update in flight does not hold it.                                             |
-|                                   | `resolve(fn)`, `refresh(target)`     | A Promise of `fn()` once it reads nothing pending; `refresh` computes a memo or an optimistic store again, quietly.                                      |
-|                                   | `lazy(load)`, `NotReadyError`        | A component loaded the first time it renders (`preload()` starts it); what a read that is not ready throws where nothing waits.                          |
-| `@reactre/core/features/actions`  | `action(function* () {...})`         | A mutation, run in a transition: yielded values are awaited, and the page goes from its optimistic state to the confirmed one at once.                   |
-|                                   | `createOptimistic(v \| fn)`          | `[read, write]`: a write in an action's code shows at once and reverts when the transition ends; elsewhere it sets the value.                            |
-|                                   | `createOptimisticStore(v \| fn, s)`  | The same for a store, whose `fn` may be async; `refresh(store)` runs `fn` again.                                                                         |
-|                                   | `affects(target, key?)`              | Marks what the action changes as pending, for `isPending`.                                                                                               |
-|                                   | `until(fn, { timeout, signal })`     | A Promise of the first truthy value of `fn`, which reads optimistic values as their base.                                                                |
-| `@reactre/core/features/hydrate`  | `hydrate(view, el)`                  | Runs `view` over the HTML the server rendered into `el`, keeping its nodes ([hydration](#hydration)); returns the disposer. Needs `hydrate: true`.       |
-|                                   | `isHydrating()`                      | Whether the code running now claims the page.                                                                                                            |
+| Import                            | Export                               | What it does                                                                                                                                                                                           |
+| --------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `@reactre/core/features/owner`    | `createRoot(fn)`                     | Runs `fn(dispose)` under a new owner; `dispose` stops what it made. It goes with the owner it was made in.                                                                                             |
+|                                   | `getOwner()`                         | The current owner, or null.                                                                                                                                                                            |
+|                                   | `runWithOwner(o, fn)`                | Runs `fn`, untracked, with `o` as the owner of what it makes; null makes it belong to nothing.                                                                                                         |
+| `@reactre/core/features/timing`   | `onSettled(fn)`                      | Runs `fn` once, untracked, when the work under way has finished and the DOM shows it ([timing](#timing)). A function it returns is a cleanup.                                                          |
+|                                   | `flush(fn?)`                         | `flush(fn)` runs `fn` and applies its writes before it returns, inside a batch too. `flush()` applies what the current batch has queued.                                                               |
+| `@reactre/core/features/reaction` | `reaction(compute, apply)`           | An effect in two halves: `compute` is tracked, `apply(value, prev)` runs untracked when the value changes, and may return a cleanup.                                                                   |
+| `@reactre/core/features/effects`  | `bind(compute, apply)`               | A render effect: `compute` is tracked, and `apply(value, prev)` runs untracked after each of its runs, at once ([effects](#effects-and-list-functions)).                                               |
+|                                   | `autorun(fn)`                        | A tracked effect whose first run waits for the flush: in a component, once its view is in the page. A function `fn` returns is a cleanup.                                                              |
+|                                   | `onFlush(fn)`                        | Runs `fn` in a microtask, after the work under way, in a batch of its own, so its writes are an update of their own.                                                                                   |
+| `@reactre/core/features/lists`    | `map(list, fn, { keyed })`           | An accessor of `list()` mapped by `fn`, a row per item, under an owner of its own, kept by the item, a key, or its position.                                                                           |
+|                                   | `repeat(count, fn, { from })`        | An accessor of `fn(i)` for each index from `from` to `from + count - 1`, each under an owner of its own.                                                                                               |
+| `@reactre/core/features/dynamic`  | `dynamic(source)`                    | A component that renders what `source` returns, as `<Dynamic>` does.                                                                                                                                   |
+| `@reactre/core/features/store`    | `createStore(value)`                 | `[store, setStore]`: a deep reactive proxy, whose reads subscribe per property (arrays by index and `length`), and a setter given a draft.                                                             |
+|                                   | `createStore(fn, seed)`              | A derived store that can be written: `fn(draft)` runs tracked; a write holds until it runs again. `{ shallow: true }` for a one-layer store.                                                           |
+|                                   | `createProjection(fn, s)`            | A read-only derived store: what `fn(draft)` returns is reconciled into it by `key` ("id" by default).                                                                                                  |
+|                                   | `reconcile(value, key?)`             | A setter's function that writes only what differs, keeping items of the same key ("id"; null for by index).                                                                                            |
+|                                   | `path(...keys, value)`               | A setter's function that writes `value` at a path: `setStore(path("user", "name", "Ada"))`. `path.DELETE` deletes.                                                                                     |
+|                                   | `snapshot(s)`, `deep(s)`             | A plain deep copy, untracked; `deep` subscribes to every property first.                                                                                                                               |
+|                                   | `merge(...s)`, `omit(o,…)`           | Props helpers whose properties are getters of their sources, so reactive props stay reactive. In `merge`, a later `undefined` overrides.                                                               |
+| `@reactre/core/features/memo`     | `memo(fn, { equals })`               | `memo` with `prev` and an equality of its own; `equals: false` re-runs readers each time.                                                                                                              |
+|                                   | `signal(fn)`                         | A writable derived signal: `fn(prev)` recomputes it when its sources change; a write sets it until then. `signal(v, { equals })` too.                                                                  |
+|                                   | `memo(fn, { lazy })`                 | A memo that runs `fn` when first read, and once nothing reads it stops following its sources, keeping its value, until it is read again.                                                               |
+|                                   | `signal(v, { unobserved })`          | Calls `unobserved` once the last reader stops reading (`memo` takes it too). Only a call the plugin compiles may pass these two (see below).                                                           |
+| `@reactre/core/features/context`  | `createContext(default?)`            | A context, which is a component: `<Ctx value={v}>` provides `v` to what its children make, then and later.                                                                                             |
+|                                   | `useContext(ctx)`                    | The nearest provider's value, else the default; with no default, it throws `ContextNotFoundError`.                                                                                                     |
+| `@reactre/core/features/errors`   | `<Errored fallback>`                 | Its children, or `fallback` (an element, or `(err, reset) => ...`) once something they made throws. `reset()` builds them again.                                                                       |
+|                                   | `effect(fn, { error })`              | The core's `effect`, with a handler for what its runs throw.                                                                                                                                           |
+|                                   | `configureClientErrors({ onError })` | Gets what an effect, a slot or a row throws outside any boundary.                                                                                                                                      |
+| `@reactre/core/features/async`    | `memo(async () => ...)`              | `memo`, typed for an async function or an async iterable: it reads as what it resolves to, and before that is not ready.                                                                               |
+|                                   | `<Loading fallback on>`              | Its children, once nothing they read is not ready; until then, `fallback`. With `on`, a change of it during an update shows `fallback` again.                                                          |
+|                                   | `<Reveal order>`                     | The `<Loading>` boundaries among its children shown `"natural"` (each when ready), `"sequential"` or `"together"`.                                                                                     |
+|                                   | `isPending(fn)`, `latest(fn)`        | Whether a change to what `fn` reads is in flight; `fn()`, read so that an update in flight does not hold it.                                                                                           |
+|                                   | `resolve(fn)`, `refresh(target)`     | A Promise of `fn()` once it reads nothing pending; `refresh` computes a memo or an optimistic store again, quietly.                                                                                    |
+|                                   | `lazy(load)`, `NotReadyError`        | A component loaded the first time it renders (`preload()` starts it); what a read that is not ready throws where nothing waits.                                                                        |
+|                                   | `memo(fn, { loadingValue })`         | The value it has until the first comes: no `<Loading>` waits for it. Its other options (`id`, `ssrSource`, `deferStream`, `transparent`) are for [server rendering](#the-memos-options-on-the-server). |
+|                                   | `from(source)`                       | What a subscribe function, an Observable or an async iterable sends, for `memo(() => from(source))` to read as its latest value.                                                                       |
+| `@reactre/core/features/actions`  | `action(function* () {...})`         | A mutation, run in a transition: yielded values are awaited, and the page goes from its optimistic state to the confirmed one at once.                                                                 |
+|                                   | `createOptimistic(v \| fn)`          | `[read, write]`: a write in an action's code shows at once and reverts when the transition ends; elsewhere it sets the value.                                                                          |
+|                                   | `createOptimisticStore(v \| fn, s)`  | The same for a store, whose `fn` may be async; `refresh(store)` runs `fn` again.                                                                                                                       |
+|                                   | `affects(target, key?)`              | Marks what the action changes as pending, for `isPending`.                                                                                                                                             |
+|                                   | `until(fn, { timeout, signal })`     | A Promise of the first truthy value of `fn`, which reads optimistic values as their base.                                                                                                              |
+| `@reactre/core/features/hydrate`  | `hydrate(view, el)`                  | Runs `view` over the HTML the server rendered into `el`, keeping its nodes ([hydration](#hydration)); returns the disposer. Needs `hydrate: true`.                                                     |
+|                                   | `isHydrating()`                      | Whether the code running now claims the page.                                                                                                                                                          |
+|                                   | `takeHydrationValue(key)`            | Takes what the server render wrote under `key` with its hydration writer out of the page ([hydration values](#hydration-values)).                                                                      |
+|                                   | `clientOnly(load, { lazy, export })` | A component rendered only in the browser: the server writes its `fallback`, and never loads it.                                                                                                        |
 
 ```tsx
 import { createRoot } from "@reactre/core/features/owner";
@@ -462,9 +466,25 @@ const res = new Response(renderToStream(() => <App />), { headers: { "content-ty
 
 - `renderToString(app, options?)` returns the HTML at once. A `<Loading>` whose children read async data that has not come renders its fallback.
 - `renderToStream(app, options?)` returns a `ReadableStream` of the HTML. The shell comes once what it reads outside every `<Loading>` is ready, with each `<Loading>` that still waits showing its fallback; then each one's content as its data comes, in a `<template>` with a small script that swaps it in for the fallback (the first such chunk defines the script, `self.$rr`). Nested and sibling boundaries stream in the order their data comes. An error while the shell renders errors the stream; a later one goes to an `<Errored>` inside the boundary, or else to `onError`, and errors the stream. Cancelling the stream stops the render.
-- `renderToStringAsync(app, options?)` waits for everything and returns the whole page, with no script.
+- `renderToStringAsync(app, options?)` waits for everything and returns the whole page, with no script but the one of its [hydration values](#hydration-values), if it wrote any.
 
-Options: `hydrate: true` writes comment markers that hydration claims the page by (below); `nonce` is set on the stream's scripts, for a Content Security Policy; `onError` gets an error thrown after the shell was sent.
+Options: `hydrate: true` writes comment markers that hydration claims the page by (below); `nonce` is set on the render's scripts (a stream's, and the hydration values'), for a Content Security Policy; `onError` gets an error thrown after the shell was sent; `response` is the head of the response the render serves, which `httpStatus` and `httpHeader` write to.
+
+```tsx
+import { httpHeader, httpStatus, renderToString, type ResponseHead } from "@reactre/core/server";
+
+const NotFound = () => {
+  httpStatus(404, "Not Found");
+  httpHeader("cache-control", "no-store");
+  return <h1>Not found</h1>;
+};
+
+const response: ResponseHead = { status: 200, headers: new Headers({ "content-type": "text/html" }) };
+const html = renderToString(() => <App />, { response });
+return new Response(html, response);
+```
+
+`httpStatus(code, text?)` and `httpHeader(name, value, { append })` declare the response's status and a header while the scope they are called in lives: when it goes (an `<Errored>` showing its fallback over the children that declared a 404, a `<Show>` branch that is no longer shown), its declaration is taken back, and the head is what the live ones make of its own, in the order they were made (`set-cookie` keeps each cookie its own entry). The head is final when the render commits it: when `renderToString` returns, when `renderToStream` sends its shell, and when `renderToStringAsync`'s Promise resolves; after that, and outside a render, they do nothing, as they do in a browser bundle. `httpHeader` throws a `TypeError` for a name or a value `Headers` refuses.
 
 Builds: [@reactre/plugin](https://www.npmjs.com/package/@reactre/plugin) compiles for the server with its `ssr: true` option: in Vite, its SSR builds and its dev server's `ssrLoadModule` (Vite's environment says which), and in the other bundlers, a separate build for the server. Without the option every build is the browser's. The compiler's option is `compileJs(js, { server: true })`, and its Bun plugin's `reactreCompiler({ server: true })`. A server build points the app's imports of `@reactre/core` and its feature modules at the server's versions. The browser build of the same app is what it is without SSR, byte for byte, and hydrates with `hydrate: true` (in Vite, `reactre({ ssr: true, hydrate: true })` does both).
 
@@ -486,8 +506,48 @@ hydrate(() => <App />, document.getElementById("app")!);
 - The app is compiled for it: @reactre/plugin's `hydrate: true` option, or the compiler's `hydrate` compile option. `hydrate` over code compiled without it throws, naming the option, and so does compiling a file that imports `hydrate` without it; a page rendered without the markers, where the view needs them, throws naming `renderToString(app, { hydrate: true })`.
 - The server's errors stay out of the page in production: an `<Errored>`'s marker names the error and gives its message only from the server's development build (`dist/dev/server.js`, which the `"development"` condition resolves, as Vite's dev server's `ssrLoadModule` does; the plugins give a production build the other one). In production the client's fallback gets an `Error` saying the server's error was kept out, so a fallback that shows `err.message` should show a message of your own instead.
 - An app that does not hydrate ships none of it: the browser's build without the option is what it was. Hydration adds about 1.9 KB gzipped ([`sizes.json`](sizes.json)'s `hydrate` profile, against `plain`).
+- `clientOnly(() => import("./Chart.tsx"))` is a component the server never renders: it writes `props.fallback`, never loading the module, and the browser renders the module's default export (or, with `export: "Name"`, that export) with the other props once it has loaded and, hydrating, once the page has hydrated. The module starts to load when `clientOnly` is called, or with `lazy: true`, when the component first renders. It works rendering afresh too.
 
 [plans/core-hydration.md](../../plans/core-hydration.md) is the design, with what it leaves out.
+
+### Hydration values
+
+```tsx
+// a library's code, shared by the server and the client
+import { getHydrationWriter, takeHydrationValue } from "@reactre/core/features/hydrate";
+
+function cached(key: string, load: () => Promise<User>): Promise<User> {
+  const got = takeHydrationValue<User>(key); // in the browser: what the server wrote, once
+  if (got?.status === "resolved") return Promise.resolve(got.value);
+  const p = load();
+  getHydrationWriter()?.write(key, p); // on the server: sent to the client with the page
+  return p;
+}
+```
+
+A server render's hydration writer (`getHydrationWriter()`, undefined outside a render and in the browser) sends values to the client under keys: `write(key, value)` puts the value in the page, and `takeHydrationValue(key)` in the browser takes it out, as `{ status: "resolved", value }` (or undefined when there is none, or it was taken already). A shared module imports both from `@reactre/core/features/hydrate`, which a server build points at the server's. `renderToString` sends values that are ready; `renderToStream` and `renderToStringAsync` take a Promise too, sent as pending and then as what it settled to (`takeHydrationValue` gives `{ status: "pending", promise }` meanwhile, and `"rejected"` with its error), and wait for it before they end; with `{ deferStream: true }`, a stream's shell waits for it. The first write of a key wins. Prefix keys with your library's name.
+
+The values go in the page as data, never as code: JSON in `<script>` tags with the render's `nonce`, with `<`, `>`, `&`, U+2028 and U+2029 escaped, so no value can end the script or open a comment; into `self.$rrd`, a registry of no prototype. A value is what JSON holds, or undefined, NaN, the infinities, -0, a bigint, a Date, a Map or a Set, anywhere in it; `write` throws a `TypeError` naming the key for a function, a symbol, an instance of a class, a cycle, and a key named `__proto__` (the writer's, or an object's in the value). A rejected Promise's error goes with its name and message from the server's development build only; in production the client gets an `Error` saying it was kept out.
+
+### The memo's options on the server
+
+```tsx
+import { memo } from "@reactre/core/features/async";
+
+const user = memo(() => fetch(`/api/users/${id()}`).then((r) => r.json()), { id: "user" });
+const posts = memo(() => fetchPosts(id()), { loadingValue: [] });
+const clock = memo(() => readClock(), { ssrSource: "client" }); // under a <Loading>
+```
+
+An async memo from `@reactre/core/features/async` takes Solid 2.0's options:
+
+- `id`: in a render with `hydrate: true` that waits (`renderToStream`, `renderToStringAsync`), the server writes the memo's first value under the id, and the hydrating client takes it as its first value instead of computing it. The client runs `fn` once, with `fetch` sending no request, only to learn what it reads, and computes when that changes. A memo of `from(source)` reconnects, showing the server's value until the source sends. Without an id, nothing is sent and the client computes, as before. An id is unique on the page.
+- `ssrSource`: `"server"` (the default) as above; `"hybrid"`, an async iterable the memo returns goes on in the client after the server's value (its first value, which the server sent, is dropped); `"client"`, the server never computes the memo, and what reads it waits for good: its `<Loading>` writes its fallback, which the client replaces once the page has hydrated (read outside every `<Loading>`, it throws, naming the fix). With a `loadingValue`, the server writes that instead.
+- `deferStream: true`: a stream's shell waits for the memo's first value instead of showing a `<Loading>`'s fallback for it.
+- `transparent: true`: hydrating, the memo takes nothing from the server and computes, for a memo the server does not make.
+- `loadingValue`: the memo's value until its first comes, in the browser and on the server; no `<Loading>` waits for it, and `isPending` is false.
+
+A call that passes none of them compiles to the memo it was before they existed, so an app that passes none ships what it did (the compiler sends it to `__memo`); a call the compiler does not see (a `.ts` file, a dependency) gets the options it passes.
 
 ## What an app ships
 

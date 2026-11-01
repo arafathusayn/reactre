@@ -44,6 +44,9 @@ import { __frag as coreFrag, __insert, __Owned, __owner, __Root, __slot, onClean
 import type { Prototype } from "@reactre/dom";
 
 export * from "@reactre/core";
+// The hydration values a server render wrote, and `clientOnly`: a file of their own, which an app
+// that uses neither leaves out of its bundle whole (see it).
+export * from "../hydration.ts";
 
 // #region The cursor
 

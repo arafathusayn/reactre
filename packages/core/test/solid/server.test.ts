@@ -276,7 +276,7 @@ describe("packages/solid/test/server/signals.spec.ts", () => {
 
     gap(
       "memo-options",
-      "an effect has no ssrSource option",
+      "reaction takes no options: ssrSource is a memo's only",
       "ssrSource client skips both compute and effectFn",
       async () => {
         const m = await server(`
@@ -1314,7 +1314,7 @@ describe("packages/web/test/server/ssr-stream.spec.tsx", () => {
   });
 
   describe("SSR Streaming — deferStream", () => {
-    gap("memo-options", "a memo has no deferStream option", "deferStream blocks the shell until resolved", async () => {
+    test("deferStream blocks the shell until resolved", async () => {
       const { shell } = await collect(
         await server(`
         import { Loading, memo } from "@reactre/core/features/async";

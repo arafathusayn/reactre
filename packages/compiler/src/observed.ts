@@ -32,19 +32,57 @@
 //     of the module, and code the compiler does not compile (a .ts file, a dependency). Those
 //     calls reach `memo` and `signal` themselves, whose development build throws for either
 //     option, naming the fix.
+//
+// @reactre/core/features/async's `memo` is the other way round: its own export takes the options
+// (`loadingValue`, `id`, `ssrSource`, `deferStream`, `transparent`), and a call that passes none
+// of them goes to `__memo`, the core's memo as the module exported it before it had options.
+// So an app that passes none bundles what it did, and a call the compiler does not see (in a .ts
+// file, a dependency) gets the options it passes, as does a use that is not a call.
 
 import { isIdent, literal, NOT_LITERAL, skipToken, splitAt, until } from "./scan.ts";
 
-/** The module whose `memo` and `signal` the rewrite reads. */
-const MODULE = "@reactre/core/features/memo";
+/** A function the rewrite reads: the entry its calls go to, under a local name, and the options that decide it. */
+interface Entry {
+  readonly entry: string;
+  readonly local: string;
+  readonly needs: readonly string[];
+}
 
-/** The functions, by their exported names: the entry each call needing it goes to, and the options that need it. */
-const FUNCTIONS = {
-  memo: { entry: "__observedMemo", local: "__rrObsMemo", needs: ["lazy", "unobserved"] },
-  signal: { entry: "__observedSignal", local: "__rrObsSignal", needs: ["unobserved"] },
-} as const;
-type Fn = keyof typeof FUNCTIONS;
-const isFn = (n: string): n is Fn => n === "memo" || n === "signal";
+/**
+ * A module whose functions the rewrite reads, by their exported names. Without `plain`, a call
+ * that passes one of an entry's options (or may) goes to the entry; with it, one that passes none.
+ */
+interface Mod {
+  readonly name: string;
+  readonly functions: Readonly<Record<string, Entry>>;
+  readonly plain: boolean;
+}
+
+const MODULES: readonly Mod[] = [
+  {
+    name: "@reactre/core/features/memo",
+    functions: {
+      memo: { entry: "__observedMemo", local: "__rrObsMemo", needs: ["lazy", "unobserved"] },
+      signal: { entry: "__observedSignal", local: "__rrObsSignal", needs: ["unobserved"] },
+    },
+    plain: false,
+  },
+  {
+    name: "@reactre/core/features/async",
+    functions: {
+      memo: {
+        entry: "__memo",
+        // Its own name: the import the rewrite adds names it with no `as`, which a map would place at `import`.
+        local: "__memo",
+        needs: ["loadingValue", "id", "ssrSource", "deferStream", "transparent"],
+      },
+    },
+    plain: true,
+  },
+];
+
+/** Module `m`'s function named `n`, if the rewrite reads it. */
+const fnOf = (m: Mod, n: string): Entry | undefined => (Object.hasOwn(m.functions, n) ? m.functions[n] : undefined);
 
 /** Words before a parenthesized group that make it a condition or a head, not a parameter list. */
 const HEADS = new Set(["if", "while", "for", "switch", "with", "return", "typeof", "await", "yield", "in", "of"]);
@@ -116,20 +154,29 @@ function tokens(js: string, from = 0, to = js.length, out: Tok[] = []): Tok[] {
 
 /**
  * `js` with its calls of @reactre/core/features/memo's `memo` and `signal` that pass `lazy` or
- * `unobserved` (or options the compiler cannot read) sent to the module's reader-counting entry;
+ * `unobserved` (or options the compiler cannot read) sent to the module's reader-counting entry,
+ * and its calls of features/async's `memo` that pass none of its options sent to `__memo`;
  * null when nothing changes.
  */
 export function observedCalls(js: string): Rewritten | null {
-  if (!js.includes(MODULE)) return null;
+  if (!MODULES.some((m) => js.includes(m.name))) return null;
   const toks = tokens(js);
   // The imports: local names of the functions, and namespaces; and the statements to skip.
-  const locals = new Map<string, Fn>(),
-    spaces = new Set<string>(),
+  const locals = new Map<string, [Mod, Entry]>(),
+    spaces = new Map<string, Mod>(),
     skip: [number, number][] = [],
-    edits: Edit[] = [];
-  const isModule = (k: number) => {
+    edits: Edit[] = [],
+    // A plain module's imports, by local name: where the imported name is in its import, and it.
+    imported = new Map<string, [number, string]>(),
+    // Each module's first named import: where its `import` and its `from` are, which the import
+    // the rewrite adds of the module's entries maps back to.
+    origins = new Map<Mod, [number, number]>();
+  /** The module named by the string at token `k`, if the rewrite reads it. */
+  const moduleAt = (k: number): Mod | undefined => {
     const t = toks[k];
-    return t !== undefined && t.t === "" && /^["']@reactre\/core\/features\/memo["']$/.test(js.slice(t.s, t.e));
+    if (t === undefined || t.t !== "") return undefined;
+    const s = js.slice(t.s, t.e);
+    return MODULES.find((m) => s === `"${m.name}"` || s === `'${m.name}'`);
   };
   for (let k = 0; k < toks.length; k++) {
     const kw = toks[k]!.t;
@@ -141,24 +188,39 @@ export function observedCalls(js: string): Rewritten | null {
       // An import's or a re-export's list names no local binding: none of its names is a use.
       const from = toks[close + 1]?.t === "from";
       if (from) skip.push([toks[k]!.s, toks[close + 2]?.e ?? js.length]);
-      if (kw === "import" && from && isModule(close + 2)) {
-        for (const [name, local] of specifiers(js, toks[k + 1]!.e, toks[close]!.s))
-          if (isFn(name)) locals.set(local, name);
-      } else if (kw === "export" && from && isModule(close + 2)) {
-        // A re-export by name hands the function to modules whose calls are not seen here.
-        for (const [at, name, renamed] of exportedNames(js, toks[k + 1]!.e, toks[close]!.s))
-          if (isFn(name))
-            edits.push([at, at + name.length, renamed ? FUNCTIONS[name].entry : `${FUNCTIONS[name].entry} as ${name}`]);
+      const m = from ? moduleAt(close + 2) : undefined;
+      if (m === undefined) continue;
+      if (kw === "import") {
+        if (!origins.has(m)) origins.set(m, [toks[k]!.s, toks[close + 1]!.s]);
+        for (const [name, local, at] of specifiers(js, toks[k + 1]!.e, toks[close]!.s)) {
+          const f = fnOf(m, name);
+          if (f === undefined) continue;
+          locals.set(local, [m, f]);
+          if (m.plain) imported.set(local, [at, name]);
+        }
+      } else if (!m.plain) {
+        // A re-export by name hands the function to modules whose calls are not seen here. (A
+        // plain module's own function takes every call, so its re-export stays.)
+        for (const [at, name, renamed] of exportedNames(js, toks[k + 1]!.e, toks[close]!.s)) {
+          const f = fnOf(m, name);
+          if (f !== undefined) edits.push([at, at + name.length, renamed ? f.entry : `${f.entry} as ${name}`]);
+        }
       }
     } else if (kw === "import" && open?.t === "*" && toks[k + 2]?.t === "as" && toks[k + 4]?.t === "from") {
       skip.push([toks[k]!.s, toks[k + 5]?.e ?? js.length]);
-      if (isModule(k + 5)) spaces.add(toks[k + 3]!.t);
+      const m = moduleAt(k + 5);
+      if (m !== undefined) spaces.set(toks[k + 3]!.t, m);
     }
   }
   // The edits re-exports make need no import; the calls' need the entries'.
-  const used = new Set<Fn>();
+  const used = new Map<Entry, Mod>();
+  /** Whether the use of `f` of `m` at token `k` (just past its name) goes to the entry. */
+  const sent = (m: Mod, f: Entry, k: number): boolean => needs(js, toks, k, f) !== m.plain;
+  // A plain module's calls that go to the entry, by local name, and the names used otherwise too.
+  const plainCalls = new Map<string, Edit[]>(),
+    mixed = new Set<string>();
   if (locals.size > 0 || spaces.size > 0) {
-    const shadows = shadowed(js, toks, new Set([...locals.keys(), ...spaces]));
+    const shadows = shadowed(js, toks, new Set([...locals.keys(), ...spaces.keys()]));
     const inSkip = (at: number) => skip.some(([s, e]) => s <= at && at < e);
     const shadow = (name: string, at: number) => shadows.get(name)?.some(([s, e]) => s <= at && at < e) === true;
     for (let k = 0; k < toks.length; k++) {
@@ -167,20 +229,35 @@ export function observedCalls(js: string): Rewritten | null {
       // A member (`x.memo`) is some other object's, unless it is spread (`...memo`).
       const member = before?.t === "." && toks[k - 2]?.t !== ".";
       if (tok.t === "" || member || inSkip(tok.s) || shadow(tok.t, tok.s)) continue;
-      if (spaces.has(tok.t) && toks[k + 1]?.t === "." && isFn(toks[k + 2]?.t ?? "")) {
-        const fn = toks[k + 2]!.t as Fn;
-        if (needs(js, toks, k + 3, fn)) edits.push([toks[k + 2]!.s, toks[k + 2]!.e, FUNCTIONS[fn].entry]);
-        continue;
+      const space = spaces.get(tok.t);
+      if (space !== undefined && toks[k + 1]?.t === ".") {
+        const f = fnOf(space, toks[k + 2]?.t ?? "");
+        if (f !== undefined) {
+          if (sent(space, f, k + 3)) edits.push([toks[k + 2]!.s, toks[k + 2]!.e, f.entry]);
+          continue;
+        }
       }
-      const fn = locals.get(tok.t);
-      if (fn === undefined) continue;
+      const found = locals.get(tok.t);
+      if (found === undefined) continue;
+      const [m, f] = found;
       const after = toks[k + 1];
       // An object's key (`{ memo: x }`), or a method's name (`memo(a) { ... }`), is not the import.
       if (after?.t === ":" && (before?.t === "{" || before?.t === ",")) continue;
       if (after?.t === "(" && toks[closing(toks, k + 1) + 1]?.t === "{") continue;
-      if (!needs(js, toks, k + 1, fn)) continue;
-      used.add(fn);
-      const local = FUNCTIONS[fn].local;
+      // A use that is not a call goes to the entry of a module that is not plain (see `needs`).
+      if (!sent(m, f, k + 1)) {
+        if (m.plain) mixed.add(tok.t);
+        continue;
+      }
+      if (m.plain) {
+        // The call alone, which a plain module's import may take for every use (below).
+        const calls = plainCalls.get(tok.t) ?? [];
+        plainCalls.set(tok.t, calls);
+        calls.push([tok.s, tok.e, f.local]);
+        continue;
+      }
+      used.set(f, m);
+      const local = f.local;
       // Shorthand (`{ memo }`) keeps its key; an export list (`export { memo }`) its name.
       const shorthand = (before?.t === "{" || before?.t === ",") && (after?.t === "}" || after?.t === ",");
       const text = exported(toks, k)
@@ -193,10 +270,38 @@ export function observedCalls(js: string): Rewritten | null {
       edits.push([tok.s, tok.e, text]);
     }
   }
+  for (const [local, calls] of plainCalls) {
+    const [m, f] = locals.get(local)!;
+    if (mixed.has(local)) {
+      // Used otherwise too: the calls take the entry's own import.
+      used.set(f, m);
+      edits.push(...calls);
+      continue;
+    }
+    // Only calls that go to the entry: the import names it, and the calls take its name if they had
+    // the function's. So the file gains no line, and the bundle's minified names stay as they were
+    // (see ../../core/src/asyncMemo.ts); and the rewrite writes no name a source map would place at
+    // another (`as`).
+    const [at, name] = imported.get(local)!;
+    edits.push([at, at + name.length, f.entry]);
+    if (name === local) for (const [s, e] of calls) edits.push([s, e, f.entry]);
+  }
   if (edits.length === 0) return null;
   edits.sort((a, b) => a[0] - b[0]);
-  const names = [...used].map((f) => `${FUNCTIONS[f].entry} as ${FUNCTIONS[f].local}`);
-  const head = names.length === 0 ? "" : `import { ${names.join(", ")} } from "${MODULE}";\n`;
+  // An import of the entries the calls use, per module, in the order the modules are listed.
+  let head = "";
+  // Each added import's start and its `from`'s in the code, and where they map back to: the
+  // module's own import's `import` and `from`.
+  const heads: [number, number, [number, number]][] = [];
+  for (const m of MODULES) {
+    const names = [...used]
+      .filter(([, x]) => x === m)
+      .map(([f]) => (f.entry === f.local ? f.entry : `${f.entry} as ${f.local}`));
+    if (names.length === 0) continue;
+    const line = `import { ${names.join(", ")} } from "${m.name}";\n`;
+    heads.push([head.length, head.length + line.indexOf(" from ") + 1, origins.get(m)!]);
+    head += line;
+  }
   let code = head,
     last = 0;
   // Each edit's place in the code: where its text starts, where it ends, and its input start.
@@ -211,7 +316,11 @@ export function observedCalls(js: string): Rewritten | null {
   return {
     code,
     back(at) {
-      if (at < head.length) return 0;
+      if (at < head.length) {
+        // An added import: its `from` and what follows at the module's import's, the rest at its `import`.
+        const [start, from, [imp, fr]] = heads.findLast(([s]) => s <= at)!;
+        return at >= from ? fr + (at - from) : at - start < 6 ? imp + (at - start) : imp;
+      }
       // The input offset is the code's, less what the edits before it added.
       let shift = head.length;
       for (const [cs, ce, s, e] of placed) {
@@ -224,11 +333,11 @@ export function observedCalls(js: string): Rewritten | null {
   };
 }
 
-/** The `name as local` (or `name`) specifiers of an import list `js[from, to)`, as [name, local]. */
-function specifiers(js: string, from: number, to: number): [string, string][] {
-  return splitAt(js, from, to).map(([part]) => {
+/** The `name as local` (or `name`) specifiers of an import list `js[from, to)`, as [name, local, where name is]. */
+function specifiers(js: string, from: number, to: number): [string, string, number][] {
+  return splitAt(js, from, to).map(([part, at]) => {
     const [name, local = name] = part.split(/\s+as\s+/) as [string, string?];
-    return [name, local];
+    return [name, local, at];
   });
 }
 
@@ -274,11 +383,11 @@ function inObject(toks: readonly Tok[], k: number): boolean {
 }
 
 /**
- * Whether the use of a function at token `k` (just past its name) may pass the options that need
- * its reader-counting entry: a call whose options are a literal with one of them, or that the
+ * Whether the use of function `fn` at token `k` (just past its name) may pass the options that
+ * decide its entry (`fn.needs`): a call whose options are a literal with one of them, or that the
  * compiler cannot read; or a use that is not a call.
  */
-function needs(js: string, toks: readonly Tok[], k: number, fn: Fn): boolean {
+function needs(js: string, toks: readonly Tok[], k: number, fn: Entry): boolean {
   if (toks[k]?.t !== "(") return true;
   // A call that never closes (code cut short) runs to the end.
   const args = splitAt(js, toks[k]!.e, toks[closing(toks, k)]?.s ?? js.length);
@@ -292,7 +401,7 @@ function needs(js: string, toks: readonly Tok[], k: number, fn: Fn): boolean {
     // A key the scan cannot read (single quotes, which Bun does not print) may be either option.
     if (key === undefined) return true;
     const name = key.startsWith('"') ? literal(key) : key;
-    if (name === NOT_LITERAL || (FUNCTIONS[fn].needs as readonly string[]).includes(name as string)) return true;
+    if (name === NOT_LITERAL || fn.needs.includes(name as string)) return true;
   }
   return false;
 }

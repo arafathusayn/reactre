@@ -16,7 +16,8 @@
 //     so a read of an async value that is not ready makes it a cell that waits, as a hole's
 //     effect waits on the client, and `<Loading>` can show its fallback (@reactre/core/server).
 //   - Imports are pointed at the server: @reactre/core at @reactre/core/server, its
-//     features/async, dynamic, errors, reaction and timing at their server versions, and `effect`
+//     features/async, dynamic, effects, errors, hydrate, reaction and timing at their server
+//     versions (features/hydrate's, so shared code can take hydration values), and `effect`
 //     (which does not run there) and `memo` (computed when first read) at the server's
 //     (`serverImports`).
 //
@@ -45,9 +46,9 @@ import { literal, NOT_LITERAL } from "./scan.ts";
 
 /**
  * The modules a server build of an app imports in place of the client's: the core, and the
- * feature modules that touch the DOM (`<Loading>`, `dynamic()`) or run effects (`reaction`'s
- * apply half, `onSettled`, `effect(fn, { error })`, `bind`'s apply, `autorun`, `onFlush`), which
- * do not run on the server.
+ * feature modules that touch the DOM (`<Loading>`, `dynamic()`, `clientOnly`, hydration) or run
+ * effects (`reaction`'s apply half, `onSettled`, `effect(fn, { error })`, `bind`'s apply,
+ * `autorun`, `onFlush`), which do not run on the server.
  */
 const SERVER_MODULES: Record<string, string> = {
   "@reactre/core": "@reactre/core/server",
@@ -55,6 +56,7 @@ const SERVER_MODULES: Record<string, string> = {
   "@reactre/core/features/dynamic": "@reactre/core/server/dynamic",
   "@reactre/core/features/effects": "@reactre/core/server/effects",
   "@reactre/core/features/errors": "@reactre/core/server/errors",
+  "@reactre/core/features/hydrate": "@reactre/core/server/hydrate",
   "@reactre/core/features/reaction": "@reactre/core/server/reaction",
   "@reactre/core/features/timing": "@reactre/core/server/timing",
 };

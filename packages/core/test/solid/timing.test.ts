@@ -16,8 +16,7 @@
 
 import { afterAll, afterEach, beforeAll, describe, expect, mock, test } from "bun:test";
 
-import * as asyncFeature from "../../src/features/async.ts";
-import { __hooks, isPending, latest, memo } from "../../src/features/async.ts";
+import { __hooks, from, isPending, latest, memo } from "../../src/features/async.ts";
 import { createRoot } from "../../src/features/owner.ts";
 import { reaction } from "../../src/features/reaction.ts";
 import { flush, onSettled } from "../../src/features/timing.ts";
@@ -28,9 +27,6 @@ import { gap, tick } from "./harness.ts";
 beforeAll(() => core.__installAsync(__hooks));
 afterAll(() => core.__installAsync(false));
 afterEach(() => flush());
-
-/** Solid's exports reactre lacks, to call in a gap's port: undefined until reactre has them. */
-const missing = asyncFeature as unknown as { from?: <T>(source: unknown) => T };
 
 describe("onSettled.test.ts", () => {
   test("should run callback after flush", () => {
@@ -303,20 +299,20 @@ describe("from.test.ts", () => {
     return { seen, read: () => read(), dispose };
   }
 
-  gap("from", "reactre has no from", "a value emitted during subscribe is readable right after flush (no tick)", () => {
+  test("a value emitted during subscribe is readable right after flush (no tick)", () => {
     const log: string[] = [];
     const src = source("a", log, { value: 1 });
-    const { seen, read, dispose } = mount(() => memo(() => missing.from!<number>(src)));
+    const { seen, read, dispose } = mount(() => memo(() => from<number>(src)));
     expect(read()).toBe(1);
     expect(seen).toEqual([1]);
     expect(isPending(read)).toBe(false);
     dispose();
   });
 
-  gap("from", "reactre has no from", "dispose unsubscribes, and later emissions are ignored", async () => {
+  test("dispose unsubscribes, and later emissions are ignored", async () => {
     const log: string[] = [];
     const src = source("a", log, { value: 1 });
-    const { seen, dispose } = mount(() => memo(() => missing.from!<number>(src)));
+    const { seen, dispose } = mount(() => memo(() => from<number>(src)));
     expect(log).toEqual(["open a"]);
     dispose();
     expect(log).toEqual(["open a", "close a"]);
@@ -326,7 +322,7 @@ describe("from.test.ts", () => {
     expect(log).toEqual(["open a", "close a"]);
   });
 
-  gap("from", "reactre has no from", "accepts an RxJS-shaped Observable returning { unsubscribe }", async () => {
+  test("accepts an RxJS-shaped Observable returning { unsubscribe }", async () => {
     const log: string[] = [];
     let observer: { next(v: number): void } | null = null;
     const obs = {
@@ -337,7 +333,7 @@ describe("from.test.ts", () => {
         return { unsubscribe: () => void log.push("unsubscribe") };
       },
     };
-    const { read, dispose } = mount(() => memo(() => missing.from!<number>(obs)));
+    const { read, dispose } = mount(() => memo(() => from<number>(obs)));
     expect(read()).toBe(10);
     observer!.next(11);
     await microtasks();

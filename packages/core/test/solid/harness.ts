@@ -55,7 +55,8 @@ export const GAPS = {
   "held-writes": "Solid holds a write until flush(), for reads and effects; reactre applies it at once",
   "render-effects": "createEffect's user phase, after the render effects, and its defer option",
   from: "from(), a signal of an external source",
-  "memo-options": "memo options loadingValue, deferStream, transparent, ssrSource",
+  "memo-options":
+    "memo options loadingValue, deferStream, transparent, ssrSource (features/async's memo has them; reaction has none)",
   "client-only": "clientOnly(), a component rendered only in the browser",
   "ssr-helpers": "httpStatus, httpHeader, takeHydrationValue, getHydrationWriter",
   hydration: "hydrate(), claiming server-rendered HTML",

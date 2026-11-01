@@ -1,18 +1,19 @@
-// Ports of Solid 2.0's tests of what it has around server rendering that reactre does not yet:
-// hydration (claiming the server's HTML on the client), its state API, the response primitives
-// httpStatus and httpHeader, the keyed server-to-client channel (takeHydrationValue,
-// getHydrationWriter) and clientOnly. From solid-js 2.0.0-rc.20 (solidjs/solid@5e68925):
+// Ports of Solid 2.0's tests of what it has around server rendering: hydration (claiming the
+// server's HTML on the client), its state API, the response primitives httpStatus and httpHeader
+// (@reactre/core/server), the keyed server-to-client channel (takeHydrationValue,
+// getHydrationWriter, in features/hydrate) and clientOnly (features/hydrate and the server's).
+// From solid-js 2.0.0-rc.20 (solidjs/solid@5e68925):
 // packages/web/test/hydration/class.spec.tsx, hydration/hydrate-falsy-sole-child-issue-3571.spec.tsx,
 // packages/solid/test/hydration-state-api.spec.ts, packages/solid/test/server/nohydration.spec.ts,
 // packages/web/test/server/http-components.spec.tsx, packages/web/test/take-hydration-value.spec.ts
 // and packages/web/test/client-only.spec.tsx. Ported from Solid: MIT License, Copyright (c)
 // 2016-2025 Ryan Carniato; the license is in ./harness.ts.
 //
-// Each port reads the function it needs off the module that exports it, or would
-// (@reactre/core/features/hydrate for hydration's, @reactre/core for the client's other ones,
-// @reactre/core/server for the server's), which throws at once while reactre has none, and then
-// does what Solid's test does; all but isHydrating's are gaps. A port's view is compiled as the
-// plugin compiles it, with ./harness.ts (for hydration, with its `hydrate` option).
+// A gap's port reads the function it needs off the module that would export it, which throws at
+// once while reactre has none, and then does what Solid's test does. A port's view is compiled as
+// the plugin compiles it, with ./harness.ts (for hydration, with its `hydrate` option). Solid's
+// response primitives write to the request event its integration provides; reactre's renders take
+// the response head as their `response` option, so those ports pass it there.
 
 import { afterEach, describe, expect, mock, test } from "bun:test";
 
@@ -41,7 +42,7 @@ const hydrating: Record<string, unknown> = { ...base, "@reactre/core/features/hy
 
 afterEach(() => {
   installFakeDocument();
-  delete (globalThis as Record<string, unknown>)["_$HY"];
+  delete (globalThis as Record<string, unknown>)["$rrd"];
 });
 
 describe("packages/web/test/hydration/class.spec.tsx", () => {
@@ -128,137 +129,100 @@ describe("packages/solid/test/server/nohydration.spec.ts", () => {
   });
 });
 
-/** The response head of a request event, as Solid's integrations give one. */
-interface ResponseStub {
-  status: number;
-  statusText?: string;
-  headers: Headers;
-}
-
-/** Run `fn` with `event` as the request being rendered (Solid's provideRequestEvent). */
-type Provide = <T>(event: { request: Request; response: ResponseStub }, fn: () => T) => T;
-
-const makeEvent = (): { request: Request; response: ResponseStub } => ({
+/**
+ * The response head of a request event, as Solid's integrations give one. reactre's renders take
+ * it as their `response` option, where Solid's read it off the request event its integration
+ * provides (`provideRequestEvent`).
+ */
+const makeEvent = (): { request: Request; response: serverApi.ResponseHead } => ({
   request: new Request("http://localhost/"),
   response: { status: 200, headers: new Headers() },
 });
 
 describe("packages/web/test/server/http-components.spec.tsx", () => {
   describe("httpStatus (server primitive)", () => {
-    gap(
-      "ssr-helpers",
-      "httpStatus() is missing",
-      "declares status and statusText on the event's response during SSR",
-      () => {
-        const httpStatus = missing<(code: number, text?: string) => void>(serverApi, "httpStatus");
-        const provide = missing<Provide>(serverApi, "provideRequestEvent");
-        const event = makeEvent();
-        provide(event, () =>
-          serverApi.renderToString(() => {
-            httpStatus(404, "Not Found");
-            return "not found";
-          }),
-        );
-        expect(event.response.status).toBe(404);
-        expect(event.response.statusText).toBe("Not Found");
-      },
-    );
+    test("declares status and statusText on the event's response during SSR", () => {
+      const event = makeEvent();
+      serverApi.renderToString(
+        () => {
+          serverApi.httpStatus(404, "Not Found");
+          return "not found";
+        },
+        { response: event.response },
+      );
+      expect(event.response.status).toBe(404);
+      expect(event.response.statusText).toBe("Not Found");
+    });
 
-    gap(
-      "ssr-helpers",
-      "httpStatus() is missing",
-      "restores the snapshotted status on disposal, not a hardcoded 200",
-      () => {
-        const httpStatus = missing<(code: number, text?: string) => void>(serverApi, "httpStatus");
-        const provide = missing<Provide>(serverApi, "provideRequestEvent");
-        const event = makeEvent();
-        event.response.status = 418;
-        provide(event, () =>
+    test("restores the snapshotted status on disposal, not a hardcoded 200", () => {
+      const event = makeEvent();
+      event.response.status = 418;
+      serverApi.renderToString(
+        () =>
           createRoot((dispose) => {
-            httpStatus(500);
+            serverApi.httpStatus(500);
             expect(event.response.status).toBe(500);
             dispose();
+            return null;
           }),
-        );
-        expect(event.response.status).toBe(418);
-      },
-    );
+        { response: event.response },
+      );
+      expect(event.response.status).toBe(418);
+    });
   });
 
   describe("httpHeader (server primitive)", () => {
-    gap("ssr-helpers", "httpHeader() is missing", "declares a header on the event's response during SSR", () => {
-      const httpHeader = missing<(name: string, value: string, options?: { append?: boolean }) => void>(
-        serverApi,
-        "httpHeader",
-      );
-      const provide = missing<Provide>(serverApi, "provideRequestEvent");
+    test("declares a header on the event's response during SSR", () => {
       const event = makeEvent();
-      provide(event, () =>
-        serverApi.renderToString(() => {
-          httpHeader("x-test", "yes");
+      serverApi.renderToString(
+        () => {
+          serverApi.httpHeader("x-test", "yes");
           return "page";
-        }),
+        },
+        { response: event.response },
       );
       expect(event.response.headers.get("x-test")).toBe("yes");
     });
 
-    gap("ssr-helpers", "httpHeader() is missing", "append adds to an existing value instead of replacing it", () => {
-      const httpHeader = missing<(name: string, value: string, options?: { append?: boolean }) => void>(
-        serverApi,
-        "httpHeader",
-      );
-      const provide = missing<Provide>(serverApi, "provideRequestEvent");
+    test("append adds to an existing value instead of replacing it", () => {
       const event = makeEvent();
       event.response.headers.set("vary", "accept");
-      provide(event, () =>
-        serverApi.renderToString(() => {
-          httpHeader("vary", "cookie", { append: true });
+      serverApi.renderToString(
+        () => {
+          serverApi.httpHeader("vary", "cookie", { append: true });
           return "page";
-        }),
+        },
+        { response: event.response },
       );
       expect(event.response.headers.get("vary")).toBe("accept, cookie");
     });
   });
 
   describe("clientOnly (server)", () => {
-    gap("client-only", "clientOnly() is missing", "SSRs the fallback and never starts the import", () => {
-      const clientOnly = missing<(load: () => Promise<{ default: () => unknown }>) => (props: object) => unknown>(
-        serverApi,
-        "clientOnly",
-      );
+    test("SSRs the fallback and never starts the import", () => {
       const importer = mock(() => Promise.resolve({ default: () => null }));
-      const Widget = clientOnly(importer);
+      const Widget = serverApi.clientOnly(importer);
       const html = serverApi.renderToString(() => Widget({ fallback: "placeholder" }));
       expect(html).toContain("placeholder");
       expect(importer).not.toHaveBeenCalled();
     });
 
-    gap("client-only", "clientOnly() is missing", "renders nothing without a fallback", () => {
-      const clientOnly = missing<(load: () => Promise<{ default: () => unknown }>) => (props: object) => unknown>(
-        serverApi,
-        "clientOnly",
-      );
-      const Widget = clientOnly(() => Promise.resolve({ default: () => null }));
+    test("renders nothing without a fallback", () => {
+      const Widget = serverApi.clientOnly(() => Promise.resolve({ default: () => null }));
       expect(serverApi.renderToString(() => ["before", Widget({}), "after"])).toBe("beforeafter");
     });
   });
 });
 
 describe("packages/web/test/client-only.spec.tsx", () => {
-  type ClientOnly = (
-    load: () => Promise<{ default: () => unknown }>,
-    options?: { lazy?: boolean },
-  ) => (props: { fallback?: unknown }) => unknown;
-
-  gap("client-only", "clientOnly() is missing", "starts the import eagerly by default", () => {
-    const clientOnly = missing<ClientOnly>(core, "clientOnly");
+  test("starts the import eagerly by default", () => {
     const importer = mock(() => Promise.resolve({ default: () => "widget" }));
-    clientOnly(importer);
+    hydrateApi.clientOnly(importer);
     expect(importer).toHaveBeenCalledTimes(1);
   });
 
-  gap("client-only", "clientOnly() is missing", "lazy option defers the import to first render", async () => {
-    const clientOnly = missing<ClientOnly>(core, "clientOnly");
+  test("lazy option defers the import to first render", async () => {
+    const clientOnly = hydrateApi.clientOnly;
     let resolve!: () => void;
     const loaded = new Promise<{ default: () => unknown }>((r) => (resolve = () => r({ default: () => "widget" })));
     const importer = mock(() => loaded);
@@ -280,26 +244,22 @@ describe("packages/web/test/client-only.spec.tsx", () => {
   });
 });
 
+// Solid's page registry is `_$HY.r`; reactre's is `self.$rrd`, which the server's scripts fill.
 describe("packages/web/test/take-hydration-value.spec.ts", () => {
-  type Take = (key: string) => { status: string; value?: unknown } | undefined;
-
-  gap("ssr-helpers", "takeHydrationValue() is missing", "seeded values: resolved, then gone (take-and-remove)", () => {
-    const takeHydrationValue = missing<Take>(core, "takeHydrationValue");
-    (globalThis as Record<string, unknown>)["_$HY"] = { r: { "lib:a": { n: 1 }, "lib:nil": null } };
-    expect(takeHydrationValue("lib:a")).toEqual({ status: "resolved", value: { n: 1 } });
-    expect(takeHydrationValue("lib:a")).toBeUndefined();
-    expect(takeHydrationValue("lib:nil")).toEqual({ status: "resolved", value: null });
+  test("seeded values: resolved, then gone (take-and-remove)", () => {
+    (globalThis as Record<string, unknown>)["$rrd"] = { "lib:a": { n: 1 }, "lib:nil": null };
+    expect(hydrateApi.takeHydrationValue("lib:a")).toEqual({ status: "resolved", value: { n: 1 } });
+    expect(hydrateApi.takeHydrationValue("lib:a")).toBeUndefined();
+    expect(hydrateApi.takeHydrationValue("lib:nil")).toEqual({ status: "resolved", value: null });
   });
 
-  gap("ssr-helpers", "takeHydrationValue() is missing", "undefined with no registry or no entry", () => {
-    const takeHydrationValue = missing<Take>(core, "takeHydrationValue");
-    expect(takeHydrationValue("lib:none")).toBeUndefined();
-    (globalThis as Record<string, unknown>)["_$HY"] = { r: {} };
-    expect(takeHydrationValue("lib:none")).toBeUndefined();
+  test("undefined with no registry or no entry", () => {
+    expect(hydrateApi.takeHydrationValue("lib:none")).toBeUndefined();
+    (globalThis as Record<string, unknown>)["$rrd"] = {};
+    expect(hydrateApi.takeHydrationValue("lib:none")).toBeUndefined();
   });
 
-  gap("ssr-helpers", "getHydrationWriter() is missing", "getHydrationWriter is undefined on the client", () => {
-    const getHydrationWriter = missing<() => unknown>(core, "getHydrationWriter");
-    expect(getHydrationWriter()).toBeUndefined();
+  test("getHydrationWriter is undefined on the client", () => {
+    expect(hydrateApi.getHydrationWriter()).toBeUndefined();
   });
 });

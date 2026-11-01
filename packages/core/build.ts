@@ -67,6 +67,7 @@ for (const r of [
       "server/dynamic.ts",
       "server/effects.ts",
       "server/errors.ts",
+      "server/hydrate.ts",
       "server/reaction.ts",
       "server/timing.ts",
       // Hydration's <Loading> and <Errored>, which import the feature modules as an app does.

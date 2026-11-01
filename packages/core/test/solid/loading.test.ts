@@ -1305,54 +1305,36 @@ describe("signals/tests/refresh-await.test.ts", () => {
 });
 
 describe("signals/tests/loading-value.test.ts", () => {
-  /** features/async's memo, typed with Solid 2.0's loadingValue option, which it does not take. */
-  const withLoading = memo as unknown as <T>(fn: () => Promise<T>, options: { loadingValue: T }) => () => T;
+  test("serves the loading value synchronously from birth", () => {
+    const m = memo(() => new Promise<number>(() => {}), { loadingValue: 0 });
+    expect(m()).toBe(0);
+  });
 
-  gap(
-    "memo-options",
-    "memo takes no loadingValue: a first read is not ready",
-    "serves the loading value synchronously from birth",
-    () => {
-      const m = withLoading(() => new Promise<number>(() => {}), { loadingValue: 0 });
-      expect(m()).toBe(0);
-    },
-  );
-
-  gap(
-    "memo-options",
-    "memo takes no loadingValue: the boundary shows its fallback",
-    "does not trip a Loading boundary during the first flight",
-    async () => {
-      const div = new FakeElement("DIV");
-      const d = deferred<number>();
-      run(
-        `
+  test("does not trip a Loading boundary during the first flight", async () => {
+    const div = new FakeElement("DIV");
+    const d = deferred<number>();
+    run(
+      `
         import { attach } from "@reactre/core";
         import { Loading, memo } from "@reactre/core/features/async";
         const m = memo(() => api.d.p, { loadingValue: 0 });
         attach(() => <Loading fallback="loading">{m()}</Loading>, root);
         return {};
       `,
-        div,
-        { d },
-      );
-      flush();
-      expect(div.textContent).toBe("0");
-      d.ok(1);
-      await settle();
-      expect(div.textContent).toBe("1");
-    },
-  );
+      div,
+      { d },
+    );
+    flush();
+    expect(div.textContent).toBe("0");
+    d.ok(1);
+    await settle();
+    expect(div.textContent).toBe("1");
+  });
 
-  gap(
-    "memo-options",
-    "memo takes no loadingValue: latest() of a first flight is not ready",
-    "latest() serves the loading value during the first flight",
-    () => {
-      const m = withLoading(() => new Promise<string>(() => {}), { loadingValue: "seed" });
-      expect(latest(m)).toBe("seed");
-    },
-  );
+  test("latest() serves the loading value during the first flight", () => {
+    const m = memo(() => new Promise<string>(() => {}), { loadingValue: "seed" });
+    expect(latest(m)).toBe("seed");
+  });
 });
 
 describe("signals/tests/createRevealOrder.test.ts", () => {

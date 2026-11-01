@@ -16,6 +16,7 @@ import * as asyncApi from "../src/features/async.ts";
 import { __hooks, isPending, latest, memo, NotReadyError, refresh, resolve } from "../src/features/async.ts";
 import * as context from "../src/features/context.ts";
 import * as errors from "../src/features/errors.ts";
+import { createRoot } from "../src/features/owner.ts";
 import { reaction } from "../src/features/reaction.ts";
 import * as core from "../src/index.ts";
 import { batch, effect, signal } from "../src/index.ts";
@@ -828,6 +829,110 @@ describe("lazy", () => {
     const L = asyncApi.lazy(async () => (loads++, { default: () => "x" }));
     expect(await L.preload()).toBeInstanceOf(Function);
     expect(loads).toBe(1);
+  });
+});
+
+describe("the memo's options and from", () => {
+  const settle = (): Promise<void> => new Promise((ok) => setTimeout(ok, 0));
+
+  test("loadingValue: the memo's value until its first comes, and never pending; an error is still thrown", async () => {
+    let ok!: (v: string) => void;
+    const m = memo(() => new Promise<string>((r) => (ok = r)), { loadingValue: "…" });
+    expect([m(), isPending(m)]).toEqual(["…", false]);
+    ok("done");
+    await settle();
+    expect(m()).toBe("done");
+    const bad = memo((): Promise<string> => Promise.reject(new Error("bad")), { loadingValue: "…" });
+    await settle();
+    expect(() => bad()).toThrow("bad");
+    // refresh reaches the memo through what reads it.
+    let n = 0;
+    const r = memo(() => Promise.resolve(++n), { loadingValue: 0 });
+    await settle();
+    expect(r()).toBe(1);
+    await refresh(r);
+    expect(r()).toBe(2);
+    // In the browser, rendering afresh, the server's and hydration's options change nothing.
+    expect(memo(() => 1, { id: "x", ssrSource: "client", deferStream: true, transparent: true })()).toBe(1);
+  });
+
+  test("from: a subscription's values, its error and its end, read through an iterator; it is stopped once", async () => {
+    const log: string[] = [];
+    let emit!: { next: (v: number) => void; error: (e: unknown) => void; complete: () => void };
+    const it = asyncApi
+      .from<number>((next, error, complete) => {
+        emit = { next, error, complete };
+        return { unsubscribe: () => log.push("unsubscribe") };
+      })
+      [Symbol.asyncIterator]();
+    const first = it.next();
+    emit.next(1);
+    expect(await first).toEqual({ value: 1, done: false });
+    const failed = it.next();
+    emit.error(new Error("source"));
+    expect(failed).rejects.toThrow("source");
+    await settle();
+    expect(await it.next()).toEqual({ value: undefined, done: true });
+    emit.next(2);
+    emit.error(new Error("again"));
+    emit.complete();
+    expect(await it.return!()).toEqual({ value: undefined, done: true });
+    expect(log).toEqual(["unsubscribe"]);
+    // An end while a read waits ends it; an error sent while subscribing is the first read's.
+    let end!: () => void;
+    const ending = asyncApi.from<number>((_n, _e, c) => ((end = c), undefined))[Symbol.asyncIterator]();
+    const waiting = ending.next();
+    end();
+    expect(await waiting).toEqual({ value: undefined, done: true });
+    const early = asyncApi
+      .from<number>((_n, e) => {
+        e(new Error("early"));
+        return () => log.push("released");
+      })
+      [Symbol.asyncIterator]();
+    expect(early.next()).rejects.toThrow("early");
+    expect(log).toEqual(["unsubscribe", "released"]);
+    // A teardown that throws does not stop what stops it.
+    const throwing = asyncApi
+      .from<number>(() => () => {
+        throw new Error("teardown");
+      })
+      [Symbol.asyncIterator]();
+    expect(await throwing.return!()).toEqual({ value: undefined, done: true });
+  });
+
+  test("from: an Observable through @@observable; an AsyncIterable, stopped with its memo; anything else is refused", async () => {
+    const obs = {
+      subscribe(o: { next(v: string): void }) {
+        o.next("observed");
+        return { unsubscribe() {} };
+      },
+    };
+    const interop = { "@@observable": () => obs };
+    let read!: () => string;
+    createRoot(() => (read = memo(() => asyncApi.from<string>(interop as never))));
+    expect(read()).toBe("observed");
+    const log: string[] = [];
+    let n = 0;
+    const iterable: AsyncIterable<string> = {
+      [Symbol.asyncIterator]: () => ({
+        next: () => (n++ === 0 ? Promise.resolve({ value: "a", done: false }) : new Promise(() => {})),
+        return: () => (log.push("return"), Promise.resolve({ value: undefined, done: true })),
+      }),
+    };
+    let dispose!: () => void;
+    createRoot((d) => {
+      dispose = d;
+      read = memo(() => asyncApi.from(iterable));
+    });
+    await settle();
+    expect(read()).toBe("a");
+    dispose();
+    expect(log).toEqual(["return"]);
+    for (const bad of [null, 1, {}, { subscribe: 1 }])
+      expect(() => asyncApi.from(bad as never)).toThrow(
+        "reactre: from takes a subscribe function, an Observable or an AsyncIterable",
+      );
   });
 });
 

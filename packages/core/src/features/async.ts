@@ -87,15 +87,16 @@ export const __hooks: core.AsyncHooks = {
 core.__installAsync(__hooks);
 
 /**
- * `memo` from @reactre/core, typed for an async function: `memo(async () => ...)` reads as the
- * value it resolves to. A read before it has one is not ready (see `<Loading>`).
- *
- * @example
- *   import { memo } from "@reactre/core/features/async";
- *
- *   const user = memo(async () => (await fetch(`/users/${id()}`)).json());
+ * Internal (@reactre/compiler): `memo` from @reactre/core, as this module exported `memo` before
+ * it took options. @reactre/compiler sends a call of `memo` that passes none here, so an app that
+ * passes none bundles what it did then (see ../asyncMemo.ts).
  */
-export const memo: <R>(fn: () => R) => () => Settled<R> = core.memo as never;
+export const __memo: <R>(fn: () => R) => () => Settled<R> = core.memo as never;
+
+// The memo that takes options, and `from`: files of their own, which an app that uses neither
+// leaves out of its bundle whole (see ../asyncMemo.ts).
+export * from "../asyncMemo.ts";
+export * from "../from.ts";
 
 /** What a memo of a function that returns `R` reads as: what a Promise resolves to, what an AsyncIterable gives. */
 export type Settled<R> = R extends PromiseLike<infer V> ? V : R extends AsyncIterable<infer V> ? V : R;
@@ -371,7 +372,7 @@ export function lazy<P>(
     __frag([
       () => {
         // A memo of no owner: the component, once loaded, stays loaded.
-        const c = (m ??= __Owned.within(null, () => memo(preload)))();
+        const c = (m ??= __Owned.within(null, () => __memo(preload)))();
         return untrack(() => c(props));
       },
     ]);

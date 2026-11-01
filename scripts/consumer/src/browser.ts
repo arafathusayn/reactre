@@ -21,6 +21,7 @@ import * as coreContext from "@reactre/core/features/context";
 import * as coreDynamic from "@reactre/core/features/dynamic";
 import * as coreEffects from "@reactre/core/features/effects";
 import * as coreErrors from "@reactre/core/features/errors";
+import * as coreHydrate from "@reactre/core/features/hydrate";
 import * as coreLists from "@reactre/core/features/lists";
 import * as coreMemo from "@reactre/core/features/memo";
 import * as coreOwner from "@reactre/core/features/owner";
@@ -66,6 +67,21 @@ const done: boolean = todos.list[0]!.done;
 const same: () => { id: number } = coreMemo.memo(() => ({ id: count() }), { equals: (a, b) => a.id === b.id });
 const user: () => { name: string } = coreAsync.memo(async () => ({ name: String(count()) }));
 const pending: boolean = coreAsync.isPending(() => user().name);
+// The memo's options, `from`, and what the server sends: hydration values and clientOnly.
+const posts: () => string[] = coreAsync.memo(async () => [String(count())], { loadingValue: [], id: "posts" });
+const position: () => number = coreAsync.memo(() =>
+  coreAsync.from<number>((next) => {
+    next(1);
+    return () => {};
+  }),
+);
+const taken = coreHydrate.takeHydrationValue<{ id: number }>("app:user");
+const takenId: number | undefined = taken?.status === "resolved" ? taken.value.id : undefined;
+const Chart = coreHydrate.clientOnly<{ data: number[] }>(() =>
+  Promise.resolve({ default: (p: { data: number[] }) => p.data }),
+);
+const chart: unknown = Chart({ data: [1], fallback: "…" });
+const noWriter: boolean = coreHydrate.getHydrationWriter()?.async ?? false;
 const [likes, setLikes] = coreActions.createOptimistic(0);
 const like: (by: number) => Promise<string> = coreActions.action(function* (by: number) {
   setLikes((n) => n + by);
@@ -109,6 +125,7 @@ export const all: unknown[] = [
   coreContext,
   coreErrors,
   coreAsync,
+  coreHydrate,
   coreActions,
   jsxRuntime,
   jsxDevRuntime,
@@ -153,6 +170,11 @@ export const all: unknown[] = [
   done,
   same,
   pending,
+  posts,
+  position,
+  takenId,
+  chart,
+  noWriter,
   likes,
   like,
   labels,

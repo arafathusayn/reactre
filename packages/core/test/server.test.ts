@@ -22,6 +22,7 @@ import { configureClientErrors, Errored } from "../src/features/errors.ts";
 import * as forApi from "../src/features/for.ts";
 import * as indexApi from "../src/features/index.ts";
 import * as memoApi from "../src/features/memo.ts";
+import { createRoot } from "../src/features/owner.ts";
 import * as timing from "../src/features/timing.ts";
 import * as core from "../src/index.ts";
 import * as browser from "../src/server.browser.ts";
@@ -1235,6 +1236,419 @@ describe("in a server build", () => {
     `);
     expect(m.renderToStringAsync(m.App)).rejects.toThrow("fail");
     expect(((await chunks(m.renderToStream(m.App))).error as Error).message).toBe("fail");
+  });
+});
+
+// #endregion
+
+// #region The response head, hydration values and the memo's options
+
+/** A `<p>` whose text is `read()`, under a `<Loading>` of fallback `…`: what reads an async value. */
+const loading = (read: () => unknown): server.Html =>
+  serverAsync.Loading({
+    fallback: "…",
+    children: () =>
+      server.__ssr(
+        ["<p>", "</p>"],
+        server.__ssrLazy(() => server.__ssrText(read(), 0)),
+      ),
+  });
+
+describe("the response head", () => {
+  test("httpStatus and httpHeader declare while their scope lives; a scope that goes takes back its own, in any order", () => {
+    const response: server.ResponseHead = {
+      status: 200,
+      headers: new Headers([
+        ["vary", "accept"],
+        ["set-cookie", "z=0"],
+      ]),
+    };
+    const cookie = "a=1; Expires=Wed, 21 Oct 2026 07:28:00 GMT";
+    const seen: unknown[] = [];
+    const html = server.renderToString(
+      () => {
+        server.httpStatus(404, "Not Found");
+        server.httpHeader("X-A", "one");
+        server.httpHeader("vary", "cookie", { append: true });
+        server.httpHeader("set-cookie", cookie, { append: true });
+        let a!: () => void, b!: () => void;
+        createRoot((d) => {
+          a = d;
+          server.httpStatus(401);
+          server.httpHeader("x-a", "two");
+          server.httpHeader("x-new", "n");
+          server.httpHeader("set-cookie", "b=2", { append: true });
+        });
+        createRoot((d) => {
+          b = d;
+          server.httpStatus(402, "Payment Required");
+          server.httpHeader("vary", "origin", { append: true });
+        });
+        const h = response.headers;
+        seen.push([response.status, h.get("x-a"), h.get("vary"), h.getSetCookie()]);
+        // The first scope goes while the second lives: the second's status stays.
+        a();
+        seen.push([
+          response.status,
+          response.statusText,
+          h.get("x-a"),
+          h.has("x-new"),
+          h.getSetCookie(),
+          h.get("vary"),
+        ]);
+        b();
+        seen.push([response.status, response.statusText, h.get("vary")]);
+        // Live when the render commits: the render's own cleanups, after, change nothing.
+        server.httpHeader("x-last", "kept");
+        return "page";
+      },
+      { response },
+    );
+    expect(html).toBe("page");
+    expect(seen).toEqual([
+      [402, "two", "accept, cookie, origin", ["z=0", cookie, "b=2"]],
+      [402, "Payment Required", "one", false, ["z=0", cookie], "accept, cookie, origin"],
+      [404, "Not Found", "accept, cookie"],
+    ]);
+    expect([response.status, response.statusText, response.headers.get("x-last")]).toEqual([404, "Not Found", "kept"]);
+  });
+
+  test("a status taken back with nothing else live is the head's own again", () => {
+    const response: server.ResponseHead = { headers: new Headers() };
+    const seen: unknown[] = [];
+    server.renderToString(
+      () => {
+        createRoot((d) => {
+          server.httpStatus(500, "Oops");
+          seen.push(response.status);
+          d();
+        });
+        return "x";
+      },
+      { response },
+    );
+    expect(seen).toEqual([500]);
+    expect([response.status, response.statusText]).toEqual([undefined, undefined]);
+  });
+
+  test("they do nothing outside a render, in one without a response, and once the head is committed", async () => {
+    server.httpStatus(500);
+    server.httpHeader("x", "y");
+    expect(server.renderToString(() => (server.httpStatus(500), server.httpHeader("x", "y"), "x"))).toBe("x");
+    /** An app whose `<Loading>` declares a status and a header only once its value has come. */
+    const app = () => {
+      const late = deferred<string>();
+      const data = asyncApi.memo(() => late.p);
+      setTimeout(() => late.ok("v"), 1);
+      return () =>
+        loading(() => {
+          const v = data();
+          server.httpStatus(500);
+          server.httpHeader("x-late", v);
+          return v;
+        });
+    };
+    // A stream commits the head with its shell: the boundary comes too late.
+    const streamed: server.ResponseHead = { status: 200, headers: new Headers() };
+    const { parts } = await chunks(server.renderToStream(app(), { response: streamed }));
+    expect(parts.join("")).toContain("<p>v</p>");
+    expect([streamed.status, streamed.headers.has("x-late")]).toEqual([200, false]);
+    // renderToStringAsync commits it when it is done.
+    const whole: server.ResponseHead = { status: 200, headers: new Headers() };
+    expect(await server.renderToStringAsync(app(), { response: whole })).toBe("<p>v</p>");
+    expect([whole.status, whole.headers.get("x-late")]).toEqual([500, "v"]);
+  });
+
+  test("httpHeader throws for a name or a value Headers refuses, and notes nothing", () => {
+    const response: server.ResponseHead = { headers: new Headers() };
+    expect(() => server.renderToString(() => (server.httpHeader("x", "a\nb"), "x"), { response })).toThrow(TypeError);
+    expect(() => server.renderToString(() => (server.httpHeader("a b", "x"), "x"), { response })).toThrow(TypeError);
+    expect([...response.headers]).toEqual([]);
+  });
+
+  test("in a browser bundle they do nothing, and there is no hydration writer", () => {
+    browser.httpStatus(404);
+    browser.httpHeader("x", "y", { append: true });
+    expect(browser.getHydrationWriter()).toBeUndefined();
+  });
+});
+
+describe("hydration values", () => {
+  /** An app's markup: `<p>x</p>`. */
+  const P = server.__ssr(["<p>x</p>"]);
+  /** The scripts in `html`, and what each runs. */
+  const scripts = (html: string): string[] => [...html.matchAll(/<script[^>]*>(.*?)<\/script>/g)].map((m) => m[1]!);
+
+  test("renderToString: the values follow the HTML in one script of the render's nonce, as JSON that cannot end it", () => {
+    const LS = String.fromCharCode(0x2028);
+    const html = server.renderToString(
+      () => {
+        const w = server.getHydrationWriter()!;
+        expect(server.getHydrationWriter()).toBe(w);
+        expect(w.async).toBe(false);
+        expect(w.write("k:a", { s: "</script><!--<b>&" + LS })).toBe(true);
+        expect(w.write("k:a", 2)).toBe(false);
+        expect(w.write("k:</script>", 1)).toBe(true);
+        return P;
+      },
+      { nonce: 'n"1' },
+    );
+    expect(html).toStartWith('<p>x</p><script nonce="n&quot;1">self.$rrv||');
+    const data = html.slice("<p>x</p>".length);
+    expect(data.match(/<\/script>/g)).toHaveLength(1);
+    expect(data.slice(data.indexOf("$rrv({"))).not.toMatch(/<!--|<b>|&|\u2028/u);
+    expect(scripts(html)[0]).toEndWith(
+      '$rrv({"k:a":{"s":"\\u003c/script\\u003e\\u003c!--\\u003cb\\u003e\\u0026\\u2028"},"k:\\u003c/script\\u003e":1})',
+    );
+    // Without values, no script; outside a render, no writer, and nothing to take on the server.
+    expect(server.renderToString(() => P)).toBe("<p>x</p>");
+    expect(server.getHydrationWriter()).toBeUndefined();
+    expect(server.takeHydrationValue("k:a")).toBeUndefined();
+  });
+
+  test("what JSON has not is tagged; what cannot be sent is refused, naming the key and what it holds", () => {
+    let w!: server.HydrationWriter;
+    const html = server.renderToString(() => {
+      w = server.getHydrationWriter()!;
+      w.write("t", [undefined, NaN, -0, Infinity, 10n, new Date(5), new Map([[1, "x"]]), new Set(["y"]), { $rr: 1 }]);
+      const shared = { n: 1 };
+      w.write("shared", [shared, shared, Object.create(null) as object]);
+      const refused = (key: string, v: unknown, what: string) =>
+        expect(() => w.write(key, v)).toThrow(
+          new TypeError(`reactre: the hydration value "${key}" holds ${what}, which cannot be sent to the client`),
+        );
+      refused("f", { f: () => 1 }, "a function");
+      refused("y", [Symbol("s")], "a symbol");
+      refused("c", new (class Point {})(), "an instance of Point");
+      refused("anon", new (class {})(), "an instance of a class");
+      const cycle: Record<string, unknown> = {};
+      cycle["self"] = cycle;
+      refused("cycle", cycle, "a cycle");
+      refused("proto", JSON.parse('{"__proto__":1}'), 'a key named "__proto__"');
+      for (const key of ["__proto__", 1 as unknown as string]) expect(() => w.write(key, 1)).toThrow(TypeError);
+      expect(() => w.write("p", Promise.resolve(1))).toThrow(
+        'reactre: renderToString takes hydration values that are ready, and "p" is a Promise: render with renderToStream or renderToStringAsync',
+      );
+      return "";
+    });
+    // A value refused is not written, and its key stays free; once the render has ended, nothing is.
+    expect(w.write("late", 1)).toBe(false);
+    const sent = scripts(html)[0]!;
+    expect(sent).toContain(
+      '"t":[{"$rr":"u"},{"$rr":"n","v":"NaN"},{"$rr":"n","v":"-0"},{"$rr":"n","v":"Infinity"},{"$rr":"b","v":"10"},' +
+        '{"$rr":"d","v":5},{"$rr":"m","v":[[1,"x"]]},{"$rr":"s","v":["y"]},{"$rr":"o","v":{"$rr":1}}]',
+    );
+    expect(sent).toContain('"shared":[{"n":1},{"n":1},{}]');
+    expect(sent).not.toContain('"f"');
+  });
+
+  test("renderToStream: a Promise is sent pending with the shell, then as what it settled to; the stream ends after it", async () => {
+    const ok = deferred<string>(),
+      no = deferred<string>();
+    const out = chunks(
+      server.renderToStream(() => {
+        const w = server.getHydrationWriter()!;
+        expect(w.async).toBe(true);
+        w.write("ok", ok.p);
+        w.write("no", no.p);
+        return P;
+      }),
+    );
+    await tick();
+    ok.ok("yes");
+    await tick();
+    no.no(new RangeError("bad"));
+    const { parts, error } = await out;
+    expect(error).toBeUndefined();
+    expect(parts[0]).toStartWith("<p>x</p><script>self.$rrv||");
+    expect(parts[0]).toEndWith('$rrv({"ok":{"$rr":"p"},"no":{"$rr":"p"}})</script>');
+    // The development build names the error and gives its message.
+    expect(parts.slice(1)).toEqual([
+      '<script>$rrv({"ok":"yes"})</script>',
+      '<script>$rrv({"no":{"$rr":"r","v":["RangeError","bad"]}})</script>',
+    ]);
+  });
+
+  test("renderToStream: with deferStream the shell waits for the Promise; values come before a boundary's content", async () => {
+    const v = deferred<string>(),
+      d = deferred<string>();
+    const data = asyncApi.memo(() => d.p);
+    const out = chunks(
+      server.renderToStream(() => {
+        server.getHydrationWriter()!.write("v", v.p, { deferStream: true });
+        return loading(() => {
+          const x = data();
+          server.getHydrationWriter()!.write("in", x);
+          return x;
+        });
+      }),
+    );
+    await tick();
+    v.ok("first");
+    await tick();
+    d.ok("late");
+    const { parts } = await out;
+    expect(parts[0]).toBe("<!--rr:b0-->…<!--/rr:b0--><script>" + scripts(parts[0]!)[0] + "</script>");
+    expect(parts[0]).toContain('$rrv({"v":"first"})');
+    expect(parts[1]).toStartWith('<script>$rrv({"in":"late"})</script><script>self.$rr||');
+  });
+
+  test("a Promise that resolves to what cannot be sent fails the render; one that settles after it ended is dropped", async () => {
+    const errors: unknown[] = [];
+    const { error } = await chunks(
+      server.renderToStream(
+        () => (
+          server.getHydrationWriter()!.write(
+            "f",
+            Promise.resolve(() => 1),
+          ),
+          "x"
+        ),
+        { onError: (e) => errors.push(e) },
+      ),
+    );
+    expect((error as Error).message).toBe(
+      'reactre: the hydration value "f" holds a function, which cannot be sent to the client',
+    );
+    expect(errors).toEqual([error]);
+    // Cancelled before the Promise settles: it is not sent, and nothing fails.
+    const late = deferred<number>(),
+      later = deferred<number>();
+    const reader = server
+      .renderToStream(() => {
+        server.getHydrationWriter()!.write("late", late.p);
+        server.getHydrationWriter()!.write("later", later.p, { deferStream: true });
+        return "x";
+      })
+      .getReader();
+    await reader.cancel();
+    late.ok(1);
+    later.no(new Error("gone"));
+    await tick();
+  });
+
+  test("renderToStringAsync: the values follow the page, once every Promise has settled", async () => {
+    const p = deferred<number>();
+    const html = server.renderToStringAsync(() => (server.getHydrationWriter()!.write("p", p.p), P), {
+      nonce: "n",
+    });
+    await tick();
+    p.ok(7);
+    const s = await html;
+    expect(s).toStartWith('<p>x</p><script nonce="n">self.$rrv||');
+    expect(s).toEndWith('$rrv({"p":7})</script>');
+  });
+});
+
+describe("the memo's options on the server", () => {
+  /** What `loading` writes with `hydrate` when it shows its fallback for good: the fallback's slot between markers. */
+  const FALLBACK = "<!--rr:b--><!--[-->…<!--]--><!--/rr:b-->";
+  /** The values a render's scripts sent, by key, as JSON. */
+  const sent = (html: string): Record<string, unknown> => {
+    const out: Record<string, unknown> = {};
+    for (const m of html.matchAll(/\$rrv\((\{.*?\})\)<\/script>/g)) Object.assign(out, JSON.parse(m[1]!));
+    return out;
+  };
+
+  test("with an id, a render with hydrate that waits sends its first value; without hydrate, an id, or a wait, nothing", async () => {
+    const app = (options: asyncApi.MemoOptions<string>) => () => {
+      const user = serverAsync.memo(() => new Promise<string>((r) => setTimeout(() => r("ann"), 1)), options);
+      return loading(user);
+    };
+    const stream = await chunks(server.renderToStream(app({ id: "user" }), { hydrate: true }));
+    expect(sent(stream.parts.join(""))).toEqual({ user: "ann" });
+    expect(stream.parts[0]).toContain('"user":{"$rr":"p"}');
+    expect(sent(await server.renderToStringAsync(app({ id: "user" }), { hydrate: true }))).toEqual({ user: "ann" });
+    expect(await server.renderToStringAsync(app({ id: "user" }))).toBe("<p>ann</p>");
+    expect(await server.renderToStringAsync(app({}), { hydrate: true })).toBe("<!--[--><p>ann</p><!--]-->");
+    expect(server.renderToString(app({ id: "user" }), { hydrate: true })).toBe(FALLBACK);
+    // A value that is not async is the same on the client: it is not sent.
+    const sync = () => serverAsync.memo(() => "now", { id: "now" })();
+    expect(await server.renderToStringAsync(sync, { hydrate: true })).toBe("now");
+    // A memo with no option is features/async's own.
+    expect(server.renderToString(() => serverAsync.memo(() => "plain")())).toBe("plain");
+  });
+
+  test("deferStream: a stream's shell waits for its first value, sent with it under an id", async () => {
+    const app = (options: asyncApi.MemoOptions<string>) => () =>
+      loading(serverAsync.memo(() => new Promise<string>((r) => setTimeout(() => r("ready"), 1)), options));
+    const plain = await chunks(server.renderToStream(app({ deferStream: true })));
+    expect(plain.parts).toEqual(["<p>ready</p>"]);
+    const withId = await chunks(server.renderToStream(app({ deferStream: true, id: "d" }), { hydrate: true }));
+    expect(withId.parts[0]).toStartWith("<!--[--><p>ready</p><!--]--><script>");
+    expect(sent(withId.parts[0]!)).toEqual({ d: "ready" });
+    // Only a stream has a shell to hold.
+    expect(server.renderToString(app({ deferStream: true }))).toBe("…");
+    expect(() => serverAsync.memo(() => new Promise(() => {}), { deferStream: true })()).toThrow(
+      asyncApi.NotReadyError,
+    );
+  });
+
+  test("loadingValue: what the server shows until the first value comes", async () => {
+    const app = () => {
+      const posts = serverAsync.memo(() => new Promise<string>((r) => setTimeout(() => r("posts"), 1)), {
+        loadingValue: "none yet",
+      });
+      return server.__ssr(
+        ["<p>", "</p>"],
+        server.__ssrLazy(() => server.__ssrText(posts(), 0)),
+      );
+    };
+    expect(server.renderToString(app)).toBe("<p>none yet</p>");
+  });
+
+  test('ssrSource "client": never computed; its <Loading> writes its fallback, which the render does not wait for', async () => {
+    let calls = 0;
+    const client = (options: asyncApi.MemoOptions<string> = {}) =>
+      serverAsync.memo(() => (calls++, Promise.resolve("client")), { ssrSource: "client", ...options });
+    const pending = deferred<string>();
+    const other = asyncApi.memo(() => pending.p);
+    const app = () =>
+      serverAsync.Loading({
+        fallback: "…",
+        children: () =>
+          server.__ssr(
+            ["<p>", "", "</p>"],
+            // A cell of the boundary waits already when the client's memo is read.
+            server.__ssrLazy(() => server.__ssrText(other(), 0)),
+            server.__ssrLazy(() => server.__ssrText(client()(), 0)),
+          ),
+      });
+    expect(server.renderToString(app, { hydrate: true })).toBe(FALLBACK);
+    const streamed = await chunks(server.renderToStream(app, { hydrate: true }));
+    expect(streamed.parts).toEqual([FALLBACK]);
+    expect((await chunks(server.renderToStream(app))).parts).toEqual(["…"]);
+    expect(await server.renderToStringAsync(() => loading(client()))).toBe("…");
+    // With a loadingValue, it reads as that.
+    expect(server.renderToString(() => loading(client({ loadingValue: "soon" })))).toBe("<p>soon</p>");
+    expect(calls).toBe(0);
+    // Outside every <Loading> nothing would ever be written; outside a render it is just not ready.
+    expect(() => server.renderToString(() => server.__ssrLazy(() => client()()))).toThrow(
+      'reactre: a memo with ssrSource: "client" is read on the server outside every <Loading>',
+    );
+    expect(() => client()()).toThrow(asyncApi.NotReadyError);
+  });
+
+  test("from: an AsyncIterable sends each value; a subscription its first, and is stopped there", async () => {
+    const log: string[] = [];
+    const sub = serverAsync.from<number>((next) => {
+      log.push("open");
+      setTimeout(() => (next(1), next(2)), 1);
+      return () => log.push("close");
+    });
+    expect(await server.renderToStringAsync(() => loading(serverAsync.memo(() => sub)))).toBe("<p>1</p>");
+    expect(log).toEqual(["open", "close"]);
+    async function* gen() {
+      yield "a";
+      yield "b";
+    }
+    const each: string[] = [];
+    for await (const x of serverAsync.from(gen())) each.push(x);
+    expect(each).toEqual(["a", "b"]);
+    // Its iterator's `return` stops the subscription.
+    const again = serverAsync.from<number>(() => () => log.push("stopped"))[Symbol.asyncIterator]();
+    await again.return!();
+    expect(log).toEqual(["open", "close", "stopped"]);
   });
 });
 

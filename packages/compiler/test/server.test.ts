@@ -88,6 +88,10 @@ describe("imports", () => {
     expect(serverImports(`import { autorun, bind, onFlush } from "@reactre/core/features/effects";`)).toBe(
       `import { autorun, bind, onFlush } from "@reactre/core/server/effects";`,
     );
+    // Hydration's module, which shared code imports `takeHydrationValue` and `clientOnly` from.
+    expect(serverImports(`import { clientOnly, isHydrating } from "@reactre/core/features/hydrate";`)).toBe(
+      `import { clientOnly, isHydrating } from "@reactre/core/server/hydrate";`,
+    );
     // The list functions compute, so a server build takes the module as it is.
     expect(serverImports(`import { map } from "@reactre/core/features/lists";`)).toBe(
       `import { map } from "@reactre/core/features/lists";`,

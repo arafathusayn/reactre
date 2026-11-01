@@ -6,8 +6,10 @@
 // server's code, and without the option a Vite SSR build and the dev server's server environment
 // get the browser's code, as every build did before the option. With `hydrate: true`, the
 // browser's build of fixtures/ssr/client.tsx (Vite, esbuild, Bun) hydrates the server's HTML,
-// keeping its nodes; without it, the browser's build has none of hydration's code. The
-// packages resolve to their dist builds, as an app's do once installed, so those are built first.
+// keeping its nodes; without it, the browser's build has none of hydration's code. The app in
+// fixtures/ssr/data.tsx, built both ways by Bun, sends its client what it computed (a memo's
+// value, a library's), declares the response's head, and has a component only the browser renders.
+// The packages resolve to their dist builds, as an app's do once installed, so those are built first.
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -468,6 +470,86 @@ describe("client builds with `hydrate: true` hydrate the server's HTML", () => {
         },
       }),
     ).rejects.toThrow("@reactre/plugin's `hydrate: true` option");
+  }, 60_000);
+});
+
+describe("what a server build sends the client its hydrate build hydrates with", () => {
+  /** What fixtures/ssr/data-server.tsx exports. */
+  interface DataServer {
+    render(): Promise<{ html: string; response: { status?: number; statusText?: string; headers: Headers } }>;
+    log: string[];
+  }
+  /** What fixtures/ssr/data-client.tsx exports. */
+  interface DataClient {
+    start(root: Element): () => void;
+    setN(n: number): void;
+    log: string[];
+  }
+
+  /** Every node under `n`. */
+  const all = (n: FakeNode): FakeNode[] => {
+    const nodes: FakeNode[] = [];
+    for (let c = n.firstChild; c !== null; c = c.nextSibling) nodes.push(c, ...all(c));
+    return nodes;
+  };
+  const settle = (): Promise<void> => new Promise((ok) => setTimeout(ok, 0));
+
+  afterAll(() => {
+    for (const k of ["$rrd", "$rrv", "$rrw"]) delete (globalThis as Record<string, unknown>)[k];
+  });
+
+  test("Bun: a memo's value and a library's, the response head and clientOnly", async () => {
+    const built = await Bun.build({
+      entrypoints: [FIXTURES + "ssr/data-server.tsx"],
+      outdir: join(out, "data-server"),
+      target: "bun",
+      format: "esm",
+      plugins: [bunPlugin({ ssr: true })],
+    });
+    if (!built.success) throw new AggregateError(built.logs, "Bun.build failed");
+    const server = (await import(join(out, "data-server/data-server.js"))) as DataServer;
+    const { html, response } = await server.render();
+    expect([response.status, response.statusText, response.headers.get("x-app")]).toEqual([201, "Created", "data"]);
+    expect(server.log).toEqual(["user 1", "greeting"]);
+    // The client's component never renders on the server: its fallback is there.
+    expect(html).toContain("<i>no clock</i>");
+    expect(html).not.toContain("clock 1");
+    const scripts = [...html.matchAll(/<script nonce="r4nd">(.*?)<\/script>/g)].map((m) => m[1]!);
+    expect(scripts.length).toBe(1);
+    expect(scripts[0]).toContain('$rrv({"user":"user1","lib:greeting":"hi"})');
+
+    const client = await Bun.build({
+      entrypoints: [FIXTURES + "ssr/data-client.tsx"],
+      outdir: join(out, "data-client"),
+      target: "browser",
+      format: "esm",
+      plugins: [bunPlugin({ hydrate: true })],
+    });
+    if (!client.success) throw new AggregateError(client.logs, "Bun.build failed");
+    const code = await Bun.file(join(out, "data-client/data-client.js")).text();
+    // The browser's build has none of the server's code.
+    expect(code).not.toMatch(/__ssr|function renderTo|\$rrv/);
+    const app = (await import(join(out, "data-client/data-client.js"))) as DataClient;
+    installFakeDocument();
+    // The page's scripts run, as the browser runs them, before the app's.
+    for (const s of scripts) new Function(s)();
+    const root = new FakeElement("DIV");
+    root.innerHTML = html.replace(/<script[^>]*>.*?<\/script>/g, "");
+    const before = all(root).filter((n) => n.nodeType !== 8);
+    app.start(root as unknown as Element);
+    // The memo ran only to learn what it reads, and nothing was fetched: the server's values show.
+    expect(app.log).toEqual(["user 1"]);
+    const now = new Set(all(root));
+    expect(before.every((n) => now.has(n))).toBe(true);
+    expect(root.textContent).toBe("user1hino clock");
+    // Once the page has hydrated, the browser's component takes the fallback's place.
+    await settle();
+    expect(root.textContent).toBe("user1hiclock 1");
+    // Then the memo computes as it would, when what it read changes.
+    app.setN(2);
+    for (let i = 0; i < 10 && !root.textContent.startsWith("user2"); i++) await settle();
+    expect(root.textContent).toBe("user2hiclock 2");
+    expect(app.log).toEqual(["user 1", "user 2"]);
   }, 60_000);
 });
 

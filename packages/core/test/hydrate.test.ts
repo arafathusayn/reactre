@@ -30,6 +30,7 @@ import * as core from "../src/index.ts";
 import * as server from "../src/server.ts";
 import * as serverAsync from "../src/server/async.ts";
 import * as serverErrors from "../src/server/errors.ts";
+import * as serverHydrate from "../src/server/hydrate.ts";
 
 // #region Harness
 
@@ -55,7 +56,7 @@ const serverModules: Record<string, unknown> = {
   "@reactre/core/server": server,
   "@reactre/core/server/async": serverAsync,
   "@reactre/core/server/errors": serverErrors,
-  "@reactre/core/features/hydrate": hydrateApi,
+  "@reactre/core/server/hydrate": serverHydrate,
   "@reactre/core/features/store": storeApi,
 };
 /** What a source compiled for hydration imports. */
@@ -1201,5 +1202,268 @@ describe("built apps: a context, <Errored> and <Loading>", () => {
     expect(shown(root)).toBe("<main><i>a</i><i>b</i>aba!b!</main>");
     (globalThis as unknown as { lists: { setItems(v: string[]): void } }).lists.setItems(["b", "c"]);
     expect(shown(root)).toBe("<main><i>b</i><i>c</i>bcb!c!</main>");
+  });
+});
+
+describe("what the server sends: hydration values, the memo's options and clientOnly", () => {
+  /** The page's globals the server's scripts set. */
+  const win = globalThis as unknown as {
+    $rrd?: Record<string, unknown>;
+    $rrv?: (o: object) => void;
+    $rrw?: unknown;
+  };
+  afterEach(() => {
+    delete win.$rrd;
+    delete win.$rrv;
+    delete win.$rrw;
+  });
+
+  /** Run the scripts in `html` as the browser would, and give back `html` without them. */
+  function run(html: string): string {
+    for (const m of html.matchAll(/<script[^>]*>(.*?)<\/script>/g)) new Function(m[1]!)();
+    return html.replace(/<script[^>]*>.*?<\/script>/g, "");
+  }
+
+  /** Let promise callbacks and timers run. */
+  const settle = (): Promise<void> => new Promise((ok) => setTimeout(ok, 0));
+
+  /** Run `make` as a view that hydrates an empty root, so that it runs while the page hydrates. */
+  function hydrating(make: () => void): () => void {
+    const root = new FakeElement("DIV");
+    body.appendChild(root);
+    return hydrateApi.hydrate(() => (make(), null), root as unknown as Element);
+  }
+
+  /** What `read` reads once it is ready. */
+  const value = <T>(read: () => T): Promise<T> => asyncApi.resolve(read);
+
+  test("takeHydrationValue: what the server wrote, as it was, once; tagged values and plain objects of no prototype key", () => {
+    const LS = String.fromCharCode(0x2028);
+    const date = new Date(5);
+    const sent = [undefined, NaN, -0, -Infinity, 10n, date, new Map([[1, { a: "x" }]]), new Set(["y"]), { $rr: 1 }];
+    run(
+      server.renderToString(() => {
+        const w = server.getHydrationWriter()!;
+        w.write("t", sent);
+        w.write("s", { s: "</script><!--" + LS, n: [1, null, true] });
+        return "";
+      }),
+    );
+    const t = hydrateApi.takeHydrationValue<unknown[]>("t")!;
+    expect(t.status).toBe("resolved");
+    const got = (t as { value: unknown[] }).value;
+    expect(got).toEqual(sent);
+    expect(Object.is(got[2], -0)).toBe(true);
+    expect(got[5]).toBeInstanceOf(Date);
+    expect(hydrateApi.takeHydrationValue("s")).toEqual({
+      status: "resolved",
+      value: { s: "</script><!--" + LS, n: [1, null, true] },
+    });
+    expect(hydrateApi.takeHydrationValue("t")).toBeUndefined();
+    // A page's registry has no prototype; a `__proto__` key some other script put there is dropped.
+    win.$rrd = { x: JSON.parse('{"__proto__":{"polluted":1},"ok":1}') };
+    const x = hydrateApi.takeHydrationValue<object>("x") as { value: object };
+    expect(Object.getPrototypeOf(x.value)).toBe(Object.prototype);
+    expect(x.value).toEqual({ ok: 1 });
+    expect(({} as { polluted?: number }).polluted).toBeUndefined();
+  });
+
+  test("takeHydrationValue: a Promise the stream has not settled is pending until its script comes, then resolved or rejected", async () => {
+    run(server.renderToString(() => (server.getHydrationWriter()!.write("x", 1), "")));
+    win.$rrd = { ok: { $rr: "p" }, no: { $rr: "p" }, prod: { $rr: "p" } };
+    const ok = hydrateApi.takeHydrationValue<number>("ok") as { status: string; promise: Promise<number> };
+    const no = hydrateApi.takeHydrationValue("no") as { promise: Promise<unknown> };
+    const prod = hydrateApi.takeHydrationValue("prod") as { promise: Promise<unknown> };
+    expect(ok.status).toBe("pending");
+    win.$rrv!({ ok: 7, other: 1 });
+    expect(await ok.promise).toBe(7);
+    win.$rrv!({ no: { $rr: "r", v: ["RangeError", "bad"] }, prod: { $rr: "r" } });
+    const err = await no.promise.catch((e: unknown) => e);
+    expect([(err as Error).name, (err as Error).message]).toEqual(["RangeError", "bad"]);
+    expect(((await prod.promise.catch((e: unknown) => e)) as Error).message).toContain("production build");
+    // One that rejected before it was taken.
+    win.$rrd!["late"] = { $rr: "r", v: ["Error", "late"] };
+    const late = hydrateApi.takeHydrationValue("late") as { status: string; error: Error };
+    expect([late.status, late.error.message]).toEqual(["rejected", "late"]);
+  });
+
+  test("memo with an id: hydrating, its first value is the server's, fetch sending nothing; then it computes as it would", async () => {
+    const src = `
+      import { signal } from "@reactre/core";
+      import { memo } from "@reactre/core/features/async";
+      const log = [];
+      const [n, setN] = signal(1);
+      const App = () => {
+        const text = memo(() => (log.push(n()), fetch("data:,v" + n()).then((r) => r.text())), { id: "text" });
+        return <p>{text()}</p>;
+      };
+      return { App, log, setN };
+    `;
+    const s = ssr<{ App: () => unknown; log: number[] }>(src);
+    const html = run(await server.renderToStringAsync(s.App, { hydrate: true }));
+    expect(s.log).toEqual([1]);
+    expect(win.$rrd).toEqual({ text: "v1" });
+    const root = new FakeElement("DIV");
+    body.appendChild(root);
+    root.innerHTML = html;
+    const p = find(root, "p");
+    const c = hyd<{ App: () => unknown; log: number[]; setN: (n: number) => void }>(src);
+    const fetched = spyOn(globalThis, "fetch");
+    hydrateApi.hydrate(c.App, root as unknown as Element);
+    // It ran once, to learn what it reads, with no request sent; the page shows the server's value.
+    expect(c.log).toEqual([1]);
+    expect(fetched).not.toHaveBeenCalled();
+    fetched.mockRestore();
+    expect(shown(root)).toBe("<p>v1</p>");
+    expect(find(root, "p")).toBe(p);
+    expect(win.$rrd).toEqual({});
+    c.setN(2);
+    for (let i = 0; i < 5 && shown(root) !== "<p>v2</p>"; i++) await settle();
+    expect(shown(root)).toBe("<p>v2</p>");
+    expect(c.log).toEqual([1, 2]);
+  });
+
+  test("memo hydrating: a pending value waits for its script, a rejected one rejects; with a loadingValue, it comes after", async () => {
+    run(server.renderToString(() => (server.getHydrationWriter()!.write("x", 1), "")));
+    win.$rrd = { p: { $rr: "p" }, r: { $rr: "r", v: ["Error", "server"] }, lv: "server", fails: 1, x: 1 };
+    let p!: () => string, r!: () => string, lv!: () => string, fails!: () => number, none!: () => string;
+    hydrating(() => {
+      p = hydrateAsync.memo(() => Promise.resolve("client"), { id: "p" });
+      r = hydrateAsync.memo(() => Promise.resolve("client"), { id: "r" });
+      lv = hydrateAsync.memo(() => Promise.resolve("client"), { id: "lv", loadingValue: "loading" });
+      // What `fn` throws or rejects with while it is traced is dropped.
+      fails = hydrateAsync.memo(
+        (): number => {
+          throw new Error("traced");
+        },
+        { id: "fails" },
+      );
+      hydrateAsync.memo(() => Promise.reject(new Error("traced")), { id: "x" });
+      // No value under its id: it computes.
+      none = hydrateAsync.memo(() => Promise.resolve("computed"), { id: "missing" });
+    });
+    expect(lv()).toBe("loading");
+    expect(fails()).toBe(1);
+    win.$rrv!({ p: "streamed" });
+    expect(await value(p)).toBe("streamed");
+    expect(await value(r).catch((e: Error) => e.message)).toBe("server");
+    expect(await value(lv)).toBe("server");
+    expect(await value(none)).toBe("computed");
+  });
+
+  test("memo hydrating: a source of from reconnects from the server's value; with hybrid, an AsyncIterable goes on after it", async () => {
+    win.$rrd = { live: 1, gen: "a", empty: "z", one: "only" };
+    const [round, nextRound] = core.signal(0);
+    let next!: (v: number) => void;
+    const log: string[] = [];
+    let live!: () => number, gen!: () => string, empty!: () => string, one!: () => string;
+    async function* letters() {
+      log.push("gen");
+      yield "a";
+      yield "b";
+    }
+    async function* nothing(): AsyncGenerator<string> {}
+    async function* single() {
+      yield "skipped";
+    }
+    const dispose = hydrating(() => {
+      live = hydrateAsync.memo(
+        () =>
+          asyncApi.from<number>((n) => {
+            log.push("subscribe");
+            next = n;
+            return () => log.push("unsubscribe");
+          }),
+        { id: "live" },
+      );
+      gen = hydrateAsync.memo(() => (round(), letters()), { id: "gen", ssrSource: "hybrid" });
+      empty = hydrateAsync.memo(() => nothing(), { id: "empty", ssrSource: "hybrid" });
+      one = hydrateAsync.memo(() => single(), { id: "one", ssrSource: "hybrid" });
+    });
+    expect(live()).toBe(1);
+    expect(gen()).toBe("a");
+    await settle();
+    next(2);
+    await settle();
+    expect(live()).toBe(2);
+    expect(gen()).toBe("b");
+    expect([empty(), one()]).toEqual(["z", "only"]);
+    // Run again, it stops the iterator it had, and computes as it would.
+    nextRound(1);
+    await settle();
+    expect(gen()).toBe("b");
+    // A generator's body runs once iterated: the traced call never was.
+    expect(log.filter((x) => x === "gen").length).toBe(2);
+    dispose();
+    expect(log).toContain("unsubscribe");
+    // Without hybrid, an AsyncIterable that is not a subscription's is the server's value alone.
+    win.$rrd = { plain: "server" };
+    let plain!: () => string;
+    hydrating(() => (plain = hydrateAsync.memo(() => letters(), { id: "plain" })));
+    await settle();
+    expect(plain()).toBe("server");
+  });
+
+  test('memo hydrating: ssrSource "client" computes once the page has hydrated; transparent takes nothing; not hydrating, features/async\'s', async () => {
+    win.$rrd = { t: "server" };
+    let calls = 0;
+    let client!: () => string, transparent!: () => string;
+    hydrating(() => {
+      client = hydrateAsync.memo(() => (calls++, Promise.resolve("client")), { ssrSource: "client" });
+      transparent = hydrateAsync.memo(() => Promise.resolve("fresh"), { id: "t", transparent: true });
+      expect(calls).toBe(0);
+    });
+    expect(await value(client)).toBe("client");
+    expect(calls).toBe(1);
+    expect(await value(transparent)).toBe("fresh");
+    expect(win.$rrd).toEqual({ t: "server" });
+    expect(await value(hydrateAsync.memo(() => Promise.resolve("afresh"), { id: "t" }))).toBe("afresh");
+    expect(await value(hydrateAsync.memo(() => Promise.resolve("bare")))).toBe("bare");
+  });
+
+  test("clientOnly: the server writes the fallback; hydrating, it claims it, and the component takes its place once the page has hydrated", async () => {
+    const src = `
+      import { clientOnly } from "@reactre/core/features/hydrate";
+      const loads = [];
+      const Chart = clientOnly(() => (loads.push(1), Promise.resolve({ Chart: (p) => <b>chart {p.n}</b> })), { export: "Chart" });
+      const App = () => <div><Chart n={1} fallback={<i>wait</i>} /></div>;
+      return { App, loads };
+    `;
+    const s = ssr<{ App: () => unknown; loads: number[] }>(src);
+    // The component's slot, and in it the fallback's, which the client's `__frag` claims.
+    expect(server.renderToString(s.App, { hydrate: true })).toBe(
+      "<div><!--[--><!--[--><i>wait</i><!--]--><!--]--></div>",
+    );
+    expect(s.loads).toEqual([]);
+    const { root, before } = page(src);
+    expect(kept(root, before)).toBe(true);
+    expect(shown(root)).toBe("<div><i>wait</i></div>");
+    await settle();
+    expect(shown(root)).toBe("<div><b>chart 1</b></div>");
+  });
+
+  test("clientOnly rendering afresh: the fallback until it has loaded, then the component with the props but fallback; lazy loads on first render", async () => {
+    let loads = 0;
+    const seen: string[][] = [];
+    const Widget = hydrateApi.clientOnly<{ n: number }>(
+      () => (
+        loads++,
+        Promise.resolve({
+          default: (p: { n: number }) => (seen.push(Object.keys(p)), "widget " + p.n),
+        })
+      ),
+      { lazy: true },
+    );
+    expect(loads).toBe(0);
+    const root = new FakeElement("DIV");
+    body.appendChild(root);
+    core.render(() => Widget({ n: 2, fallback: "wait" }), root as unknown as Element);
+    expect([loads, shown(root)]).toEqual([1, "wait"]);
+    await settle();
+    expect(shown(root)).toBe("widget 2");
+    expect(seen).toEqual([["n"]]);
+    // On the server it is never loaded.
+    expect(serverHydrate.isHydrating()).toBe(false);
+    expect(() => serverHydrate.hydrate(() => null, null)).toThrow("it does not run in a server build");
   });
 });
