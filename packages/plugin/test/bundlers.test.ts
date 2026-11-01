@@ -171,6 +171,28 @@ describe.each(Object.keys(bundlers))("%s", (name) => {
     expect(button.textContent).toBe("Clicked 1 times");
   }, 60_000);
 
+  test("core: the whole program binds a prop's hole only where a call site passes it reactively", async () => {
+    const file = join(out, `${name}-props.js`);
+    await bundle(FIXTURES + "props/main.tsx", file, {});
+    const code = await Bun.file(file).text();
+    // Label's callers all pass literals: its hole is a clone value. Count's `n` is bound.
+    // (Each bundler prints the code its own way: the parentheses may go.)
+    expect(code).toMatch(/clone\(\[\(?props\.text\)?\]\)/);
+    expect(code).toMatch(/__n\[0\], \(\) => \(?props\.n\)?\)/);
+    expect(code).not.toMatch(/clone\(\[\(?props\.n\)?\]\)/);
+
+    installFakeDocument();
+    const root = new FakeElement("DIV");
+    const app = (await import(file)) as { mount(el: unknown): void; log: string[] };
+    app.mount(root);
+    const span = find(root, "SPAN");
+    expect(span.textContent).toBe("0");
+    find(root, "BUTTON").dispatchEvent(new FakeEvent("click"));
+    expect(span.textContent).toBe("1");
+    expect(find(root, "SECTION").textContent).toBe("inside");
+    expect(app.log).toEqual(["provider"]);
+  }, 60_000);
+
   test("compat: resolves react to the class build and compiles host trees", async () => {
     const file = join(out, `${name}-compat.js`);
     await bundle(FIXTURES + "compat/main.jsx", file, { compat: { classes: true } });

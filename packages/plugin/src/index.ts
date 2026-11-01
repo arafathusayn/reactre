@@ -51,12 +51,16 @@ import { compileJs as compileCompat, compileJsWithMap as compileCompatWithMap } 
 import {
   compileJs as compileCore,
   compileJsWithMap as compileCoreWithMap,
+  factsFor,
+  type PropFacts,
   ReactreCompileError,
 } from "@reactre/compiler";
 import type { SourceMapV3 } from "@reactre/compiler/map";
+import { analyze, type Host, type Program } from "@reactre/compiler/program";
 import { createUnplugin, type UnpluginInstance, type UnpluginOptions } from "unplugin";
 
 import { entrySource, offError, usedApis, writeEntry } from "./api.ts";
+import { readBuild } from "./program.ts";
 import { transpile } from "./transpile.ts";
 
 // #region Options
@@ -106,6 +110,13 @@ export interface ReactreOptions {
   readonly include?: RegExp | readonly RegExp[];
   /** Files to leave alone even when `include` matches. Default: anything under node_modules. */
   readonly exclude?: RegExp | readonly RegExp[];
+  /**
+   * Core mode: read the whole program at the build's start (./program.ts), so a component's holes
+   * that read a prop are bound only where some call site passes that prop reactively. Default
+   * true; it applies to one-shot builds, not to a dev server or watch mode. With false, each file
+   * is seen alone: a component exported or used as a value has every prop reactive.
+   */
+  readonly wholeProgram?: boolean;
 }
 
 // #endregion
@@ -198,6 +209,11 @@ export const reactre: UnpluginInstance<ReactreOptions | undefined, boolean> = cr
   };
   const include = toArray(options.include ?? /\.[jt]sx$/);
   const exclude = toArray(options.exclude ?? /[\\/]node_modules[\\/]/);
+  // Core mode's whole program, read at each build's start (./program.ts), by Vite environment:
+  // the program and the resolver that read it. Null: each file is seen alone.
+  const programs = new Map<string, Promise<{ program: Program; host: Host } | null>>();
+  let serve = false;
+  const envOf = (ctx: unknown) => (ctx as { environment?: { name?: string } } | undefined)?.environment?.name ?? "";
 
   const plugin: UnpluginOptions = {
     name: "@reactre/plugin",
@@ -205,7 +221,7 @@ export const reactre: UnpluginInstance<ReactreOptions | undefined, boolean> = cr
     transform: compile
       ? {
           filter: { id: { include, exclude } },
-          handler(code, id) {
+          async handler(code, id) {
             const path = id.replace(/[?#].*$/, "");
             const maps = wantsMaps(this);
             const out = transpile(path, code, compat === undefined ? "@reactre/core" : "react", maps);
@@ -213,12 +229,21 @@ export const reactre: UnpluginInstance<ReactreOptions | undefined, boolean> = cr
               throw new ReactreCompileError(`reactre: ${path}: a key after {...spread} props cannot be compiled`);
             }
             try {
+              const whole = compat === undefined ? await programs.get(envOf(this)) : undefined;
+              const props: PropFacts | undefined =
+                whole == null ? undefined : await factsFor(whole.program, path, out.code, whole.host);
+              const opts = props === undefined ? undefined : { props };
               if (!maps)
-                return { code: compat !== undefined ? compileCompat(out.code) : compileCore(out.code), map: null };
-              const compiled = compat !== undefined ? compileCompatWithMap(out.code) : compileCoreWithMap(out.code);
+                return {
+                  code: compat !== undefined ? compileCompat(out.code) : compileCore(out.code, opts),
+                  map: null,
+                };
+              const compiled =
+                compat !== undefined ? compileCompatWithMap(out.code) : compileCoreWithMap(out.code, opts);
               return { code: compiled.code, map: chain(compiled.map, out.map) };
             } catch (e) {
-              if (compat === undefined && e instanceof ReactreCompileError) e.message = `${path}: ${e.message}`;
+              if (compat === undefined && e instanceof ReactreCompileError && !e.message.includes(path))
+                e.message = `${path}: ${e.message}`;
               throw e;
             }
           },
@@ -235,9 +260,23 @@ export const reactre: UnpluginInstance<ReactreOptions | undefined, boolean> = cr
   const all = (...plugins: UnpluginOptions[]): UnpluginOptions | UnpluginOptions[] =>
     narrowed ? [...plugins, scanner] : plugins.length === 1 ? plugins[0]! : plugins;
   if (compat === undefined) {
+    if (options.wholeProgram !== false)
+      plugin.buildStart = async function (this: unknown, ...args: unknown[]) {
+        const build = readBuild(this, args[0], serve).then(async (b) => {
+          const program = b === null ? null : await analyze(b.entries, b.host);
+          return program === null ? null : { program, host: b!.host };
+        });
+        programs.set(envOf(this), build);
+        await build;
+      };
     // Vite's dependency scanner compiles JSX on its own, for React's runtime, and would then fail
     // to find react/jsx-runtime. It needs only the imports, so it keeps JSX as written.
-    plugin.vite = { config: () => ({ optimizeDeps: { rolldownOptions: { transform: { jsx: "preserve" } } } }) };
+    plugin.vite = {
+      config: () => ({ optimizeDeps: { rolldownOptions: { transform: { jsx: "preserve" } } } }),
+      configResolved(config) {
+        serve = config.command === "serve";
+      },
+    };
     return plugin;
   }
 

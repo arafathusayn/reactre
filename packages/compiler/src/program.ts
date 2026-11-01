@@ -32,6 +32,9 @@
 //     the jsx calls are opaque: `cond() ? <A /> : null` is reactive for `cond()`, `<A n={x()} />`
 //     is not (A's own call site passes `n` as a getter).
 
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, isAbsolute, join } from "node:path";
+
 import { isIdent, skipToken, splitAt, until } from "./scan.ts";
 
 // #region Facts
@@ -666,6 +669,8 @@ export class Program {
   add(file: string, js: string, resolved: ReadonlyMap<string, Resolved>, info: ModuleInfo = scanModule(js)): void {
     this.modules.set(file, { js, info, resolved });
     this.facts = null;
+    // A module replaced is compiled again, with the facts it is given then.
+    this.given.delete(file);
   }
 
   /** The module's scan, if the program has it. */
@@ -816,6 +821,94 @@ export function moduleFacts(js: string, info: ModuleInfo = scanModule(js)): Prop
   const p = new Program(["\0module"]);
   p.add("\0module", js, new Map(info.specs.map((s) => [s, false])), info);
   return p.factsOf("\0module");
+}
+
+// #endregion
+
+// #region Reading a build
+
+/** How a build reads its modules: its bundler's resolver, and the transpiler the compiler reads. */
+export interface Host {
+  /**
+   * Where `spec`, imported by `importer`, leads: an absolute path (a query or hash after it is
+   * ignored), false for a module the build does not bundle (external, or not found), or null when
+   * it cannot be known (a virtual module), which makes the program give up.
+   */
+  resolve(spec: string, importer: string): Resolved | Promise<Resolved>;
+  /** A script's JavaScript, TypeScript and JSX stripped, as `compileJs` reads it. */
+  transpile(file: string, source: string): string;
+  /** A file's text; by default, read from disk. */
+  read?(file: string): string | Promise<string>;
+}
+
+/** Scripts, read for what they import and call. */
+const SCRIPT = /\.(?:[cm]?[jt]sx?)$/;
+/** Files that import no modules: styles, data, images, fonts, media. */
+const ASSET =
+  /\.(?:css|scss|sass|less|styl|stylus|pcss|postcss|json|json5|svg|png|jpe?g|gif|webp|avif|ico|bmp|tiff?|woff2?|eot|ttf|otf|mp4|webm|ogg|mp3|wav|flac|aac|txt|wasm)$/;
+
+/**
+ * Read a build's program from its entries, following every import the resolver places among the
+ * app's own files (not node_modules). An HTML entry's module scripts are its imports.
+ *
+ * @returns The program, or null when it cannot see its whole graph (see `Program.complete`).
+ */
+export async function analyze(entries: readonly string[], host: Host): Promise<Program | null> {
+  const program = new Program(entries);
+  return (await walk(program, entries, host)) ? program : null;
+}
+
+/**
+ * Add `files` and every module they reach that `program` does not have yet.
+ *
+ * @param code Each file's JavaScript when already known (a module the bundler gave the plugin).
+ * @returns Whether the program can still see its whole graph.
+ */
+export async function walk(
+  program: Program,
+  files: readonly string[],
+  host: Host,
+  code: ReadonlyMap<string, string> = new Map(),
+): Promise<boolean> {
+  const read = host.read ?? ((f: string) => readFileSync(f, "utf8"));
+  const queue = [...files];
+  for (let file = queue.pop(); file !== undefined; file = queue.pop()) {
+    if (program.has(file) && !code.has(file)) continue;
+    let js: string;
+    try {
+      js =
+        code.get(file) ??
+        (file.endsWith(".html") ? htmlScripts(file, await read(file)) : host.transpile(file, await read(file)));
+    } catch {
+      return false;
+    }
+    const info = scanModule(js),
+      resolved = new Map<string, Resolved>();
+    for (const spec of info.specs) {
+      const r = await host.resolve(spec, file);
+      const path = typeof r === "string" ? r.replace(/[?#].*$/, "") : r;
+      let to: Resolved;
+      if (typeof path !== "string" || /[\\/]node_modules[\\/]/.test(path)) to = path;
+      else if (!isAbsolute(path) || !existsSync(path)) to = null;
+      else if (SCRIPT.test(path) || path.endsWith(".html")) to = path;
+      else to = ASSET.test(path) ? false : null;
+      resolved.set(spec, to);
+      if (typeof to === "string" && !program.has(to)) queue.push(to);
+    }
+    program.add(file, js, resolved, info);
+  }
+  return program.complete;
+}
+
+/** An HTML page's module scripts, as a module that imports each (`src`) or holds it (inline). */
+function htmlScripts(file: string, html: string): string {
+  let js = "";
+  for (const m of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)) {
+    const src = /\bsrc\s*=\s*["']([^"']+)["']/i.exec(m[1]!)?.[1];
+    if (src === undefined) js += m[2] + "\n;\n";
+    else js += `import ${JSON.stringify(src.startsWith("/") ? src : join(dirname(file), src))};\n`;
+  }
+  return js;
 }
 
 // #endregion

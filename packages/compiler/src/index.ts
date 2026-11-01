@@ -66,14 +66,19 @@
 //
 //   Bun.build({ plugins: [reactreCompiler()], ... })
 
+import { dirname, resolve } from "node:path";
+
 import type { BunPlugin } from "bun";
 
 import { hasMarks, mark, type SourceMapV3, unmark } from "./map.ts";
 import {
+  analyze,
   type Def,
   findDefs,
+  type Host,
   isFunction,
   moduleFacts,
+  type Program,
   type PropFacts,
   propReads,
   type PropUse,
@@ -82,6 +87,7 @@ import {
   scanModule,
   scopeAt,
   touches,
+  walk,
 } from "./program.ts";
 import { isIdent, literal, NOT_LITERAL, skipToken, splitAt, trimAt, until } from "./scan.ts";
 
@@ -105,11 +111,22 @@ export interface CompileOptions {
 export interface ReactreCompilerOptions {
   /** Files to compile; default .jsx and .tsx outside node_modules. */
   readonly filter?: RegExp;
+  /**
+   * Read the whole program before compiling, from the build's entrypoints, so a component's holes
+   * that read a prop are bound only where some call site passes that prop reactively. Default
+   * true. With false, or outside `Bun.build`, each file is seen alone (see `CompileOptions`).
+   */
+  readonly wholeProgram?: boolean;
 }
+
+/** A Bun loader for a script's path: tsx, ts, jsx or js. */
+const loaderOf = (path: string): "tsx" | "ts" | "jsx" | "js" =>
+  /\.[cm]?tsx$/.test(path) ? "tsx" : /\.[cm]?ts$/.test(path) ? "ts" : /\.[cm]?jsx$/.test(path) ? "jsx" : "js";
 
 /**
  * The Bun plugin: compiles the app's TSX files. Files under node_modules are left to Bun, since
- * packages ship JavaScript built for their own runtime.
+ * packages ship JavaScript built for their own runtime. In `Bun.build`, the program is read from
+ * the entrypoints first (`@reactre/compiler/program`), resolved as Bun resolves it.
  *
  * @example
  *   await Bun.build({ entrypoints: ["./app/main.tsx"], outdir: "dist", plugins: [reactreCompiler()] });
@@ -119,14 +136,64 @@ export function reactreCompiler(options: ReactreCompilerOptions = {}): BunPlugin
   return {
     name: "@reactre/compiler",
     setup(build) {
+      const host: Host = {
+        resolve(spec, importer) {
+          try {
+            return Bun.resolveSync(spec, dirname(importer));
+          } catch {
+            // What Bun cannot resolve fails the build, or is left to the runtime: not bundled.
+            return false;
+          }
+        },
+        transpile: (file, source) => transpileSource(source, loaderOf(file)),
+      };
+      let program: Promise<Program | null> = Promise.resolve(null);
+      const entries = (build.config as { entrypoints?: string[] } | undefined)?.entrypoints;
+      if (options.wholeProgram !== false && entries !== undefined)
+        build.onStart(() => {
+          program = analyze(
+            entries.map((e) => resolve(e)),
+            host,
+          );
+        });
       build.onLoad({ filter }, async ({ path }) => {
         if (path.includes("/node_modules/")) return undefined;
-        const source = await Bun.file(path).text();
+        const js = transpileSource(await Bun.file(path).text(), path.endsWith(".tsx") ? "tsx" : "jsx");
+        const props = await factsFor(await program, path, js, host);
         // The output is plain JavaScript: TypeScript and JSX are already gone.
-        return { contents: compileSource(source, path.endsWith(".tsx") ? "tsx" : "jsx"), loader: "js" };
+        return { contents: compileJs(js, props === undefined ? {} : { props }), loader: "js" };
       });
     },
   };
+}
+
+/**
+ * The facts of module `file` (of code `js`) in a build's `program`; undefined without one. A
+ * module the program does not have (or has with other code) joins it first, with what it reaches.
+ *
+ * @throws ReactreCompileError when that module makes the program incomplete, or passes a prop
+ *   reactively to a component compiled already without it.
+ */
+export async function factsFor(
+  program: Program | null,
+  file: string,
+  js: string,
+  host: Host,
+): Promise<PropFacts | undefined> {
+  if (program === null) return undefined;
+  if (!program.has(file, js)) {
+    const complete = await walk(program, [file], host, new Map([[file, js]]));
+    const wrong = program.check();
+    if (!complete || wrong !== null)
+      throw new ReactreCompileError(
+        `reactre: ${file} was not in the program read before the build` +
+          (wrong === null
+            ? `, and it imports what cannot be known while compiling`
+            : `, and it passes ${wrong.prop} reactively to ${wrong.component} in ${wrong.file}, compiled already`) +
+          "; set the plugin's `wholeProgram` option to false",
+      );
+  }
+  return program.factsOf(file);
 }
 
 /**
