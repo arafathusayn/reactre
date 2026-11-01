@@ -45,6 +45,9 @@ jobs:
           node-version: 24
           package-manager-cache: false
       - run: node packages/plugin/test/node.mjs
+      # A user's project, installed from the packed packages and type-checked with tsc against
+      # their dist/*.d.ts, skipLibCheck off.
+      - run: bun scripts/consumer.ts
 
   react-compat:
     name: React compatibility
