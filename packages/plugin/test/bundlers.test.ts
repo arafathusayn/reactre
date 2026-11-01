@@ -19,7 +19,7 @@ import { nodeResolve } from "@rollup/plugin-node-resolve";
 import { rspack } from "@rspack/core";
 import { build as esbuild } from "esbuild";
 import { build as rolldown } from "rolldown";
-import { rollup } from "rollup";
+import { type Plugin, rollup } from "rollup";
 import { build as vite } from "vite";
 import webpack from "webpack";
 
@@ -171,6 +171,25 @@ describe.each(Object.keys(bundlers))("%s", (name) => {
     expect(button.textContent).toBe("Clicked 1 times");
   }, 60_000);
 
+  test("core: a program that imports features/async gets the core's async runtime; one that does not, its default build", async () => {
+    const file = join(out, `${name}-async.js`);
+    await bundle(FIXTURES + "async/main.tsx", file, {});
+    expect(await Bun.file(file).text()).toContain("NotReadyError");
+    // Bun's build resolves the core's sources, which hold the async code, off until a module
+    // turns it on. Vite and Rollup's node-resolve, under bun test (NODE_ENV=test), resolve the
+    // "development" condition, the async build, which the plugin turns into the default one.
+    if (name !== "bun") expect(await Bun.file(join(out, `${name}-core.js`)).text()).not.toContain("NotReadyError");
+
+    installFakeDocument();
+    const root = new FakeElement("DIV");
+    const app = (await import(file)) as { mount(el: unknown): void; resolve(v: string): void };
+    app.mount(root);
+    expect(root.textContent).toBe("wait");
+    app.resolve("ready");
+    await microtasks();
+    expect(root.textContent).toBe("ready");
+  }, 60_000);
+
   test("core: the whole program binds a prop's hole only where a call site passes it reactively", async () => {
     const file = join(out, `${name}-props.js`);
     await bundle(FIXTURES + "props/main.tsx", file, {});
@@ -313,6 +332,64 @@ describe("vite: the server renderer's entry follows the build's target", () => {
     expect(app.message()).toBe(full);
     expect(await app.streamMessage()).toBe(full);
   }, 60_000);
+});
+
+describe("rollup: which build of @reactre/core the app gets", () => {
+  const build = async (entry: string, options: ReactreOptions, plugins: Plugin[] = []): Promise<string> => {
+    // A production build's conditions, whatever NODE_ENV says.
+    const resolve = nodeResolve({ browser: true, exportConditions: ["production"] });
+    const b = await rollup({ input: entry, plugins: [...plugins, rollupPlugin(options), resolve] });
+    const { output } = await b.generate({ format: "es" });
+    await b.close();
+    return output[0].code;
+  };
+
+  test("`async: true` gives an app that does not import the modules the async runtime", async () => {
+    // What it does not use of the runtime is tree-shaken; the error class stays.
+    expect(await build(FIXTURES + "core/main.tsx", { async: true })).toContain("NotReadyError");
+    expect(await build(FIXTURES + "core/main.tsx", {})).not.toContain("NotReadyError");
+  });
+
+  test("with no program read (`wholeProgram: false`), the async runtime, which is right either way", async () => {
+    expect(await build(FIXTURES + "core/main.tsx", { wholeProgram: false })).toContain("NotReadyError");
+  });
+
+  test("`async: false` with an app that imports features/async fails the build, naming the option", async () => {
+    const e = await build(FIXTURES + "async/main.tsx", { async: false }).catch((e: unknown) => e);
+    expect(messages(e)).toContain("needs @reactre/core's async runtime");
+    expect(messages(e)).toContain("the plugin's `async` option is false");
+  });
+
+  test("a module the program did not read that imports features/async fails the build", async () => {
+    // A virtual module, which the program cannot see into, leads to the app that imports it.
+    const late: Plugin = {
+      name: "late",
+      resolveId: (id) => (id === "virtual:late" ? "\0late" : null),
+      load: (id) => (id === "\0late" ? `export * from ${JSON.stringify(FIXTURES + "async/main.tsx")};` : null),
+    };
+    const entry = join(out, "late-entry.js");
+    writeFileSync(entry, 'export * from "virtual:late";\n');
+    const e = await build(entry, {}, [late]).catch((e: unknown) => e);
+    expect(messages(e)).toContain("imports neither @reactre/core/features/async nor /actions");
+  });
+
+  test("a package that only looks like the core is left alone", async () => {
+    for (const [dir, pkg] of [
+      ["core", '{ "name": "not-core" }'],
+      ["nopkg/core", null],
+    ] as const) {
+      const at = join(out, "lookalike", dir);
+      mkdirSync(join(at, "dist"), { recursive: true });
+      if (pkg !== null) writeFileSync(join(at, "package.json"), pkg);
+      writeFileSync(join(at, "dist/index.js"), "export const own = 1;\n");
+    }
+    const entry = join(out, "lookalike/main.js");
+    writeFileSync(
+      entry,
+      'export { own } from "./core/dist/index.js";\nexport { own as o2 } from "./nopkg/core/dist/index.js";\n',
+    );
+    expect(await build(entry, { async: true })).toContain("const own = 1");
+  });
 });
 
 /** Every message in a bundler's error: its own, and those of the errors or logs it carries. */

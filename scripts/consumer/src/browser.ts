@@ -15,6 +15,8 @@ import * as serverEdge from "@reactre/compat/server.edge";
 import * as serverNode from "@reactre/compat/server.node";
 import * as staticApi from "@reactre/compat/static";
 import * as core from "@reactre/core";
+import * as coreActions from "@reactre/core/features/actions";
+import * as coreAsync from "@reactre/core/features/async";
 import * as coreContext from "@reactre/core/features/context";
 import * as coreDynamic from "@reactre/core/features/dynamic";
 import * as coreErrors from "@reactre/core/features/errors";
@@ -60,6 +62,14 @@ setTodos((d) => {
 });
 const done: boolean = todos.list[0]!.done;
 const same: () => { id: number } = coreMemo.memo(() => ({ id: count() }), { equals: (a, b) => a.id === b.id });
+const user: () => { name: string } = coreAsync.memo(async () => ({ name: String(count()) }));
+const pending: boolean = coreAsync.isPending(() => user().name);
+const [likes, setLikes] = coreActions.createOptimistic(0);
+const like: (by: number) => Promise<string> = coreActions.action(function* (by: number) {
+  setLikes((n) => n + by);
+  yield coreAsync.refresh(user);
+  return "ok";
+});
 
 export const all: unknown[] = [
   dom,
@@ -72,6 +82,8 @@ export const all: unknown[] = [
   coreMemo,
   coreContext,
   coreErrors,
+  coreAsync,
+  coreActions,
   jsxRuntime,
   jsxDevRuntime,
   compat,
@@ -114,4 +126,7 @@ export const all: unknown[] = [
   fullEl,
   done,
   same,
+  pending,
+  likes,
+  like,
 ];

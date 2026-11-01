@@ -64,6 +64,32 @@ describe("store roots", () => {
     ).toEqual(new Set());
   });
 
+  test("findStores: features/actions's optimistic store is a store; its other functions and namesakes are not", () => {
+    const src = js(`
+      import { createOptimisticStore as opt, createOptimistic } from "@reactre/core/features/actions";
+      import * as A from "@reactre/core/features/actions";
+      import { createOptimisticStore as notIt } from "@reactre/core/features/store";
+      const [todos, setTodos] = opt(async () => [], []);
+      const [b] = A.createOptimisticStore({}), [c] = A.createOptimistic(0), [d] = createOptimistic(0);
+      const [e] = notIt({}), [f] = A.createStore({});
+    `);
+    expect([...findStores(src)].sort()).toEqual(["b", "todos"]);
+    // Its rows and reads are bound, as a store's are.
+    const out = compileSource(`
+      import { For } from "@reactre/core";
+      import { createOptimisticStore } from "@reactre/core/features/actions";
+      const [todos] = createOptimisticStore([{ id: 1, title: "a" }], []);
+      export const App = () => (
+        <ul data-n={todos.length}>
+          <For each={todos} key={(t) => t.id}>{(t) => <li>{t.title}</li>}</For>
+        </ul>
+      );
+    `);
+    expect(out).toContain("each: () => ([...(todos)])");
+    expect(out).toContain("() => (todos.length)");
+    expect(out).toContain("dyn: (t, __d) => { __d[0] = (t.title); }");
+  });
+
   test("rootsIn: a member read, a mention passed on, a namespace import's member; not a key or another's member", () => {
     const roots = new Set(["s", "state.store", "ns.*"]);
     expect(rootsIn(`s.count + s[i] + s?.a`, roots)).toEqual(["s"]);

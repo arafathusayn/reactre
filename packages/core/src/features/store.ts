@@ -12,7 +12,8 @@
 // depending on itself. A setter's writes are batched.
 //
 // In compiled TSX, a read through a store is reactive: @reactre/compiler takes a name bound by
-// `createStore(...)` or `createProjection(...)` for a store root, and so is an import (a module
+// `createStore(...)` or `createProjection(...)` (or by features/actions's `createOptimisticStore`,
+// which is built on them) for a store root, and so is an import (a module
 // of the whole program that exports a store, or, with each file compiled alone, any import from
 // outside @reactre, which may be one). A hole that mentions one is bound (`{store.count}`,
 // `<Show when={store.user}>`), and a prop that does is a getter. A <For> renders the array `each`
@@ -30,6 +31,9 @@
 //   - A feature module, built from @reactre/core's public API alone (`signal`, `effect`,
 //     `batch`, `untrack`): each property is a signal of a version number, bumped on a write, and
 //     the value lives in the object itself. An app that does not import it ships none of it.
+//   - `fn` of a derived store is synchronous: Solid 2.0's async one needs the core's async
+//     runtime, which an app that uses stores alone would then pay for. Read an async memo in it
+//     (@reactre/core/features/async), or use features/actions's `createOptimisticStore`.
 //   - Objects are wrapped when they are plain (Object.prototype or a null prototype) or arrays,
 //     and not frozen; anything else (a Date, a Map, a class instance) is returned as it is.
 //   - Values are unwrapped where they are compared or copied, not when they are written: an

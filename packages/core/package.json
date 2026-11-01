@@ -32,6 +32,8 @@
       "reactre-source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "bun": "./src/index.ts",
+      "reactre-async": "./dist/async/index.js",
+      "development": "./dist/async/index.js",
       "default": "./dist/index.js"
     },
     "./jsx-runtime": {
@@ -58,7 +60,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/index.ts src/jsx-runtime.ts src/jsx-dev-runtime.ts src/features/selectors.ts src/features/owner.ts src/features/timing.ts src/features/reaction.ts src/features/dynamic.ts src/features/store.ts src/features/memo.ts src/features/context.ts src/features/errors.ts --root src --outdir dist --target browser --format esm --packages external && bun ../../scripts/declarations.ts"
+    "build": "bun build.ts && bun ../../scripts/declarations.ts"
   },
   "dependencies": {
     "@reactre/dom": "workspace:*"

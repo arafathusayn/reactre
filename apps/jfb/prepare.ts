@@ -31,6 +31,7 @@ import { join } from "node:path";
 import type { BunPlugin } from "bun";
 
 import { withoutSlicing } from "../../packages/compat/src/withoutSlicing.ts";
+import { withoutAsync } from "../../packages/core/src/withoutAsync.ts";
 
 // #region Entries and paths
 
@@ -133,8 +134,9 @@ export async function buildEntry(name: string, entry: Entry, options: BuildOptio
       reactreCompatCompiler(options.inlineElements === undefined ? {} : { inlineElements: options.inlineElements }),
     );
   }
-  // @reactre/compat's core as its own builds compile it, without time slicing.
-  plugins.push(resolveFrom(packages, entry.react), withoutSlicing);
+  // @reactre/compat's core as its own builds compile it, without time slicing, and @reactre/core's
+  // as its default build compiles it, without its async code (Bun resolves both to their sources).
+  plugins.push(resolveFrom(packages, entry.react), withoutSlicing, withoutAsync);
   const dir = join(keyed, name);
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(join(dir, "dist"), { recursive: true });

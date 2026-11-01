@@ -41,6 +41,28 @@ try {
     console.log(`ok - vite build, ${mode}`);
   }
 
+  // @reactre/core's build: the default one for an app that does not import its async feature
+  // modules (the core fixture, above), the async runtime for one that does. The production
+  // conditions apply here, as NODE_ENV is not "test".
+  await build({
+    configFile: false,
+    logLevel: "silent",
+    plugins: [reactre()],
+    build: {
+      outDir: out,
+      emptyOutDir: false,
+      minify: false,
+      lib: { entry: fixtures + "async/main.tsx", formats: ["es"], fileName: () => "async.js" },
+    },
+  });
+  assert.doesNotMatch(
+    readFileSync(join(out, "core.js"), "utf8"),
+    /NotReadyError/,
+    "core: the async runtime was bundled",
+  );
+  assert.match(readFileSync(join(out, "async.js"), "utf8"), /NotReadyError/, "async: the async runtime is missing");
+  console.log("ok - vite build, the core's default build or its async runtime, by what the program imports");
+
   // APIs switched off: an app that keeps to the rest builds; one that uses a switched-off API
   // fails, naming it. Under Node the scan runs on oxc's native parser.
   const narrow = (entry, fileName) =>

@@ -125,8 +125,10 @@ describe("the plugin's hooks", () => {
    * `joiner` is the plugin that joins the modules it does not compile.
    */
   const raw = (options = {}): Raw & { joiner?: { transform: Raw["transform"] } } => {
-    const r = reactre.raw(options, { framework: "vite" } as never) as unknown as Raw | [Raw, Raw];
-    return Array.isArray(r) ? { ...r[0], joiner: r[1] } : r;
+    const r = reactre.raw(options, { framework: "vite" } as never) as unknown as Raw | (Raw & { name: string })[];
+    if (!Array.isArray(r)) return r;
+    const joiner = r.find((p) => p.name === "@reactre/plugin:program");
+    return joiner === undefined ? r[0]! : { ...r[0]!, joiner };
   };
 
   test("a one-shot build compiles each module with the program's facts; with wholeProgram off, each alone", async () => {

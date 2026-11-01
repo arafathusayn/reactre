@@ -253,6 +253,17 @@ The template is parsed once. `mount` clones it with values for its holes, in ord
 | `@reactre/core/features/errors`   | `<Errored fallback>`                 | Its children, or `fallback` (an element, or `(err, reset) => ...`) once something they made throws. `reset()` builds them again.              |
 |                                   | `effect(fn, { error })`              | The core's `effect`, with a handler for what its runs throw.                                                                                  |
 |                                   | `configureClientErrors({ onError })` | Gets what an effect, a slot or a row throws outside any boundary.                                                                             |
+| `@reactre/core/features/async`    | `memo(async () => ...)`              | `memo`, typed for an async function or an async iterable: it reads as what it resolves to, and before that is not ready.                      |
+|                                   | `<Loading fallback on>`              | Its children, once nothing they read is not ready; until then, `fallback`. With `on`, a change of it during an update shows `fallback` again. |
+|                                   | `<Reveal order>`                     | The `<Loading>` boundaries among its children shown `"natural"` (each when ready), `"sequential"` or `"together"`.                            |
+|                                   | `isPending(fn)`, `latest(fn)`        | Whether a change to what `fn` reads is in flight; `fn()`, read so that an update in flight does not hold it.                                  |
+|                                   | `resolve(fn)`, `refresh(target)`     | A Promise of `fn()` once it reads nothing pending; `refresh` computes a memo or an optimistic store again, quietly.                           |
+|                                   | `lazy(load)`, `NotReadyError`        | A component loaded the first time it renders (`preload()` starts it); what a read that is not ready throws where nothing waits.               |
+| `@reactre/core/features/actions`  | `action(function* () {...})`         | A mutation, run in a transition: yielded values are awaited, and the page goes from its optimistic state to the confirmed one at once.        |
+|                                   | `createOptimistic(v \| fn)`          | `[read, write]`: a write in an action's code shows at once and reverts when the transition ends; elsewhere it sets the value.                 |
+|                                   | `createOptimisticStore(v \| fn, s)`  | The same for a store, whose `fn` may be async; `refresh(store)` runs `fn` again.                                                              |
+|                                   | `affects(target, key?)`              | Marks what the action changes as pending, for `isPending`.                                                                                    |
+|                                   | `until(fn, { timeout, signal })`     | A Promise of the first truthy value of `fn`, which reads optimistic values as their base.                                                     |
 
 ```tsx
 import { createRoot } from "@reactre/core/features/owner";
@@ -262,11 +273,13 @@ import { createStore, reconcile } from "@reactre/core/features/store";
 import { memo, signal } from "@reactre/core/features/memo";
 import { createContext, useContext } from "@reactre/core/features/context";
 import { Errored } from "@reactre/core/features/errors";
+import { Loading, isPending } from "@reactre/core/features/async";
+import { action, createOptimistic } from "@reactre/core/features/actions";
 ```
 
 `onSettled`, `flush`, `createRoot`, `getOwner` and `runWithOwner` are Solid 2.0's, and `reaction` is its `createEffect(compute, apply)`, under MobX's name. `<Dynamic>` stays in `@reactre/core`, since it is compiled away; `dynamic()` is the runtime function beside it. Rows with several selector keys are a feature module too (see [What an app ships](#what-an-app-ships)).
 
-The store APIs are Solid 2.0's, under its names: setters are draft-first (`setStore((s) => { s.todos.push(todo) })`, with a block body, since an object the setter returns replaces the store's contents). `memo` and `signal` from `@reactre/core/features/memo` take core's arguments as core's do, plus Solid 2.0's options; its `lazy` and `unobserved` are left out, since core's signals do not count their readers. In TSX, the compiler knows a store by where it is made: a name bound by `const [store, setStore] = createStore(...)` or `const p = createProjection(...)`, with the functions imported from `@reactre/core/features/store` under any local name or through `import * as`. A store a module imports from another is one there too. A production build that reads the whole program (`@reactre/plugin`, or the compiler's own Bun plugin) knows which imports are stores, through re-exports and namespace imports; where each file is compiled alone (a dev server, `wholeProgram: false`, `compileSource`), any import from outside `@reactre` may be a store and is taken for one, as an exported component there takes every prop reactively. So the dev server and the build render the same updates; the build only binds fewer holes. A read through a store is reactive, as a signal's call is:
+The store APIs are Solid 2.0's, under its names: setters are draft-first (`setStore((s) => { s.todos.push(todo) })`, with a block body, since an object the setter returns replaces the store's contents). `memo` and `signal` from `@reactre/core/features/memo` take core's arguments as core's do, plus Solid 2.0's options; its `lazy` and `unobserved` are left out, since core's signals do not count their readers. In TSX, the compiler knows a store by where it is made: a name bound by `const [store, setStore] = createStore(...)` or `const p = createProjection(...)`, with the functions imported from `@reactre/core/features/store` under any local name or through `import * as`, or by `const [todos, setTodos] = createOptimisticStore(...)` from `@reactre/core/features/actions`. A store a module imports from another is one there too. A production build that reads the whole program (`@reactre/plugin`, or the compiler's own Bun plugin) knows which imports are stores, through re-exports and namespace imports; where each file is compiled alone (a dev server, `wholeProgram: false`, `compileSource`), any import from outside `@reactre` may be a store and is taken for one, as an exported component there takes every prop reactively. So the dev server and the build render the same updates; the build only binds fewer holes. A read through a store is reactive, as a signal's call is:
 
 ```tsx
 <p>{store.count}</p>                            // follows store.count
@@ -322,6 +335,50 @@ A provider and a boundary read their children inside themselves, so they need th
 An effect's own handler is an option of the effect, as Solid 2.0's `createEffect` has it: `effect(fn, { error })` from this module hands what a run of `fn` throws to `error` (untracked), and the effect keeps following what the run read before it threw. Without a boundary or `onError`, an error is thrown on to the write or the `render` that caused it, as without the module.
 
 Each module installs itself as it loads: context makes every owner keep the scope it was made in, and errors puts a try around every effect's run and a row's re-run. Neither is in the code of an app that does not import it: the size profiles without them are the same code as before, byte for byte with local names left unminified. With them, [`sizes.json`](sizes.json)'s `context` profile (a provider and its lookups) is 3,368 bytes gzipped, and `errors` (a boundary and its reset) 3,462: about 0.47 KB and 0.56 KB over the `slot` profile, an app with ownership alone.
+
+### Async data and actions
+
+```tsx
+import { Loading, isPending, memo, refresh } from "@reactre/core/features/async";
+import { action, createOptimisticStore } from "@reactre/core/features/actions";
+
+const user = memo(async () => (await fetch(`/users/${id()}`)).json());
+const [todos, setTodos] = createOptimisticStore(async () => (await fetch("/todos")).json(), []);
+
+const add = action(function* (title: string) {
+  setTodos((d) => {
+    d.push({ id: -1, title }); // shows at once, reverts when the action's transition ends
+  });
+  yield fetch("/todos", { method: "POST", body: title });
+  yield refresh(todos);
+});
+
+const App = () => (
+  <Loading fallback={<p>Loading...</p>}>
+    <h1 class={isPending(() => user()) ? "dim" : ""}>{user().name}</h1>
+    <ul>
+      <For each={todos} key={(t) => t.id}>
+        {(t) => <li>{t.title}</li>}
+      </For>
+    </ul>
+  </Loading>
+);
+```
+
+These are Solid 2.0's async model and actions. A memo may return a Promise or an async iterable; reading it before it has a value throws a not-ready signal, which the nearest `<Loading>` catches: its children are built at once, off the page, and go in when everything under it that waited has run again with a value. From then on it keeps them: an update that makes an async memo compute again is a transition, which holds the effects it would run, so the page keeps the old values until the new ones have come, and then shows them together. `isPending` is true meanwhile, and `latest` reads past the hold. An action is a generator run in that transition: an optimistic write in its code shows at once, and the transition ends when the action has returned and what it waits for has come. In TSX, an optimistic store is a store root, as `createStore`'s is (see the store reads above): `<For each={todos}>` follows its pushes and reverts, and `{t.title}` in its rows follows the item.
+
+They need the core's async runtime, which is a build of its own: `@reactre/core`'s default build has none of its code, so an app that imports neither module ships what it did without them (the size profiles are the same code, byte for byte). [@reactre/plugin](https://www.npmjs.com/package/@reactre/plugin) picks the async build for a program that imports either module; without it, resolve `@reactre/core` with the `"reactre-async"` export condition (`"development"` resolves it too). Imported with the default build, either module throws, naming the fix. Bun runs the sources, which hold the async runtime, inert until one of the modules loads. With it, [`sizes.json`](sizes.json)'s `async` profile (an async memo under a `<Loading>`, and `isPending`) is 5,315 bytes gzipped, and `actions` (an optimistic value and an action) 4,501.
+
+Where reactre differs from Solid 2.0:
+
+- Writes apply at once, as everywhere in reactre: a transition holds effects, not writes, so a write's new value is read at once outside an effect, and `latest` only marks the effect that reads through it as one the transition does not hold.
+- One transition is open at a time: updates and actions that overlap end together.
+- `isPending` is false for a plain signal that a transition holds the readers of; it is true for an async memo computing for an update (and what reads it) and for what `affects` marks.
+- A slot that runs again and reads something not ready keeps its old nodes on the page, frozen, until the value has come.
+- A memo made before either module loaded stays a plain memo.
+- In an async generator action, code after an `await` runs outside the action: yield the Promise instead.
+- An optimistic write outside an action sets the base value.
+- `createStore` and `createProjection` from `@reactre/core/features/store` take no async function, since that would cost every app that uses stores: read an async memo in `fn`, or use `createOptimisticStore`. `memo` from `@reactre/core/features/memo` stays synchronous.
 
 ## Timing
 

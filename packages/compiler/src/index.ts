@@ -30,8 +30,9 @@
 //     children are built when it reads them. In a component, a hole that reads a prop
 //     (`{props.n}`) is bound only if some call site may pass that prop reactively: the facts of
 //     ./program.ts, given as an option or found in the file alone.
-//   - A store of @reactre/core/features/store is read by member (`{store.count}`): a hole that
-//     mentions one the file binds (`const [store, setStore] = createStore(...)`) or imports is
+//   - A store of @reactre/core/features/store (or features/actions's `createOptimisticStore`) is
+//     read by member (`{store.count}`): a hole that mentions one the file binds
+//     (`const [store, setStore] = createStore(...)`) or imports is
 //     bound, and a prop that mentions one is a getter. With a whole program's facts, the imports
 //     that are stores are known; with the file seen alone, any import from outside @reactre may be
 //     one, and is taken for one, so a dev server renders what a production build does.

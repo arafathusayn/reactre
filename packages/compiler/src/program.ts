@@ -40,9 +40,10 @@
 //     a bundler transforms that the walk did not reach) joins with `walk`, and `check` says
 //     whether the facts given to modules compiled before it still hold.
 //
-// Stores (@reactre/core/features/store) are read by member, not by a call: `{store.count}`
-// subscribes to `count`. A module's store roots are the names it binds stores to
-// (`const [store, setStore] = createStore(...)`, `const p = createProjection(...)`, `findStores`),
+// Stores (@reactre/core/features/store, and features/actions's optimistic store) are read by
+// member, not by a call: `{store.count}` subscribes to `count`. A module's store roots are the
+// names it binds stores to (`const [store, setStore] = createStore(...)`, `const p =
+// createProjection(...)`, `const [todos, setTodos] = createOptimisticStore(...)`, `findStores`),
 // and those it imports from a module of the program that exports one, through re-exports and
 // namespace imports (`Program.factsOf` gives them as `PropFacts.stores`). An import the program
 // cannot see into may be a store, and is taken for one, as a component whose callers cannot all
@@ -608,36 +609,46 @@ const FLOW = new Set(["For", "Show", "Switch", "Match", "Repeat", "Portal", "Dyn
 /** A string literal's value: a specifier. */
 const unquote = (lit: string): string => lit.slice(1, -1);
 
-/** The module whose `createStore` and `createProjection` make the stores the compiler follows. */
-const STORE = "@reactre/core/features/store";
+/**
+ * The modules whose functions make the stores the compiler follows, and those functions:
+ * @reactre/core/features/store's `createStore` and `createProjection`, and
+ * @reactre/core/features/actions's `createOptimisticStore`, whose store is a projection too.
+ */
+const STORE_MAKERS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["@reactre/core/features/store", new Set(["createStore", "createProjection"])],
+  ["@reactre/core/features/actions", new Set(["createOptimisticStore"])],
+]);
 
 /**
  * The names a module binds stores to: the first name of the array pattern a `createStore(...)`
- * call is destructured into (`const [store, setStore] = createStore(...)`), and the name a
- * `createProjection(...)` call is assigned to. The functions are those @reactre/core/features/store
- * exports, imported under any local name or through a namespace import (`S.createStore`).
+ * or `createOptimisticStore(...)` call is destructured into (`const [store, setStore] =
+ * createStore(...)`), and the name a `createProjection(...)` call is assigned to. The functions
+ * are those @reactre/core/features/store and features/actions export, imported under any local
+ * name or through a namespace import (`S.createStore`).
  */
 export function findStores(src: string): Set<string> {
-  return src.includes(STORE) ? new Set(scanModule(src).stores) : new Set();
+  for (const spec of STORE_MAKERS.keys()) if (src.includes(spec)) return new Set(scanModule(src).stores);
+  return new Set();
 }
 
 /** `findStores`, from the module's tokens and its import bindings. */
 function storesOf(tokens: readonly Token[], m: Int32Array, imports: ReadonlyMap<string, Binding>): Set<string> {
   const out = new Set<string>(),
     fns = new Map<string, string>(),
-    namespaces = new Set<string>();
-  const maker = (name: string | undefined): name is string => name === "createStore" || name === "createProjection";
+    namespaces = new Map<string, ReadonlySet<string>>();
   for (const [local, b] of imports) {
-    if (b.spec !== STORE) continue;
-    if (b.name === "*") namespaces.add(local);
-    else if (maker(b.name)) fns.set(local, b.name);
+    const makers = STORE_MAKERS.get(b.spec);
+    if (makers === undefined) continue;
+    if (b.name === "*") namespaces.set(local, makers);
+    else if (makers.has(b.name)) fns.set(local, b.name);
   }
   for (let i = 0; i < tokens.length; i++) {
     const at = i,
       t = tokens[i]!.t;
     if (tokens[i - 1]?.t === ".") continue;
     let fn = fns.get(t);
-    if (namespaces.has(t) && tokens[i + 1]?.t === "." && maker(tokens[i + 2]?.t)) fn = tokens[(i += 2)]!.t;
+    const ns = namespaces.get(t);
+    if (ns !== undefined && tokens[i + 1]?.t === "." && ns.has(tokens[i + 2]?.t ?? "")) fn = tokens[(i += 2)]!.t;
     // `name = fn(...)`, or `[name, ...] = fn(...)`: not `==`, `+=` and the like.
     const before = tokens[at - 2];
     if (fn === undefined || tokens[i + 1]?.t !== "(" || tokens[at - 1]?.t !== "=" || before === undefined) continue;

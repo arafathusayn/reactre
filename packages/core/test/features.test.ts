@@ -36,6 +36,13 @@
 //              site passes a prop reactively; only spread props at a component call run
 //              something (`__props`, imported when used). The "props" profile uses them; the
 //              others pass static props only, and are the same bytes as before.
+//   async and  @reactre/core/features/async (async memos, <Loading>, isPending, ...) and
+//   actions    features/actions (actions, optimistic values). They need the core's async code,
+//              which sits between `// #if ASYNC` markers in index.ts: every other profile is
+//              bundled with it stripped (src/withoutAsync.ts), as the default build is, and is
+//              the same bytes as before it existed. The "async" and "actions" profiles are
+//              bundled with it, as @reactre/plugin bundles a program that imports either
+//              module; with it stripped, importing either throws, naming the fix.
 //
 // The size profiles (../sizes.json), one app each:
 //   jfb       the js-framework-benchmark app (apps/jfb/app/reactre.tsx): no opt-in at all.
@@ -55,6 +62,8 @@
 //   errors    an <Errored> whose child's hole throws on an update, and its reset.
 //   props     reactive props: holes that follow a prop, spread props passing them on (`__props`),
 //             and children built when the component reads them.
+//   async     an async memo under a <Loading>, an update that makes it pending, and isPending.
+//   actions   an action with an optimistic value, which reverts when it ends.
 //
 // The size budgets live in ../sizes.json. When a change is worth its bytes, record the new sizes:
 //
@@ -66,13 +75,18 @@ import { gzipSync } from "node:zlib";
 import { reactreCompiler } from "@reactre/compiler";
 import { FakeElement, installFakeDocument } from "@reactre/testdom";
 
+import { stripAsync, withoutAsync } from "../src/withoutAsync.ts";
+
 beforeEach(installFakeDocument);
 
 const scratch = Bun.fileURLToPath(new URL("../.cache/features", import.meta.url));
 const budgets = Bun.fileURLToPath(new URL("../sizes.json", import.meta.url));
 
-/** Bundle `src`, a TSX module body with `root` in scope: minified, or not to read its code. */
-async function bundle(name: string, src: string, minify = true): Promise<string> {
+/**
+ * Bundle `src`, a TSX module body with `root` in scope: minified, or not to read its code. The
+ * core is its default build (index.ts without its async code), or with `async`, its async build.
+ */
+async function bundle(name: string, src: string, minify = true, async = false): Promise<string> {
   const entry = `${scratch}/${name}.tsx`;
   await Bun.write(entry, src);
   const r = await Bun.build({
@@ -82,7 +96,7 @@ async function bundle(name: string, src: string, minify = true): Promise<string>
     target: "browser",
     // The packages' sources, as the repository's own builds resolve them.
     conditions: ["reactre-source"],
-    plugins: [reactreCompiler()],
+    plugins: async ? [reactreCompiler()] : [reactreCompiler(), withoutAsync],
   });
   if (!r.success) throw new Error(r.logs.join("\n"));
   return r.outputs[0]!.text();
@@ -346,6 +360,41 @@ const apps = {
     );
     globalThis.api = { setN, retry: () => retry() };
   `,
+  /** An async memo under a <Loading>, made pending by an update, with isPending beside it. */
+  async: `
+    import { render, signal } from "@reactre/core";
+    import { isPending, Loading, memo } from "@reactre/core/features/async";
+    const waits = [];
+    const [id, setId] = signal(1);
+    const user = memo(() => {
+      const i = id();
+      return new Promise((ok) => waits.push(() => ok("user " + i)));
+    });
+    render(
+      () => (
+        <div>
+          <Loading fallback={<i>wait</i>}>
+            <p class={isPending(() => user()) ? "dim" : ""}>{id()}:{user()}</p>
+          </Loading>
+        </div>
+      ),
+      root,
+    );
+    globalThis.api = { setId, next: () => waits.shift()() };
+  `,
+  /** An action with an optimistic value, which shows at once and reverts when it ends. */
+  actions: `
+    import { render } from "@reactre/core";
+    import { action, createOptimistic } from "@reactre/core/features/actions";
+    const [likes, setLikes] = createOptimistic(0);
+    let confirm;
+    const like = action(function* () {
+      setLikes((n) => n + 1);
+      yield new Promise((ok) => (confirm = ok));
+    });
+    render(() => <p>{likes()}</p>, root);
+    globalThis.api = { like, confirm: () => confirm() };
+  `,
 };
 
 describe("ownership", () => {
@@ -565,6 +614,62 @@ describe("props", () => {
   });
 });
 
+describe("async and actions", () => {
+  const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
+
+  test("off: the other profiles ship none of the async code", async () => {
+    for (const name of ["plain", "slot", "store", "storeEach", "context", "errors"] as const) {
+      const code = await bundle(name, apps[name], false);
+      for (const s of ["NotReadyError", "drainAsync", "class Computed", "__installAsync", "entangled"])
+        expect(code).not.toContain(s);
+    }
+  });
+
+  test("off: importing either module with the default build throws, naming the fix", async () => {
+    for (const name of ["async", "actions"] as const) {
+      const code = await bundle(name, apps[name]);
+      expect(() => run(code)).toThrow(`@reactre/core/features/${name} needs @reactre/core's async runtime`);
+      expect(() => run(code)).toThrow('"reactre-async" export condition');
+    }
+  });
+
+  test("async: the fallback, then the children; an update keeps the old UI, dimmed, until it settles", async () => {
+    const code = await bundle("async", apps.async, false, true);
+    expect(code).toContain("class Computed");
+    const { root, api } = run(await bundle("async", apps.async, true, true));
+    expect(text(root)).toBe("wait");
+    api.next!();
+    await tick();
+    expect(text(root)).toBe("1:user 1");
+    api.setId!(2);
+    const p = ((root.firstChild as FakeElement).childNodes as FakeElement[]).find((n) => n.tagName === "P")!;
+    expect([text(root), p.getAttribute("class")]).toEqual(["1:user 1", "dim"]);
+    api.next!();
+    await tick();
+    expect([text(root), p.getAttribute("class")]).toEqual(["2:user 2", null]);
+  });
+
+  test("actions: an optimistic write shows at once and reverts when the action ends", async () => {
+    const { root, api } = run(await bundle("actions", apps.actions, true, true));
+    expect(text(root)).toBe("0");
+    const done = api.like!() as Promise<void>;
+    expect(text(root)).toBe("1");
+    api.confirm!();
+    await done;
+    expect(text(root)).toBe("0");
+  });
+
+  test("stripAsync: a block's #else part uncommented in its place; stray or unclosed markers fail", () => {
+    const source = ["a();", "  // #if ASYNC", "  on();", "  // #else", "  // off();", "  //", "  // #endif", "b();"];
+    expect(stripAsync(source.join("\n"))).toBe(["a();", "  off();", "", "b();"].join("\n"));
+    expect(stripAsync("// #if ASYNC\nonly();\n// #endif")).toBe("");
+    expect(() => stripAsync("// #else")).toThrow('a stray "// #else"');
+    expect(() => stripAsync("// #endif")).toThrow('a stray "// #endif"');
+    expect(() => stripAsync("// #if ASYNC\n// #if ASYNC")).toThrow('a stray "// #if ASYNC"');
+    expect(() => stripAsync("// #if ASYNC\nx();")).toThrow("without");
+  });
+});
+
 describe("sizes", () => {
   test("each profile stays within its gzip budget", async () => {
     const jfb = Bun.fileURLToPath(new URL("../../../apps/jfb/app/reactre.tsx", import.meta.url));
@@ -590,6 +695,8 @@ describe("sizes", () => {
       "props",
     ] as const)
       measure(name, await bundle(name, apps[name]));
+    // With the core's async build, as @reactre/plugin bundles a program that imports them.
+    for (const name of ["async", "actions"] as const) measure(name, await bundle(name, apps[name], true, true));
     if (process.env.UPDATE_SIZES) {
       await Bun.write(budgets, JSON.stringify(sizes, null, 2) + "\n");
       return;

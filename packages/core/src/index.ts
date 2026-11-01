@@ -53,6 +53,12 @@
 //     wrap methods of the owned effect class as they load (see "Ownership").
 //   - Control flow (<Show>, <Switch>/<Match>, <Repeat>, <Portal>, <Dynamic>) is in ./flow.ts,
 //     compiled away as <For> is. `dynamic()`, which runs, is @reactre/core/features/dynamic.
+//   - Async data (@reactre/core/features/async and features/actions) needs every effect run to
+//     know when a read is not ready, and every update whether it waits for one, so its code is
+//     here, between `// #if ASYNC` markers (see "Async"). The default build (dist/index.js)
+//     drops it (./withoutAsync.ts), so it is the code as it was before; dist/async/index.js
+//     keeps it, and @reactre/plugin picks that build for a program that imports either module.
+//     Kept in, the code does nothing until one of the modules loads.
 //
 // The list is @reactre/dom's keyed List (reuse, minimal moves, swaps and
 // removals in place). Nothing here depends on React.
@@ -96,6 +102,12 @@ interface Observer extends Reader {
   q: boolean;
   /** A source it read has changed. */
   stale(): void;
+  // #if ASYNC
+  /** A memo's effect: it runs before the other observers of a batch, and is never held. */
+  m?: boolean;
+  /** Never held by a transition: it reads `isPending` or `latest`. */
+  lv?: boolean;
+  // #endif
 }
 
 /** The reader whose reads are being recorded; null outside any observer and inside `untrack`. */
@@ -106,22 +118,54 @@ let batching = 0;
 const pending: Observer[] = [];
 /** The next of `pending` to run: the ones before it have run (or are running). */
 let head = 0;
+// #if ASYNC
+/** The async runtime's hooks, once @reactre/core/features/async or /actions has loaded; null until then. */
+let A: AsyncHooks | null = null;
+/** Memo effects notified in a batch: they run before the rest of `pending` (see `drainAsync`). */
+const memos: Observer[] = [];
+/** The next of `memos` to run. */
+let mhead = 0;
+/** How many `drainAsync` calls are under way: while one is, a write queues its observers. */
+let draining = 0;
+// #endif
 
 /** Tell the observers of `s` that it changed: now, or at the end of the current batch. */
 function notify(s: Source): void {
   const subs = s.subs;
   if (subs.length === 0) return;
-  if (batching) {
+  // #if ASYNC
+  if (batching || draining) {
+    // #else
+    // if (batching) {
+    // #endif
     // The flag keeps each observer to one run per batch, without a search of the queue.
     for (let i = 0; i < subs.length; i++) {
       const o = subs[i]!;
+      // #if ASYNC
+      // An effect that wrote what its own run read runs again when that run ends, as below.
+      if (draining && (o as { state?: number }).state) {
+        o.stale();
+        continue;
+      }
+      // #endif
       if (!o.q) {
         o.q = true;
+        // #if ASYNC
+        if (A !== null && o.m) {
+          memos.push(o);
+          continue;
+        }
+        // #endif
         pending.push(o);
       }
     }
     return;
   }
+  // #if ASYNC
+  // With the async runtime on, every write is a batch of its own: its memos run first, so that
+  // by its effects' turn it is known whether the write made an async memo pending.
+  if (A !== null) return batch(() => notify(s));
+  // #endif
   // Re-running drops and re-adds subscriptions: run over a copy.
   const run = subs.slice();
   for (let i = 0; i < run.length; i++) run[i]!.stale();
@@ -152,6 +196,9 @@ export function batch<T>(fn: () => T): T {
     // passes it) before it runs: one that throws leaves the rest queued, still
     // flagged, for the next flush.
     if (--batching === 0) {
+      // #if ASYNC
+      if (A !== null) drainAsync();
+      // #endif
       while (head < pending.length) {
         const o = pending[head++]!;
         o.q = false;
@@ -256,6 +303,12 @@ class Effect implements Observer {
   private sources: Source[] = [];
   q = false;
   private state = IDLE;
+  // #if ASYNC
+  m = false;
+  lv = false;
+  /** While its last run read a value that was not ready: what `A.wait` gave for it. */
+  nr: unknown = null;
+  // #endif
   constructor(fn: () => void) {
     this.fn = fn;
   }
@@ -294,11 +347,27 @@ class Effect implements Observer {
     this.drop();
     const o = current;
     current = this;
+    // #if ASYNC
     try {
       this.fn();
+      if (this.nr !== null) ready(this);
+    } catch (err) {
+      // A read that was not ready: the run stops there, and what it wrote before stays. The
+      // effect runs again when the value comes (it reads it, even where the read was untracked),
+      // and its boundary waits for it until then.
+      if (A === null || err !== NOT_READY) throw err;
+      this.read(waiting!);
+      if (this.nr === null && !this.m) this.nr = A.wait(this, null);
     } finally {
       current = o;
     }
+    // #else
+    // try {
+    //   this.fn();
+    // } finally {
+    //   current = o;
+    // }
+    // #endif
   }
   /** Unsubscribe from every source of the last run. */
   drop(): void {
@@ -399,6 +468,9 @@ class OwnedEffect extends Effect implements Owner {
   dispose(): void {
     this.dead = true;
     this.drop();
+    // #if ASYNC
+    if (this.nr !== null) ready(this);
+    // #endif
     clean(this);
   }
   /** Run `fn` with `o` as the owner and no reader: what it creates belongs to `o`. */
@@ -497,6 +569,10 @@ export function effect(fn: () => void): void {
  *   double(); // 6
  */
 export function memo<T>(fn: () => T): () => T {
+  // #if ASYNC
+  // With the async runtime on, a memo may return a Promise or an AsyncIterable (see "Async").
+  if (A !== null) return computed(fn);
+  // #endif
   // The effect runs at once, so the placeholder undefined is never observed.
   const [read, write] = signal<T>(undefined as T);
   effect(() => write(fn()));
@@ -504,6 +580,387 @@ export function memo<T>(fn: () => T): () => T {
 }
 
 // #endregion
+
+// #if ASYNC
+// #region Async
+
+// The async runtime: what @reactre/core/features/async (async memos, <Loading>, `isPending`,
+// `refresh`, ...) and features/actions (actions, optimistic values) build on. Either module
+// installs it as it loads (`__installAsync`); until then nothing here runs, and every branch that
+// leads here is off (`A` is null). The default build has none of it (see ./withoutAsync.ts).
+//
+//   - An async memo is a memo whose function returned a Promise or an AsyncIterable. Until its
+//     first value comes, reading it throws NOT_READY: the effect or row whose run read it stops
+//     there, keeps what it showed, and runs again when the value comes. Its <Loading> (found by
+//     features/async through `A.wait`) shows its fallback until every run under it that waited
+//     has run through.
+//   - A memo with a value that runs again for a change keeps its value until the new one comes,
+//     and the change starts a transition: the observers its batch would run are held, but for
+//     memos (which run first, see `drainAsync`) and live observers (which read `isPending` or
+//     `latest`), and they run when every memo of the transition has its new value. So an update
+//     that makes an async read pending keeps the old UI, whole, until it settles. A batch in which
+//     a memo of the transition gets its value, the transition still waiting for others, is held
+//     too. One transition is open at a time: what overlaps it joins it.
+//   - Writes apply at once, as without the runtime: what is held is the effects, not the values.
+//     A read outside an effect (a handler, `latest`) sees the newest value.
+//   - Actions (features/actions) hold the transition open while they run (`holds`); its `done`
+//     list resolves them and reverts their optimistic writes when it ends.
+
+/** What @reactre/core/features/async gives the core: the boundaries that runs wait under. */
+export interface AsyncHooks {
+  /** Effect `o` (or row observer, of list `list`) read a value that was not ready: returns what `done` gets. */
+  wait(o: object, list: object | null): unknown;
+  /** What `wait` returned no longer waits: its run ran through, or it was disposed. */
+  done(token: unknown): void;
+}
+
+/** The hooks while features/actions is in without features/async: no boundaries. */
+const NO_BOUNDARIES: AsyncHooks = { wait: () => true, done: () => {} };
+
+/** What reading a value that is not ready throws (features/async exports it as NotReadyError). */
+export class __NotReadyError extends Error {
+  override name: string = "NotReadyError";
+  constructor() {
+    super(
+      "reactre: an async value was read before it resolved, where nothing waits for it: read it in an effect or in JSX, under a <Loading>",
+    );
+  }
+}
+/** Thrown, once made, for every read that is not ready: a run that catches it reads `waiting`. */
+const NOT_READY = new __NotReadyError();
+/** The source the last NOT_READY was thrown for. */
+let waiting: Source | null = null;
+
+/** `o` no longer waits: tell its boundary. */
+function ready(o: { nr: unknown }): void {
+  const t = o.nr;
+  o.nr = null;
+  if (A !== null) A.done(t);
+}
+
+/** A transition: the async memos an update made pending, and the observers held until they have their values. */
+export class __Transition {
+  /** The memos it waits for. */
+  readonly pending: Set<object> = new Set();
+  /** The memos it made pending (`pend`), to clear when it ends. */
+  readonly marked: { pend: boolean }[] = [];
+  /** The observers held until it ends. */
+  readonly held: { q: boolean; stale(): void }[] = [];
+  /** Run when it ends. */
+  readonly done: (() => void)[] = [];
+  /** The actions running in it: it ends only when none is. */
+  holds = 0;
+  /** What `affects` marked pending in it. */
+  affected: Set<object> | null = null;
+}
+
+/** The open transition, if any. */
+let T: __Transition | null = null;
+/** The transition of the action whose code is running (`__act`). */
+let acting: __Transition | null = null;
+/** The transition the observers of this drain are held for; null: they run. */
+let entangled: __Transition | null = null;
+/** The memo `refresh` runs: it runs again without a transition. */
+let quiet: Computed<unknown> | null = null;
+/** Read by `isPending`'s readers: notified when what is pending changes. */
+const pendSrc: Source = { subs: [] };
+
+/**
+ * The end of a batch with the async runtime on: memos first, then the other observers, each
+ * held, if the batch belongs to a transition, unless it is live. Runs as the default loop runs:
+ * each observer leaves the queue before it runs, and one that throws leaves the rest queued.
+ */
+function drainAsync(): void {
+  draining++;
+  try {
+    for (;;) {
+      let o: Observer;
+      if (mhead < memos.length) o = memos[mhead++]!;
+      else if (head < pending.length) {
+        o = pending[head++]!;
+        if (entangled !== null && !o.lv) {
+          // Still flagged: a later write leaves it in place, and it runs once, when the transition ends.
+          entangled.held.push(o);
+          continue;
+        }
+      } else break;
+      o.q = false;
+      o.stale();
+    }
+    memos.length = mhead = 0;
+    pending.length = head = 0;
+  } finally {
+    if (--draining === 0) entangled = null;
+  }
+}
+
+/** Transition `t` has what it waited for: clear what is pending, revert, and run what it held. */
+function complete(t: __Transition): void {
+  T = null;
+  if (entangled === t) entangled = null;
+  const end = (): void => {
+    for (const c of t.marked) c.pend = false;
+    notify(pendSrc);
+    for (const f of t.done) f();
+    for (const o of t.held) pending.push(o as Observer);
+  };
+  // In a drain, its loop runs what this queues.
+  if (draining) end();
+  else batch(end);
+}
+
+/**
+ * A memo with the async runtime on: a source its readers read, and the effect that computes it.
+ * Its value is what `fn` returned, or what a Promise it returned resolved to, or the last value
+ * an AsyncIterable it returned gave.
+ */
+class Computed<T> implements Source {
+  subs: Observer[] = [];
+  v: T | undefined = undefined;
+  /** Whether it has a value: a readers' read before it does is not ready. */
+  has = false;
+  /** What its last async run failed with, thrown to its readers; NONE when it did not. */
+  err: unknown = NONE;
+  /** A run for a change is in flight, or its transition has not ended: `isPending` is true. */
+  pend = false;
+  /** The run whose result is awaited; null when none is. */
+  tok: object | null = null;
+  /** The iterator of the AsyncIterable its run returned. */
+  it: AsyncIterator<T> | null = null;
+  /** What `refresh` returned and waits for the next result. */
+  w: [() => void, (e: unknown) => void][] | null = null;
+  readonly e: OwnedEffect;
+  constructor(fn: () => unknown) {
+    this.e = new Owned(() => this.set(fn()));
+    this.e.m = true;
+  }
+  get(): T {
+    if (current !== null) current.read(this);
+    if (this.err !== NONE) throw this.err;
+    if (!this.has) {
+      waiting = this;
+      throw NOT_READY;
+    }
+    return this.v as T;
+  }
+  /** What a run of `fn` returned. */
+  set(r: unknown): void {
+    const it = this.it;
+    this.it = null;
+    if (it !== null) void it.return?.();
+    if (typeof r === "object" && r !== null) {
+      if (typeof (r as PromiseLike<T>).then === "function") return this.start(r as PromiseLike<T>, null);
+      const iterate = (r as Partial<AsyncIterable<T>>)[Symbol.asyncIterator];
+      if (typeof iterate === "function") return this.start(null, iterate.call(r));
+    }
+    this.tok = null;
+    this.err = NONE;
+    this.put(r as T);
+    const t = T;
+    if (t !== null && t.pending.delete(this)) __settle(t);
+  }
+  /** Wait for a Promise's value, or an iterator's values. */
+  private start(p: PromiseLike<T> | null, it: AsyncIterator<T> | null): void {
+    const tok = (this.tok = {});
+    this.it = it;
+    if (quiet !== this && this.has) {
+      // A change made it pending: the update's transition.
+      const t = (T ??= new __Transition());
+      if (!this.pend) {
+        this.pend = true;
+        t.marked.push(this);
+        notify(pendSrc);
+      }
+      t.pending.add(this);
+      if (draining) entangled = t;
+    } else if (acting !== null) acting.pending.add(this);
+    const no = (e: unknown): void => {
+      if (this.tok === tok) this.settle(undefined, e, true);
+    };
+    if (p !== null)
+      p.then((v) => {
+        if (this.tok === tok) this.settle(v, NONE, true);
+      }, no);
+    else {
+      const pull = (): void =>
+        void it!.next().then((r) => {
+          if (this.tok !== tok) return;
+          if (r.done) this.tok = null;
+          else {
+            this.settle(r.value, NONE, false);
+            pull();
+          }
+        }, no);
+      pull();
+    }
+  }
+  /** A value (or, with `err`, a failure) came; `last` when no more will for this run. */
+  private settle(v: T | undefined, err: unknown, last: boolean): void {
+    if (last) this.tok = null;
+    batch(() => {
+      const t = T;
+      if (t !== null && t.pending.delete(this)) {
+        // The transition still waits: what this value re-runs waits with it.
+        if (t.pending.size !== 0 || t.holds !== 0) entangled = t;
+        else complete(t);
+      }
+      if (err === NONE) {
+        this.err = NONE;
+        this.put(v as T);
+      } else {
+        this.err = err;
+        notify(this);
+      }
+      const w = this.w;
+      this.w = null;
+      if (w !== null) for (const [ok, no] of w) err === NONE ? ok() : no(err);
+    });
+  }
+  put(v: T): void {
+    if (this.has && v === this.v) return;
+    this.has = true;
+    this.v = v;
+    notify(this);
+  }
+  /** Run again, outside any transition (but an action's), and wait for the result. */
+  refresh(): Promise<void> {
+    batch(() => {
+      quiet = this as Computed<unknown>;
+      try {
+        this.e.stale();
+      } finally {
+        quiet = null;
+      }
+    });
+    return this.tok === null ? Promise.resolve() : new Promise((ok, no) => (this.w ??= []).push([ok, no]));
+  }
+}
+
+/** Each memo's `refresh`, by its read function; features/actions adds its optimistic stores'. */
+export const __refreshers: WeakMap<object, () => Promise<void>> = new WeakMap();
+
+/** `memo(fn)` with the async runtime on. */
+function computed<T>(fn: () => T): () => T {
+  const c = new Computed<T>(fn);
+  const read = (): T => c.get();
+  __refreshers.set(read, () => c.refresh());
+  c.e.run();
+  return read;
+}
+
+/** Records reads, and whether one of them is pending. */
+class Probe implements Reader {
+  hit = false;
+  readonly o: Reader | null;
+  constructor(o: Reader | null) {
+    this.o = o;
+  }
+  read(s: Source): void {
+    if (this.o !== null) this.o.read(s);
+    if (!this.hit && pendingOf(s)) this.hit = true;
+  }
+}
+
+/** Whether a change to `s` is in flight: an async memo's run, a memo of one, what `affects` marked. */
+function pendingOf(s: Source): boolean {
+  if (T !== null && T.affected !== null && T.affected.has(s)) return true;
+  if (!(s instanceof Computed)) return false;
+  if (s.pend) return true;
+  const ss = (s.e as unknown as { sources: Source[] }).sources;
+  for (let i = 0; i < ss.length; i++) if (pendingOf(ss[i]!)) return true;
+  return false;
+}
+
+/**
+ * Internal (features/async's `isPending`): run `fn`, read as the current reader reads, and say
+ * whether a read was pending. The current reader also follows what is pending.
+ */
+export function __probe<T>(fn: () => T): [T, boolean] {
+  if (current !== null) current.read(pendSrc);
+  const o = current,
+    p = new Probe(o);
+  current = p;
+  try {
+    return [fn(), p.hit];
+  } finally {
+    current = o;
+  }
+}
+
+/** Internal: the current observer is live: no transition holds it. */
+export function __live(): void {
+  const o = current === rowContext ? rowContext.entry.obs : current;
+  if (o !== null) (o as Observer).lv = true;
+}
+
+/** Internal (features/actions' `affects`): the sources `fn` reads. A read that is not ready ends it. */
+export function __capture(fn: () => unknown): object[] {
+  const out: Source[] = [],
+    o = current;
+  current = { read: (s) => void (out.includes(s) || out.push(s)) };
+  try {
+    fn();
+  } catch (e) {
+    if (e !== NOT_READY) throw e;
+  } finally {
+    current = o;
+  }
+  return out;
+}
+
+/** Internal: mark `sources` pending until transition `t` ends. */
+export function __affect(t: __Transition, sources: readonly object[]): void {
+  const a = (t.affected ??= new Set());
+  for (const s of sources) a.add(s);
+  notify(pendSrc);
+}
+
+/** Internal: the open transition, made if there is none. */
+export function __transition(): __Transition {
+  return (T ??= new __Transition());
+}
+
+/** Internal: the open transition, or null. */
+export function __open(): __Transition | null {
+  return T;
+}
+
+/** Internal: end transition `t` if it waits for nothing and runs no action. */
+export function __settle(t: __Transition): void {
+  if (t === T && t.pending.size === 0 && t.holds === 0) complete(t);
+}
+
+/** Internal: run `fn` as code of an action of transition `t`. */
+export function __act<R>(t: __Transition, fn: () => R): R {
+  const p = acting;
+  acting = t;
+  try {
+    return fn();
+  } finally {
+    acting = p;
+  }
+}
+
+/** Internal: the transition of the action whose code is running, or null. */
+export function __acting(): __Transition | null {
+  return acting;
+}
+
+/**
+ * Internal: turn the async runtime on, with `hooks` (features/async), or with the hooks given
+ * before (features/actions, which has none of its own); `false` turns it off, for tests.
+ */
+export function __installAsync(hooks?: AsyncHooks | false): void {
+  if (hooks === false) {
+    A = null;
+    T = acting = entangled = null;
+    return;
+  }
+  A = hooks ?? A ?? NO_BOUNDARIES;
+}
+
+// #endregion
+// #endif
 
 // #region Selector
 
@@ -717,6 +1174,13 @@ class RowObserver implements Observer {
   readonly entry: Row<unknown>;
   private sources: Source[] = [];
   q = false;
+  // #if ASYNC
+  lv = false;
+  /** While the row's last run read a value that was not ready: what `A.wait` gave for it. */
+  nr: unknown = null;
+  /** The row has left its list: a transition that held this observer does not run it. */
+  d = false;
+  // #endif
   constructor(list: ForList<unknown, unknown>, entry: Row<unknown>) {
     this.list = list;
     this.entry = entry;
@@ -727,6 +1191,9 @@ class RowObserver implements Observer {
     s.subs.push(this);
   }
   stale(): void {
+    // #if ASYNC
+    if (this.d) return;
+    // #endif
     this.list.refresh(this.entry);
   }
   /** Unsubscribe from every source: before a re-run, and when the row leaves the list. */
@@ -854,13 +1321,32 @@ class ForList<T, K> {
     rowContext.list = this as ForList<unknown, unknown>;
     rowContext.entry = e as Row<unknown>;
     current = rowContext;
+    // #if ASYNC
     try {
       this.spec.dyn!(item, out);
+      if (e.obs !== null && e.obs.nr !== null) ready(e.obs);
+    } catch (err) {
+      // A read that was not ready, as an effect's run takes it: the row's holes are empty until
+      // the value comes, and its boundary waits for it.
+      if (A === null || err !== NOT_READY) throw err;
+      rowContext.read(waiting!);
+      out.fill(undefined, 0, this.nd);
+      const ob = e.obs!;
+      if (ob.nr === null) ob.nr = A.wait(ob, this);
     } finally {
       current = o;
       rowContext.list = pl;
       rowContext.entry = pe;
     }
+    // #else
+    // try {
+    //   this.spec.dyn!(item, out);
+    // } finally {
+    //   current = o;
+    //   rowContext.list = pl;
+    //   rowContext.entry = pe;
+    // }
+    // #endif
   }
 
   /** Give row `e` a new item of the same key: write the holes whose values changed. */
@@ -923,7 +1409,15 @@ class ForList<T, K> {
 
   /** A row leaves the list: unsubscribe it, so it stops re-running. */
   protected dispose(e: Row<T>): void {
-    if (e.obs !== null) e.obs.drop();
+    // #if ASYNC
+    if (e.obs !== null) {
+      e.obs.drop();
+      e.obs.d = true;
+      if (e.obs.nr !== null) ready(e.obs);
+    }
+    // #else
+    // if (e.obs !== null) e.obs.drop();
+    // #endif
   }
 
   /** A selector this list's rows asked has moved from prev to next. */

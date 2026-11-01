@@ -93,6 +93,10 @@ reactre({
   // reactre mode: read the whole program at a production build's start, so a component's holes
   // that read a prop are bound only where some call site passes that prop reactively.
   wholeProgram: true,
+  // reactre mode: which build of @reactre/core the app gets. true, its async runtime, which
+  // @reactre/core/features/async and /actions need; false, its default build. Unset: the async
+  // runtime where the program imports either module, or where no program is read.
+  async: undefined,
 });
 ```
 
@@ -103,6 +107,18 @@ In reactre mode, a prop that may change is passed to a component as a getter, an
 - Only a one-shot build reads it: `vite build`, Rollup, Rolldown, esbuild (again at each rebuild of a context), webpack, Rspack and `Bun.build`. A dev server and watch mode compile each file alone, where a component the file exports gets every prop reactively.
 - A build whose graph the plugin cannot see (`import(expr)`, `import.meta.glob`, `require.context`, a virtual module, a file type that may import code, webpack's function entries) compiles each file alone too.
 - A module the program did not reach (a chunk another plugin adds) joins it at its transform, whether the plugin compiles it or not: a `.js` or `.ts` module, or a virtual one, that calls a component by hand is one of its callers. If it passes a prop reactively to a component compiled already without it, the build fails, naming both. In Rollup, Rolldown and Vite, a late file that is not a script (a `.vue` or `.mdx` file another plugin makes code of) joins once it is JavaScript. `wholeProgram: false` compiles each file alone. A build never ships a hole written once that some caller passes a prop reactively.
+
+### The async runtime
+
+@reactre/core has two builds: its default one, and one with the async runtime that `@reactre/core/features/async` and `@reactre/core/features/actions` need (async memos, `<Loading>`, transitions, actions). An app that uses neither ships none of that code. In reactre mode the plugin picks the build: whichever one the bundler resolved becomes the chosen one, so the whole app shares one core.
+
+- A one-shot build that reads its program gets the async runtime if some module of it imports either feature module, and the default build if none does.
+- A dev server, watch mode and `wholeProgram: false` read no program, so they get the async runtime, which is inert until one of the modules loads.
+- `async: true` or `async: false` decides it. With the default build, a module that imports either feature module fails the build, naming the option: one the program did not reach (a chunk another plugin adds) needs `async: true`.
+
+`Bun.build` resolves @reactre/core to its TypeScript sources (the `bun` condition), which hold both: there the async runtime's code ships, inert until one of the modules loads.
+
+Without the plugin, the export condition `"reactre-async"` resolves `@reactre/core` to its async build, and `"development"` does too. Bun runs the sources, which hold both.
 
 ### Switching React APIs off
 
