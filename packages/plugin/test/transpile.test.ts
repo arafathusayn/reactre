@@ -26,7 +26,11 @@ async function corpus(): Promise<{ name: string; id: string; source: string }[]>
       out.push({ name: id, id, source: await Bun.file(ROOT + id).text() });
     }
   }
-  for (const file of ["packages/compat/test/compiler.test.ts", "packages/core/test/index.test.ts"]) {
+  for (const file of [
+    "packages/compat/test/compiler.test.ts",
+    "packages/core/test/index.test.ts",
+    "packages/core/test/flow.test.ts",
+  ]) {
     const text = await Bun.file(ROOT + file).text();
     let n = 0;
     // Template literals with JSX in them and no substitutions: the sources the tests compile.
