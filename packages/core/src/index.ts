@@ -1995,20 +1995,59 @@ function at(parent: Element): Text {
  * holes that read only the item are compared when the list renders it again
  * with a new item. `fallback` is shown while `each` is empty.
  *
+ * `keyed={(item) => key}` is `key`, under Solid 2.0's name. With `keyed={false}` (Solid 2.0's
+ * replacement for `<Index>`), rows are by position (@reactre/core/features/index, which the
+ * compiler imports): the row at index `i` is built once, and gets an accessor of its item,
+ * `(item, i) => ...`, whose holes follow a new item at that position.
+ *
  * @example
  *   <tbody>
  *     <For each={rows()} key={(row) => row.id}>
  *       {(row) => <tr><td>{row.label}</td></tr>}
  *     </For>
  *   </tbody>
+ *   <ul>
+ *     <For each={names()} keyed={false}>
+ *       {(name, i) => <li>{i + 1}. {name()}</li>}
+ *     </For>
+ *   </ul>
  */
-export function For<T>(_props: {
+// The overloads that `keyed` added are TYPES blocks, which every build strips: they ship no code,
+// and Bun's minifier names locals by the letters of the source, types included (./withoutAsync.ts).
+// #if TYPES
+export function For<T>(props: {
   each: readonly T[];
   key: (item: T) => string | number;
   /** Shown while `each` is empty. */
   fallback?: Child;
   children: (item: T) => unknown;
-}): unknown {
+}): unknown;
+export function For<T>(props: {
+  each: readonly T[];
+  /** The key of an item, as `key`. */
+  keyed: (item: T) => string | number;
+  /** Shown while `each` is empty. */
+  fallback?: Child;
+  children: (item: T) => unknown;
+}): unknown;
+export function For<T>(props: {
+  each: readonly T[];
+  /** Rows by position: a row gets an accessor of the item at its index, and the index. */
+  keyed: false;
+  /** Shown while `each` is empty. */
+  fallback?: Child;
+  children: (item: () => T, i: number) => unknown;
+}): unknown;
+export function For(_props: unknown): unknown {
+  // #else
+  // export function For<T>(_props: {
+  //   each: readonly T[];
+  //   key: (item: T) => string | number;
+  //   /** Shown while `each` is empty. */
+  //   fallback?: Child;
+  //   children: (item: T) => unknown;
+  // }): unknown {
+  // #endif
   throw new Error("reactre: <For> must be compiled by @reactre/compiler");
 }
 

@@ -122,6 +122,16 @@ const accepted = (): Node[] => {
     <>
       <p />
     </>,
+    <ul>
+      <For each={rows()} keyed={false}>
+        {(row, i) => <li title={String(i)}>{row().label}</li>}
+      </For>
+    </ul>,
+    <ul>
+      <For each={rows()} keyed={(row) => row.id}>
+        {(row) => <li>{row.label}</li>}
+      </For>
+    </ul>,
   ];
 };
 void accepted;
@@ -161,6 +171,10 @@ const errors = (): Node[] => [
   <For each={rows()} key={(row) => row.missing}>
     {(row) => <tr>{row.label}</tr>}
   </For>,
+  // @ts-expect-error a row by position gets an accessor of its item, not the item
+  <For each={rows()} keyed={false} children={(row: Row) => <tr>{row.label}</tr>} />,
+  // @ts-expect-error keyed is false or a key function
+  <For each={rows()} keyed={true} children={(row: () => Row) => <tr>{row().label}</tr>} />,
   // @ts-expect-error a component's props are checked
   <Button id={1} onClick={() => {}} />,
   // @ts-expect-error a component's required props are required

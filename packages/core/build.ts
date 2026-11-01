@@ -30,6 +30,7 @@ const features = [
   "errors",
   "async",
   "actions",
+  "index",
 ];
 const options = {
   root: join(dir, "src"),

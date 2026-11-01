@@ -453,7 +453,9 @@ function compile(js: string, map: boolean, options: CompileOptions = {}): string
   let names = `__template as __rrT, __for as __rrFor, __insert as __rrInsert, __bind as __rrBind, __slot as __rrSlot, untrack as __rrUntrack`;
   for (const [name, alias] of EXTRA_HELPERS)
     if (new RegExp(`\\b${alias}\\b`).test(code)) names += `, ${name} as ${alias}`;
-  const features = c.selectors ? `import "@reactre/core/features/selectors";\n` : "";
+  const features =
+    (c.selectors ? `import "@reactre/core/features/selectors";\n` : "") +
+    (c.index ? `import { __index as __rrIndex } from "@reactre/core/features/index";\n` : "");
   return `${features}import { ${names} } from "@reactre/core";\n` + code;
 }
 
@@ -504,6 +506,8 @@ class Compiler {
   readonly templates: string[] = [];
   /** Whether a row may read several selector keys, so the file imports @reactre/core/features/selectors. */
   selectors = false;
+  /** Whether a `<For keyed={false}>` is in the file, so it imports @reactre/core/features/index. */
+  index = false;
   /** Whether the output carries marks for a source map (./map.ts). */
   readonly map: boolean;
   /** The control flow the file imports, by the type its jsx calls name (see `flowNames`). */
@@ -1161,7 +1165,9 @@ class Compiler {
   /**
    * `<For each key>{(row) => <tr/>}</For>` in the slot at `anchor`: a statement that starts the
    * keyed list, with a spec in the shape of reactre's ForSpec. A `<Repeat count from>` is the
-   * same list over the indexes, keyed by the index.
+   * same list over the indexes, keyed by the index. With `keyed={false}`, the list is by position:
+   * the spec goes through @reactre/core/features/index's `__index`, which keys it by position, and
+   * the row is given its position's accessor and index (`(item, i) =>`).
    *
    * With a `fallback`, `each` also writes a signal of whether the list is empty, which a slot
    * beside the list follows. The list then keeps its anchor even as its element's only child: a
@@ -1189,6 +1195,8 @@ class Compiler {
     // Whether `each` mentions a store root: its items are stores, so the row follows what it reads
     // of its item (see below).
     let store = false;
+    // `keyed={false}`: rows by position, whose item is an accessor (see `index`).
+    const index = !repeat && forIndex(p, keyArg);
     if (repeat) {
       const [count, countAt] = p.get("count") ?? [];
       const other = [...p.keys()].find((k) => !["count", "from", "fallback", "children"].includes(k));
@@ -1207,7 +1215,8 @@ class Compiler {
       key = () => "(__rrI) => __rrI";
     } else {
       const [e, eAt] = p.get("each") ?? [],
-        [k, kAt] = keyArg !== undefined ? [keyArg, keyArgAt] : (p.get("key") ?? []);
+        [k, kAt] =
+          keyArg !== undefined ? [keyArg, keyArgAt] : index ? ["", -1] : (p.get("key") ?? p.get("keyed") ?? []);
       if (e === undefined || k === undefined || children === undefined) {
         throw new ReactreCompileError("reactre: <For> needs each, key and a row function as its child");
       }
@@ -1219,13 +1228,20 @@ class Compiler {
       each = () => (copy ? `[...(${this.rewrite(e, eAt ?? -1)})]` : this.rewrite(e, eAt ?? -1));
       key = () => this.rewrite(k, kAt ?? -1);
     }
-    // One plain parameter, so it can name the row in every hole's own function below.
-    const fn = /^\(?\s*([A-Za-z_$][\w$]*)\s*\)?\s*=>\s*([\s\S]*)$/.exec(children.trim());
+    // One plain parameter, so it can name the row in every hole's own function below. A row by
+    // position may take its index too: both are taken from the position's cell (`__index`).
+    const two = index
+      ? /^\(\s*([A-Za-z_$][\w$]*)\s*,\s*([A-Za-z_$][\w$]*)\s*\)\s*=>\s*([\s\S]*)$/.exec(children.trim())
+      : null;
+    const fn =
+      two !== null
+        ? [two[0], two[1], two[3]]
+        : /^\(?\s*([A-Za-z_$][\w$]*)\s*\)?\s*=>\s*([\s\S]*)$/.exec(children.trim());
     if (fn === null)
       throw new ReactreCompileError(
-        `reactre: a <${name}> row must be (${repeat ? "i" : "row"}) => <element />: ${children}`,
+        `reactre: a <${name}> row must be (${repeat ? "i" : index ? "item, i" : "row"}) => <element />: ${children}`,
       );
-    const param = fn[1]!;
+    const param = index ? `{ v: ${fn[1]!}${two !== null ? `, i: ${two[2]!}` : ""} }` : fn[1]!;
     // The body ends where children does (children is trimmed already).
     let [body, bodyAt] = trimAt(fn[2]!, childrenAt! < 0 ? -1 : childrenAt! + children.length - fn[2]!.length);
     // Strip any parentheses around the body.
@@ -1237,7 +1253,7 @@ class Compiler {
     // In a row over a store, the item is a store root: a hole that reads it (`t.done`) is reactive,
     // since a store's item changes in place and the row never gets a new item for it. Only the
     // row's own code sees it so; `each`, `key` and `fallback` are compiled after.
-    const item = store && !this.stores.has(param);
+    const item = store && !index && !this.stores.has(param);
     if (item) this.stores.add(param);
     const t = this.tree(row);
     const id = this.template(t);
@@ -1289,16 +1305,22 @@ class Compiler {
     const fallback = p.get("fallback");
     const n = fallback === undefined ? -1 : this.uid++;
     // dyn, events and mounts are left out when empty, so the runtime does no work for them per row.
-    const spec =
+    let spec =
       (fallback === undefined
         ? `{ each: () => (${each()}), `
         : `{ each: () => { const __rrL = (${each()}); __rrS${n}(__rrL.length === 0); return __rrL; }, `) +
-      `key: ${key()}, t: ${id}, ` +
+      (index ? "" : `key: ${key()}, `) +
+      `t: ${id}, ` +
       `fill: (${param}, __v) => { ${fill.join(" ")} }, holes: ${JSON.stringify(holes)}` +
       (dyn.length ? `, dyn: (${param}, __d) => { ${dyn.join(" ")} }, dynHoles: ${JSON.stringify(dynHoles)}` : "") +
       (events.length ? `, events: [${events.join(", ")}]` : "") +
       (mounts.length ? `, mounts: [${mounts.join(", ")}]` : "") +
       " }";
+    // Rows by position: the keyed list over the positions' cells, from @reactre/core/features/index.
+    if (index) {
+      spec = `__rrIndex(${spec})`;
+      this.index = true;
+    }
     // A row that may read two selector keys needs the runtime's support for several.
     if (keyCalls > 1) this.selectors = true;
     // Only a row with mounts takes the list that runs them: a row of host elements and values
@@ -1621,6 +1643,25 @@ function keyedOf(p: ReadonlyMap<string, readonly [string, number]>, name: Flow):
   if (typeof lit !== "boolean")
     throw new ReactreCompileError(`reactre: <${name}>'s keyed must be written as true or false, not ${k[0]}`);
   return lit;
+}
+
+/**
+ * Whether a `<For>`'s props make its rows by position: `keyed={false}`, Solid 2.0's `<Index>`.
+ * `keyed` written as a function is the key, as `key` is.
+ *
+ * @throws ReactreCompileError for `keyed` beside `key`, or written as anything else: it decides
+ *   what compiles.
+ */
+function forIndex(p: ReadonlyMap<string, readonly [string, number]>, keyArg: string | undefined): boolean {
+  const k = p.get("keyed");
+  if (k === undefined) return false;
+  if (keyArg !== undefined || p.has("key"))
+    throw new ReactreCompileError("reactre: <For> takes key or keyed, not both");
+  if (literal(k[0]) === false) return true;
+  if (/^(?:async\s+)?(?:function\b|\([^)]*\)\s*=>|[A-Za-z_$][\w$]*\s*=>)/.test(k[0])) return false;
+  throw new ReactreCompileError(
+    `reactre: <For>'s keyed must be written as false (rows by position) or a key function, not ${k[0]}`,
+  );
 }
 
 /**

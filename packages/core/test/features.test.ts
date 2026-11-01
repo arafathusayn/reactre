@@ -36,6 +36,8 @@
 //              site passes a prop reactively; only spread props at a component call run
 //              something (`__props`, imported when used). The "props" profile uses them; the
 //              others pass static props only, and are the same bytes as before.
+//   lists by   `<For keyed={false}>`: the compiler imports @reactre/core/features/index for a
+//   position   file that has one, which turns its spec into a keyed one over positions.
 //   async and  @reactre/core/features/async (async memos, <Loading>, isPending, ...) and
 //   actions    features/actions (actions, optimistic values). They need the core's async code,
 //              which sits between `// #if ASYNC` markers in index.ts: every other profile is
@@ -71,6 +73,7 @@
 //             and children built when the component reads them.
 //   async     an async memo under a <Loading>, an update that makes it pending, and isPending.
 //   actions   an action with an optimistic value, which reverts when it ends.
+//   index     a <For keyed={false}>, whose rows are by position.
 //   dev       jfb with the development build (the core's index.ts as it is).
 //
 // The size budgets live in ../sizes.json. When a change is worth its bytes, record the new sizes:
@@ -207,6 +210,13 @@ const apps = {
     function Card(props) { return <section><Label {...props} />{props.children}</section>; }
     render(() => <Card n={n()}><i>{n() * 10}</i></Card>, root);
     globalThis.api = { setN };
+  `,
+  /** A list by position: each row keeps its index, and a new item at it updates the row in place. */
+  index: `
+    import { For, render, signal } from "@reactre/core";
+    const [names, setNames] = signal(["a", "b"]);
+    render(() => <ul><For each={names()} keyed={false}>{(name, i) => <li>{i}:{name()}</li>}</For></ul>, root);
+    globalThis.api = { setNames };
   `,
   /** A row that reads two selectors through a function of its own, which the compiler cannot see. */
   hidden: `
@@ -555,6 +565,24 @@ describe("control flow", () => {
   });
 });
 
+describe("lists by position", () => {
+  test("off: an app without a <For keyed={false}> ships none of features/index", async () => {
+    for (const name of ["plain", "show", "store", "storeEach"] as const)
+      expect(await bundle(name, apps[name], false)).not.toContain("function __index(");
+  });
+
+  test("on: rows keep their index, and a new item at it updates the row in place", async () => {
+    expect(await bundle("index", apps.index, false)).toContain("function __index(");
+    const { root, api } = run(await bundle("index", apps.index));
+    const ul = root.firstChild as FakeElement;
+    expect(text(root)).toBe("0:a1:b");
+    const first = ul.firstChild;
+    api.setNames!(["c", "b", "d"]);
+    expect(text(root)).toBe("0:c1:b2:d");
+    expect(ul.firstChild).toBe(first);
+  });
+});
+
 describe("stores and memo options", () => {
   test("off: an app that does not import them ships none of their code", async () => {
     for (const name of ["plain", "slot", "attach", "reaction"] as const) {
@@ -735,6 +763,7 @@ describe("sizes", () => {
       "context",
       "errors",
       "props",
+      "index",
     ] as const)
       measure(name, await bundle(name, apps[name]));
     // With the core's async code, as both plugins bundle a program that imports them.
