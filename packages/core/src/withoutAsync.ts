@@ -31,7 +31,10 @@
 //
 // features/memo.ts has DEV and TYPES blocks too (its checks for options only the compiler can
 // give, and their types): dist/features/memo.js is built without them, dist/dev/features/memo.js
-// with them, and the plugins strip the source as they strip index.ts.
+// with them, and the plugins strip the source as they strip index.ts. So do the feature modules
+// with Solid 2.0's development messages and misuse errors: features/owner, context, errors,
+// timing, reaction and effects (`DEV_FEATURES`). Two of them import what features/owner exports
+// in its own DEV blocks (`__ban`, `__refuse`), so a build strips all or none, as the plugins do.
 //
 // As in @reactre/compat (see its withoutSlicing.ts), a define that turns the branches off would not
 // do: Bun's minifier names symbols by how often they are used, dead code included, so the
@@ -46,6 +49,18 @@ import type { BunPlugin } from "bun";
 
 /** The names of the blocks index.ts marks. */
 export type Block = "ASYNC" | "DEV" | "TYPES";
+
+/** The feature modules with development blocks of their own, which each build strips as it strips index.ts. */
+export const DEV_FEATURES: readonly string[] = [
+  "memo",
+  "hydrate",
+  "owner",
+  "context",
+  "errors",
+  "timing",
+  "reaction",
+  "effects",
+];
 
 /** What the default build strips. */
 export const PRODUCTION: readonly Block[] = ["ASYNC", "DEV", "TYPES"];
@@ -103,21 +118,21 @@ export function stripDev(source: string): string {
 }
 
 /**
- * A Bun plugin that loads @reactre/core's index.ts, and features/memo.ts, features/hydrate.ts and
+ * A Bun plugin that loads @reactre/core's index.ts, and the feature modules of `DEV_FEATURES` and
  * server.ts (which have development and type blocks of their own), without the blocks `names`
  * (see `strip`).
  */
 export function without(...names: Block[]): BunPlugin {
+  const filter = new RegExp(
+    `[\\\\/]core[\\\\/]src[\\\\/](?:index|server|features[\\\\/](?:${DEV_FEATURES.join("|")}))\\.ts$`,
+  );
   return {
     name: "reactre-core-without-" + names.join("-").toLowerCase(),
     setup(build) {
-      build.onLoad(
-        { filter: /[\\/]core[\\/]src[\\/](?:index|server|features[\\/](?:memo|hydrate))\.ts$/ },
-        async (args) => ({
-          contents: strip(await Bun.file(args.path).text(), names),
-          loader: "ts",
-        }),
-      );
+      build.onLoad({ filter }, async (args) => ({
+        contents: strip(await Bun.file(args.path).text(), names),
+        loader: "ts",
+      }));
     },
   };
 }

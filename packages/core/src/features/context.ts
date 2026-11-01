@@ -111,10 +111,48 @@ export interface Context<T> {
 /** What `useContext` throws for a context without a default, where no provider is above. */
 export class ContextNotFoundError extends Error {
   override name: string = "ContextNotFoundError";
-  constructor() {
-    super("reactre: useContext found no provider of a context that has no default");
+  // #if DEV
+  /**
+   * In the development build, with the context and whether a provider above gave it `undefined`:
+   * a message that says which case it is and how to fix it.
+   */
+  constructor(ctx?: Context<unknown>, provided?: boolean) {
+    super(ctx === undefined ? GENERIC : notFound(ctx, provided === true));
   }
+  // #else
+  // constructor() {
+  //   super("reactre: useContext found no provider of a context that has no default");
+  // }
+  // #endif
 }
+// #if DEV
+
+/**
+ * `createContext`'s options, Solid 2.0's: `name`, which the development build's messages name the
+ * context by. (A string is taken as the name too, as Solid's signals layer takes it.)
+ */
+export interface ContextOptions {
+  readonly name?: string;
+}
+
+/** ContextNotFoundError's message without a context: the production build's. */
+const GENERIC = "reactre: useContext found no provider of a context that has no default";
+
+/** By context, what the development build knows of it: its name, and whether `undefined` was given as its default. */
+const named = new WeakMap<object, { readonly name: string | undefined; readonly undef: boolean }>();
+
+/** The development build's message for a read of `ctx` that found no value. */
+function notFound(ctx: Context<unknown>, provided: boolean): string {
+  const info = named.get(ctx),
+    which = info?.name === undefined ? "a context" : `the context "${info.name}"`,
+    nul = "createContext<T | null>(null)";
+  if (provided)
+    return `reactre CONTEXT_PROVIDED_UNDEFINED: useContext read ${which}, and the provider above gave it undefined, which counts as not provided ("no value", for a context). Fix: for an empty value, create the context with a null default (${nul}) and provide null.`;
+  if (info?.undef === true)
+    return `reactre CONTEXT_NOT_FOUND: useContext found no provider of ${which}, and createContext(undefined) gives it no default (undefined is "no value", for a context). Fix: render a provider above this read, or use null as its empty default (${nul}).`;
+  return `reactre CONTEXT_NOT_FOUND: useContext found no provider of ${which}, which has no default. Fix: render a provider above this read, or create the context with a default; for an optional context, use null as its empty default (${nul}), not undefined.`;
+}
+// #endif
 
 /**
  * A context, which is a component: `<Ctx value={v}>children</Ctx>` makes `v` what `useContext(Ctx)`
@@ -129,6 +167,8 @@ export class ContextNotFoundError extends Error {
  *
  * With `defaultValue`, `useContext` returns it where no provider is above. Without one,
  * `useContext` throws `ContextNotFoundError` there. A provider of `undefined` is no provider.
+ * In the development build, `options.name` (Solid 2.0's option) names the context in that
+ * error's message, which says whether a provider gave it `undefined` and how to fix the read.
  *
  * @example
  *   import { createContext, useContext } from "@reactre/core/features/context";
@@ -141,14 +181,28 @@ export class ContextNotFoundError extends Error {
  *     </Theme>
  *   ); // <b>dark</b>
  */
-export function createContext<T>(defaultValue?: T): Context<T> {
+// #if DEV
+export function createContext<T>(defaultValue?: T, options?: ContextOptions | string): Context<T> {
+  // #else
+  // export function createContext<T>(defaultValue?: T): Context<T> {
+  // #endif
   const id = Symbol();
   const provider = (props: { value: T; children?: ContextChildren }): unknown => {
     const s: Scope = Object.create(__scope());
     s[id] = props.value;
     return __Owned.within(__root(s), () => __children(props));
   };
-  return Object.assign(provider, { id, defaultValue });
+  // #if DEV
+  const ctx = Object.assign(provider, { id, defaultValue });
+  named.set(ctx, {
+    name: typeof options === "string" ? options : options?.name,
+    // An explicit undefined is no default either; the message says so.
+    undef: arguments.length > 0 && defaultValue === undefined,
+  });
+  return ctx;
+  // #else
+  // return Object.assign(provider, { id, defaultValue });
+  // #endif
 }
 
 /**
@@ -168,5 +222,10 @@ export function useContext<T>(ctx: Context<T>): T {
   const v = __scope()[ctx.id] as T | undefined;
   if (v !== undefined) return v;
   if (ctx.defaultValue !== undefined) return ctx.defaultValue;
-  throw new ContextNotFoundError();
+  // #if DEV
+  // A provider of undefined above is in the scope's chain, as a key holding undefined.
+  throw new ContextNotFoundError(ctx as Context<unknown>, ctx.id in __scope());
+  // #else
+  // throw new ContextNotFoundError();
+  // #endif
 }

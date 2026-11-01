@@ -909,6 +909,22 @@ describe("development build", () => {
     }
   });
 
+  test("off: the feature modules' Solid 2.0 messages and misuse errors are the development build's alone", async () => {
+    // Profiles of features/owner, context, errors, timing, reaction and effects.
+    const codes = [
+      "CONTEXT_NOT_FOUND",
+      "PRIMITIVE_IN_FORBIDDEN_SCOPE",
+      "FLUSH_IN_SETTLED",
+      "SETTLED_CLEANUP_UNOWNED",
+      "INVALID_CLEANUP",
+      "console.error",
+    ];
+    for (const name of ["root", "settled", "reaction", "context", "errors", "effects"] as const) {
+      const code = await bundle(name, apps[name], false);
+      for (const s of codes) expect(code).not.toContain(s);
+    }
+  });
+
   test("on: the benchmark app with the development build renders, and checks its lists' keys", async () => {
     const jfb = Bun.fileURLToPath(new URL("../../../apps/jfb/app/reactre.tsx", import.meta.url));
     const code = await bundle("dev", await Bun.file(jfb).text(), false, false, true);

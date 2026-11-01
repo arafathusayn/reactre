@@ -14,7 +14,14 @@ import { coreRuntime } from "@reactre/compiler/program";
 import { FakeElement, installFakeDocument } from "@reactre/testdom";
 import type { BunPlugin } from "bun";
 
+import { type Context, createContext, useContext } from "../src/features/context.ts";
+import { bind } from "../src/features/effects.ts";
+import { Errored, type ErroredFallback } from "../src/features/errors.ts";
+import { createRoot, getOwner, runWithOwner } from "../src/features/owner.ts";
+import { reaction } from "../src/features/reaction.ts";
+import { flush, onSettled } from "../src/features/timing.ts";
 import * as runtime from "../src/index.ts";
+import { batch, onCleanup } from "../src/index.ts";
 import { ASYNC_PRODUCTION, PRODUCTION, strip, stripDev, without } from "../src/withoutAsync.ts";
 
 let warns: ReturnType<typeof spyOn<Console, "warn">>;
@@ -174,6 +181,151 @@ describe("diagnostics", () => {
   });
 });
 
+// Solid 2.0's misuse errors and messages, in the feature modules' development blocks: what an
+// autorun's function or an onSettled callback with an owner may not make, a cleanup that is not
+// one, a flush inside a settle, and the context and boundary messages (test/solid ports the
+// cases Solid tests; these are the rest).
+describe("the feature modules' development checks", () => {
+  test("PRIMITIVE_IN_FORBIDDEN_SCOPE: an effect, a memo, a root or a bind made in an onSettled callback with an owner", () => {
+    const thrown: string[] = [];
+    const tries = [
+      () => runtime.effect(() => {}),
+      () => runtime.memo(() => 1),
+      () => createRoot(() => {}),
+      () =>
+        bind(
+          () => 1,
+          () => {},
+        ),
+    ];
+    flush(() =>
+      createRoot(() => {
+        runtime.effect(() => {});
+        onSettled(() => {
+          for (const t of tries)
+            try {
+              t();
+            } catch (e) {
+              thrown.push((e as Error).message);
+            }
+        });
+      }),
+    );
+    expect(thrown.map((m) => /^reactre (\w+): (an? \w+)/.exec(m)!.slice(1))).toEqual([
+      ["PRIMITIVE_IN_FORBIDDEN_SCOPE", "an effect"],
+      ["PRIMITIVE_IN_FORBIDDEN_SCOPE", "an effect"],
+      ["PRIMITIVE_IN_FORBIDDEN_SCOPE", "an effect"],
+      ["PRIMITIVE_IN_FORBIDDEN_SCOPE", "a bind"],
+    ]);
+    expect(thrown[0]).toContain("Fix: make it outside the callback");
+  });
+
+  test("the owner's lists work as before once the callback is done; one under another owner is made", () => {
+    const log: string[] = [];
+    let root!: ReturnType<typeof getOwner>;
+    let dispose!: () => void;
+    flush(() =>
+      createRoot((d) => {
+        dispose = d;
+        root = getOwner();
+        onCleanup(() => log.push("root cleanup"));
+        onSettled(() => {
+          // Another owner may make what it likes; so may onSettled, whose cleanup is its own.
+          runWithOwner(null, () =>
+            createRoot(() => {
+              runtime.effect(() => void log.push("inner effect"));
+              onCleanup(() => log.push("inner cleanup"));
+            }),
+          );
+          onSettled(() => void log.push("nested"));
+        });
+      }),
+    );
+    runWithOwner(root, () => runtime.effect(() => void log.push("later effect")));
+    expect(log).toEqual(["inner effect", "nested", "later effect"]);
+    dispose();
+    expect(log).toContain("root cleanup");
+  });
+
+  test("an owner disposed by its own onSettled callback stays disposed", () => {
+    const log: string[] = [];
+    const [on, setOn] = runtime.signal(true);
+    flush(() =>
+      createRoot(() =>
+        runtime.effect(() => {
+          if (!on()) return;
+          onCleanup(() => log.push("gone"));
+          onSettled(() => setOn(false));
+        }),
+      ),
+    );
+    expect(log).toEqual(["gone"]);
+  });
+
+  test("flush() in an onSettled callback with no owner drains as it always did", () => {
+    const log: number[] = [];
+    batch(() =>
+      onSettled(() => {
+        flush();
+        log.push(1);
+      }),
+    );
+    expect(log).toEqual([1]);
+  });
+
+  test("INVALID_CLEANUP: a reaction's apply or an onSettled callback returning null", () => {
+    expect(() =>
+      createRoot(() =>
+        reaction(
+          () => 1,
+          () => null as never,
+        ),
+      ),
+    ).toThrow("reactre INVALID_CLEANUP: a reaction's apply returned null");
+    expect(() => flush(() => createRoot(() => onSettled(() => null as never)))).toThrow(
+      "reactre INVALID_CLEANUP: an onSettled callback returned null",
+    );
+    batch(() => {});
+  });
+
+  test("CONTEXT_NOT_FOUND names a context by its name option, or as a context", () => {
+    const Named = createContext<number>(undefined as never, { name: "Count" });
+    const message = (c: Context<number>): string => {
+      try {
+        createRoot(() => useContext(c));
+      } catch (e) {
+        return (e as Error).message;
+      }
+      return "";
+    };
+    expect(message(Named)).toContain('no provider of the context "Count", and createContext(undefined)');
+    expect(message(createContext<number>())).toContain("no provider of a context, which has no default");
+  });
+
+  test("<Errored>: a fallback that is not a function of the error logs it", () => {
+    const errors = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const root = new FakeElement("DIV");
+      const boundary = (fallback: ErroredFallback, message: string) => () =>
+        Errored({
+          fallback,
+          get children(): never {
+            throw new Error(message);
+          },
+        });
+      runtime.render(boundary("fell", "element"), root as unknown as Element);
+      runtime.render(
+        boundary((e) => (e as Error).message, "kept"),
+        root as unknown as Element,
+      );
+      expect(root.textContent).toBe("fellkept");
+      expect(errors.mock.calls.map((c) => (c[0] as Error).message)).toEqual(["element"]);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+});
+
 // #region Bundles
 
 const scratch = Bun.fileURLToPath(new URL("../.cache/dev", import.meta.url));
@@ -301,6 +453,28 @@ describe("coreRuntime: the development build for a dev server, a production one 
     }
   });
 
+  test("the feature modules with Solid 2.0's messages: their sources stripped, their builds swapped", async () => {
+    for (const f of ["owner", "context", "errors", "timing", "reaction", "effects"]) {
+      const path = join(core, `src/features/${f}.ts`),
+        readF = () => Bun.file(path).text();
+      expect(await coreRuntime(path, readF, true, false, true)).toBeNull();
+      const code = (await coreRuntime(path, readF, false, false))!;
+      expect(code).toBe(strip(await readF(), ["DEV", "TYPES"]));
+      expect(code).not.toContain("#if DEV");
+    }
+    const at = mkdtempSync(join(tmpdir(), "reactre-core-context-builds-"));
+    try {
+      mkdirSync(join(at, "dist/dev/features"), { recursive: true });
+      mkdirSync(join(at, "dist/features"));
+      const [prod, dev] = [join(at, "dist/features/context.js"), join(at, "dist/dev/features/context.js")];
+      for (const f of [prod, dev]) writeFileSync(f, "");
+      expect(await coreRuntime(prod, read, true, false, true)).toBe('export * from "../dev/features/context.js";\n');
+      expect(await coreRuntime(dev, read, false, false)).toBe('export * from "../../features/context.js";\n');
+    } finally {
+      rmSync(at, { recursive: true, force: true });
+    }
+  });
+
   test("a core whose stripper knows only async blocks: stripped of those, else as it is", async () => {
     const at = mkdtempSync(join(tmpdir(), "reactre-core-old-stripper-"));
     try {
@@ -335,6 +509,18 @@ describe("the package's build", () => {
     expect(memo).not.toContain("needs @reactre/plugin");
     expect(devMemo).toContain("needs @reactre/plugin");
     for (const m of [memo, devMemo]) expect(m).toContain("function __observedMemo(");
+    // The feature modules with Solid 2.0's development messages and misuse errors, likewise.
+    for (const [f, s] of [
+      ["owner", "PRIMITIVE_IN_FORBIDDEN_SCOPE"],
+      ["context", "CONTEXT_NOT_FOUND"],
+      ["errors", "console.error"],
+      ["timing", "FLUSH_IN_SETTLED"],
+      ["reaction", "INVALID_CLEANUP"],
+      ["effects", "__refuse"],
+    ] as const) {
+      expect(text(`features/${f}.js`)).not.toContain(s);
+      expect(text(`dev/features/${f}.js`)).toContain(s);
+    }
   }, 30_000);
 });
 

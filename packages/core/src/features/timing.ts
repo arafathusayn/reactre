@@ -22,6 +22,26 @@
 
 import { __batching, __drain, __head, __pending, batch, onCleanup } from "@reactre/core";
 import { getOwner, runWithOwner } from "@reactre/core/features/owner";
+// #if DEV
+// prettier-ignore
+import { __ban } from "@reactre/core/features/owner";
+
+/** How many onSettled callbacks with an owner are running, one inside another: flush() throws in one. */
+let settling = 0;
+
+/**
+ * Run an onSettled callback `fn` under its owner `o`, where, as in Solid 2.0, it makes nothing
+ * of its own (it returns its cleanup) and flush() throws.
+ */
+function settled<T>(o: NonNullable<ReturnType<typeof getOwner>>, fn: () => T): T {
+  settling++;
+  try {
+    return __ban(o, () => runWithOwner(o, fn));
+  } finally {
+    settling--;
+  }
+}
+// #endif
 
 /**
  * Apply writes now: Solid 2.0's `flush`, which replaces its `batch`.
@@ -50,6 +70,12 @@ import { getOwner, runWithOwner } from "@reactre/core/features/owner";
 export function flush(): void;
 export function flush<T>(fn: () => T): T;
 export function flush<T>(fn?: () => T): T | void {
+  // #if DEV
+  if (settling !== 0)
+    throw new Error(
+      "reactre FLUSH_IN_SETTLED: flush() was called in an onSettled callback that has an owner, which runs in the flush that settles the update, so it cannot drain again there. Fix: write without flushing (the writes apply in the same drain), or defer it: queueMicrotask(() => flush()).",
+    );
+  // #endif
   const r = fn === undefined ? undefined : batch(fn);
   __drain();
   return r;
@@ -123,14 +149,36 @@ export function onSettled(fn: () => void | (() => void)): void {
   const o = getOwner();
   // 0 until it runs; then 1, or the cleanup `fn` returned. 1 too when the owner goes first.
   let s: 0 | 1 | (() => void) = 0;
-  onCleanup(() => {
-    if (typeof s === "function") s();
-    s = 1;
-  });
+  // #if DEV
+  // Its own cleanup is no cleanup the app makes: an onSettled in another's callback is fine.
+  __ban(null, () =>
+    onCleanup(() => {
+      if (typeof s === "function") s();
+      s = 1;
+    }),
+  );
+  // #else
+  // onCleanup(() => {
+  //   if (typeof s === "function") s();
+  //   s = 1;
+  // });
+  // #endif
   const run = (): void => {
     if (s !== 0) return;
     s = 1;
-    const c = runWithOwner(o, fn);
+    // #if DEV
+    const c = o === null ? runWithOwner(o, fn) : settled(o, fn);
+    if (c !== undefined && typeof c !== "function")
+      throw new TypeError(
+        `reactre INVALID_CLEANUP: an onSettled callback returned ${c === null ? "null" : typeof c}, not a cleanup function or undefined. Fix: return a function to run when its owner goes, or nothing (an async callback returns a Promise: run the async work inside it instead).`,
+      );
+    if (o === null && c !== undefined)
+      throw new Error(
+        "reactre SETTLED_CLEANUP_UNOWNED: an onSettled callback with no owner returned a cleanup, which nothing would ever run. Fix: call onSettled where an owner is (a component's body, an effect), or return nothing from it here (an event handler, a module's top level).",
+      );
+    // #else
+    // const c = runWithOwner(o, fn);
+    // #endif
     if (typeof c === "function") s = c;
   };
   // In a batch, or while its queue drains: then `head` is past 0, as it stays after an effect of

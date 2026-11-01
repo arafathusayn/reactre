@@ -1287,12 +1287,11 @@ const ASYNC_FEATURE: RegExp = /^@reactre\/core\/features\/(?:async|actions)$/;
 
 /**
  * The files of @reactre/core that hold or need its async runtime, by path: its three builds, its
- * source index.ts, and its async feature modules, built or source; and features/memo and
- * features/hydrate, whose sources have development and type blocks too, and whose builds have a
- * development one.
+ * source index.ts, and its async feature modules, built or source; and the feature modules whose
+ * sources have development blocks too, and whose builds have a development one (`MEMO_FILE`).
  */
 export const CORE_RUNTIME: RegExp =
-  /[\\/]core[\\/](?:dist[\\/](?:(?:async|dev)[\\/])?index\.js|src[\\/](?:index|server)\.ts|(?:dist|src)[\\/]features[\\/](?:async|actions|memo|hydrate)\.[jt]s|dist[\\/]dev[\\/]features[\\/](?:memo|hydrate)\.js|dist[\\/](?:dev[\\/])?server\.js)$/;
+  /[\\/]core[\\/](?:dist[\\/](?:(?:async|dev)[\\/])?index\.js|src[\\/](?:index|server)\.ts|(?:dist|src)[\\/]features[\\/](?:async|actions|memo|hydrate|owner|context|errors|timing|reaction|effects)\.[jt]s|dist[\\/]dev[\\/]features[\\/](?:memo|hydrate|owner|context|errors|timing|reaction|effects)\.js|dist[\\/](?:dev[\\/])?server\.js)$/;
 
 /** Of those, the server entry (@reactre/core/server): its source, its build, and its development build. */
 const SERVER_FILE: RegExp = /[\\/](?:src|dist(?:[\\/]dev)?)[\\/]server\.[jt]s$/;
@@ -1300,8 +1299,13 @@ const SERVER_FILE: RegExp = /[\\/](?:src|dist(?:[\\/]dev)?)[\\/]server\.[jt]s$/;
 /** Of those, the feature modules. */
 const ASYNC_FEATURE_FILE: RegExp = /[\\/]features[\\/](?:async|actions)\.[jt]s$/;
 
-/** Of those, features/memo and features/hydrate: each one's source, build, and development build. */
-const MEMO_FILE: RegExp = /[\\/]features[\\/](memo|hydrate)\.[jt]s$/;
+/**
+ * Of those, the feature modules with development blocks of their own (the core's `DEV_FEATURES`):
+ * features/memo, features/hydrate, and those with Solid 2.0's development messages and misuse
+ * errors (owner, context, errors, timing, reaction, effects). Each one's source, build, and
+ * development build.
+ */
+const MEMO_FILE: RegExp = /[\\/]features[\\/](memo|hydrate|owner|context|errors|timing|reaction|effects)\.[jt]s$/;
 
 /** Of those, the source index.ts. */
 const CORE_SOURCE: RegExp = /[\\/]src[\\/]index\.ts$/;

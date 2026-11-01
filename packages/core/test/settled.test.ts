@@ -240,7 +240,7 @@ describe("onSettled", () => {
     expect(log).toEqual([1, 2, 3]);
   });
 
-  test("one that throws leaves the rest for the next batch's end; outside any owner its cleanup is dropped", async () => {
+  test("one that throws leaves the rest for the next batch's end; outside any owner, a cleanup it returns throws", () => {
     const log: string[] = [];
     expect(() =>
       batch(() => {
@@ -253,8 +253,11 @@ describe("onSettled", () => {
     expect(log).toEqual([]);
     batch(() => {});
     expect(log).toEqual(["next"]);
-    onSettled(() => () => log.push("never"));
-    await settle();
+    // Nothing would run it: the development build throws, naming the fix (the production build
+    // drops it). In a batch, so the throw comes out of its end, not a microtask.
+    expect(() => batch(() => onSettled(() => () => log.push("never")))).toThrow("reactre SETTLED_CLEANUP_UNOWNED");
+    // The queue the throw left is drained.
+    batch(() => {});
     expect(log).toEqual(["next"]);
   });
 });

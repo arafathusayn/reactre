@@ -167,6 +167,11 @@ export function Errored(props: { fallback: ErroredFallback; children?: Child | (
       asked = false;
       return untrack(() => {
         const f = props.fallback;
+        // #if DEV
+        // A fallback that is no function of the error cannot show it: the console does, as Solid
+        // 2.0's development build logs it.
+        if (typeof f !== "function" || f.length === 0) console.error(error);
+        // #endif
         return typeof f === "function" ? f(error, reset) : f;
       });
     },

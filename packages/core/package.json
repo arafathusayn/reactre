@@ -60,6 +60,48 @@
       "development": "./dist/dev/features/memo.js",
       "default": "./dist/features/memo.js"
     },
+    "./features/owner": {
+      "reactre-source": "./src/features/owner.ts",
+      "types": "./dist/features/owner.d.ts",
+      "bun": "./src/features/owner.ts",
+      "development": "./dist/dev/features/owner.js",
+      "default": "./dist/features/owner.js"
+    },
+    "./features/context": {
+      "reactre-source": "./src/features/context.ts",
+      "types": "./dist/features/context.d.ts",
+      "bun": "./src/features/context.ts",
+      "development": "./dist/dev/features/context.js",
+      "default": "./dist/features/context.js"
+    },
+    "./features/errors": {
+      "reactre-source": "./src/features/errors.ts",
+      "types": "./dist/features/errors.d.ts",
+      "bun": "./src/features/errors.ts",
+      "development": "./dist/dev/features/errors.js",
+      "default": "./dist/features/errors.js"
+    },
+    "./features/timing": {
+      "reactre-source": "./src/features/timing.ts",
+      "types": "./dist/features/timing.d.ts",
+      "bun": "./src/features/timing.ts",
+      "development": "./dist/dev/features/timing.js",
+      "default": "./dist/features/timing.js"
+    },
+    "./features/reaction": {
+      "reactre-source": "./src/features/reaction.ts",
+      "types": "./dist/features/reaction.d.ts",
+      "bun": "./src/features/reaction.ts",
+      "development": "./dist/dev/features/reaction.js",
+      "default": "./dist/features/reaction.js"
+    },
+    "./features/effects": {
+      "reactre-source": "./src/features/effects.ts",
+      "types": "./dist/features/effects.d.ts",
+      "bun": "./src/features/effects.ts",
+      "development": "./dist/dev/features/effects.js",
+      "default": "./dist/features/effects.js"
+    },
     "./features/hydrate": {
       "reactre-source": "./src/features/hydrate.ts",
       "types": "./dist/features/hydrate.d.ts",

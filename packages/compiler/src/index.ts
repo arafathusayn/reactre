@@ -255,8 +255,11 @@ export function reactreCompiler(options: ReactreCompilerOptions = {}): BunPlugin
       build.onLoad({ filter: CORE_RUNTIME }, async ({ path }) => {
         if (!isCore(path)) return undefined;
         let out = await coreRuntime(path, () => Bun.file(path).text(), await keep, options.async === false);
-        // A feature module that is both (features/memo, stripped) is a server build's, as below.
-        if (out !== null && options.server === true && CORE_FEATURE.test(path)) out = serverImports(out, false);
+        // A feature module that is both (features/memo or features/context, stripped) is a server
+        // build's, or a hydrate build's, as below.
+        if (out !== null && CORE_FEATURE.test(path))
+          if (options.server === true) out = serverImports(out, false);
+          else if (options.hydrate === true && !HYDRATE_FILE.test(path)) out = hydrateImports(out, false);
         return out === null ? undefined : { contents: out, loader: path.endsWith(".ts") ? "ts" : "js" };
       });
       // A server build: the core's feature modules import @reactre/core/server for the core.

@@ -87,56 +87,46 @@ describe("onSettled.test.ts", () => {
     expect(log).toEqual(["outer", "inner"]);
   });
 
-  gap(
-    "misuse-errors",
-    "flush() in an onSettled callback runs",
-    "should throw when owner-backed onSettled calls flush reentrantly",
-    () => {
-      const log: string[] = [];
-      const values: number[] = [];
-      expect(() =>
-        flush(() =>
-          createRoot(() => {
-            const [count, setCount] = signal(0);
-            reaction(
-              () => count(),
-              (v) => {
-                values.push(v);
-              },
-            );
-            onSettled(() => {
-              log.push("outer");
-              onSettled(() => {
-                log.push("inner");
-              });
-              setCount((v) => v + 5);
-              flush();
-              setCount((v) => v + 5);
-              setCount((v) => v + 5);
-            });
-          }),
-        ),
-      ).toThrow();
-      expect(log).toEqual(["outer"]);
-      expect(values[0]).toBe(0);
-      expect(values.at(-1)).toBe(0);
-    },
-  );
-
-  gap(
-    "misuse-errors",
-    "onCleanup in an onSettled callback is taken",
-    "should forbid onCleanup inside owner-backed onSettled",
-    () => {
+  test("should throw when owner-backed onSettled calls flush reentrantly", () => {
+    const log: string[] = [];
+    const values: number[] = [];
+    expect(() =>
       flush(() =>
         createRoot(() => {
+          const [count, setCount] = signal(0);
+          reaction(
+            () => count(),
+            (v) => {
+              values.push(v);
+            },
+          );
           onSettled(() => {
-            expect(() => onCleanup(() => {})).toThrow();
+            log.push("outer");
+            onSettled(() => {
+              log.push("inner");
+            });
+            setCount((v) => v + 5);
+            flush();
+            setCount((v) => v + 5);
+            setCount((v) => v + 5);
           });
         }),
-      );
-    },
-  );
+      ),
+    ).toThrow();
+    expect(log).toEqual(["outer"]);
+    expect(values[0]).toBe(0);
+    expect(values.at(-1)).toBe(0);
+  });
+
+  test("should forbid onCleanup inside owner-backed onSettled", () => {
+    flush(() =>
+      createRoot(() => {
+        onSettled(() => {
+          expect(() => onCleanup(() => {})).toThrow();
+        });
+      }),
+    );
+  });
 
   test("should call cleanup when disposed", () => {
     const cleanup = mock();
@@ -151,18 +141,13 @@ describe("onSettled.test.ts", () => {
     expect(cleanup).toHaveBeenCalledTimes(1);
   });
 
-  gap(
-    "misuse-errors",
-    "a cleanup returned where nothing owns is dropped",
-    "should reject a returned cleanup in an unowned scope (#2766)",
-    () => {
-      const cleanup = mock();
-      expect(() => flush(() => onSettled(() => cleanup))).toThrow();
-      expect(cleanup).toHaveBeenCalledTimes(0);
-    },
-  );
+  test("should reject a returned cleanup in an unowned scope (#2766)", () => {
+    const cleanup = mock();
+    expect(() => flush(() => onSettled(() => cleanup))).toThrow();
+    expect(cleanup).toHaveBeenCalledTimes(0);
+  });
 
-  gap("misuse-errors", "a value that is not a function is ignored", "should throw on invalid cleanup values", () => {
+  test("should throw on invalid cleanup values", () => {
     expect(() =>
       flush(() =>
         createRoot(() => {

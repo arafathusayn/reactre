@@ -1,32 +1,34 @@
 # Solid 2.0 parity, measured
 
-836 of Solid 2.0's own tests (solid-js 2.0.0-rc.20, [solidjs/solid@5e68925](https://github.com/solidjs/solid/tree/5e68925cc2fd216a9fb06345019e66d5da5c523c)), ported to reactre's API in [`packages/core/test/solid/`](../packages/core/test/solid): **521 pass** (62%), and 315 fail because reactre lacks the capability or behaves differently.
+836 of Solid 2.0's own tests (solid-js 2.0.0-rc.20, [solidjs/solid@5e68925](https://github.com/solidjs/solid/tree/5e68925cc2fd216a9fb06345019e66d5da5c523c)), ported to reactre's API in [`packages/core/test/solid/`](../packages/core/test/solid): **535 pass** (64%), and 301 fail because reactre lacks the capability or behaves differently.
 
 | Area                                                      | Files                        |  Ported |    Pass |     Gap |  Todo |
 | --------------------------------------------------------- | ---------------------------- | ------: | ------: | ------: | ----: |
 | Signals and memos                                         | signals, memo                |      72 |      53 |      19 |     0 |
-| Effects, ownership, timing                                | effects, owner, timing       |      90 |      57 |      33 |     0 |
+| Effects, ownership, timing                                | effects, owner, timing       |      90 |      63 |      27 |     0 |
 | Stores                                                    | store, reconcile, projection |     172 |     134 |      38 |     0 |
 | Control flow (Show, Switch, For, Repeat, Portal, Dynamic) | show, for, portal            |     172 |      66 |     106 |     0 |
-| Context, errors, components                               | context, errors, component   |      77 |      45 |      32 |     0 |
+| Context, errors, components                               | context, errors, component   |      77 |      53 |      24 |     0 |
 | Async, Loading, actions                                   | loading, actions             |     122 |      71 |      51 |     0 |
 | Server rendering, hydration                               | server, hydration            |     131 |      95 |      36 |     0 |
-| **Total**                                                 | 18 files                     | **836** | **521** | **315** | **0** |
+| **Total**                                                 | 18 files                     | **836** | **535** | **301** | **0** |
 
-Without the list permutations (below), control flow is 66 of 84, and the total 521 of 748 (70%).
+Without the list permutations (below), control flow is 66 of 84, and the total 535 of 748 (72%).
 
 The top gaps, by the ports they block:
 
 1. **`row-shape`, 58**: a `<For>`/`<Repeat>` row must be `(item) => <one element />`; Solid's rows may be text, fragments or arrays. Solid runs each of its 6 such sources through about 10 permutations.
 2. **`for-placement`, 30**: `<For>`/`<Repeat>` as a component's whole view, not an element's direct child (3 sources × 10 permutations).
 3. **`action-writes`, 19**: an action holding and batching its plain writes until it ends.
-4. **`dev-checks`, 15**: Solid's dev warnings (strict reads in a component body) and messages.
-5. **`held-writes`, 10**: reads and effects that see a write before `flush()`. By design (reactre applies writes at once), and counted once per file.
-6. **`client-error-hook`, 9**: `configureClientErrors`/`render`'s `onError` hearing what a boundary caught.
-7. **`glitch-free`, 9**: a diamond's join runs once per changed branch, and memos run depth-first; Solid's run once each, in topological order.
-8. **`ssr-semantics`, 9** (server primitives).
-9. **`ssr-helpers`, 7** (`httpStatus`, `httpHeader`, `takeHydrationValue`, `getHydrationWriter`); **`misuse-errors`, 6**.
+4. **`held-writes`, 10**: reads and effects that see a write before `flush()`. By design (reactre applies writes at once), and counted once per file.
+5. **`client-error-hook`, 9**: `configureClientErrors`/`render`'s `onError` hearing what a boundary caught.
+6. **`glitch-free`, 9**: a diamond's join runs once per changed branch, and memos run depth-first; Solid's run once each, in topological order.
+7. **`ssr-semantics`, 9** (server primitives).
+8. **`ssr-helpers`, 7** (`httpStatus`, `httpHeader`, `takeHydrationValue`, `getHydrationWriter`).
+9. **`dev-checks`, 7**: Solid's strict-read warnings in a component body, and its message for a component that is not a function: both need a component's body told apart from an app's `untrack`.
 10. **`bug`, 4**: two bugs still open, [below](#bugs-found); seven more are fixed.
+
+`misuse-errors` (6) landed in the development build: Solid's errors for what an autorun's function or an owned `onSettled` callback makes, `flush()` there, and a cleanup that is not one. So did 8 of `dev-checks`: `ContextNotFoundError`'s messages and an `<Errored>` fallback's log.
 
 `list-functions` (`mapArray`, `repeat`) and most of `render-effects` (`createRenderEffect` with `defer` and `schedule`, `createTrackedEffect`, `onFlush`) landed as feature modules, features/lists and features/effects, and their ports pass. What is left of `render-effects` is `reaction`'s, below.
 
@@ -169,13 +171,13 @@ Each gap test names a target: what reactre would need for it to pass. The first 
 | `fold`                                                                                                                                                                                                             |      0 | done: `memo(fn, { lazy })` passes; the two `signal(v, { unobserved })` ports fail on timing alone (`unobserved-timing`)                                                          |
 | `row-shape`                                                                                                                                                                                                        |     58 | a row that is text, a fragment, an array, `undefined` or an element child (6 sources × up to 10 permutations)                                                                    |
 | `action-writes`                                                                                                                                                                                                    |     19 | an action holding and batching its plain writes                                                                                                                                  |
-| `dev-checks`                                                                                                                                                                                                       |     15 | Solid's dev warnings and messages (strict reads in a component body, ContextNotFoundError's texts)                                                                               |
+| `dev-checks`                                                                                                                                                                                                       |      7 | Solid's dev warnings that need a component's body told apart (strict reads there, a non-function component); ContextNotFoundError's texts and a fallback's log landed            |
 | `held-writes`                                                                                                                                                                                                      |     10 | reads and effects not seeing a write before `flush()`, by design                                                                                                                 |
 | `client-error-hook`                                                                                                                                                                                                |      9 | `configureClientErrors` and `render`'s `onError` hearing what a boundary caught                                                                                                  |
 | `glitch-free`                                                                                                                                                                                                      |      9 | memos updated once each, in topological order                                                                                                                                    |
 | `list-functions`                                                                                                                                                                                                   |      0 | `mapArray`, `repeat`: landed in features/lists                                                                                                                                   |
 | `ssr-semantics`                                                                                                                                                                                                    |      9 | server primitives as Solid's server has them                                                                                                                                     |
-| `misuse-errors`                                                                                                                                                                                                    |      6 | errors for an invalid cleanup value, `flush()` or `onCleanup` where Solid forbids them                                                                                           |
+| `misuse-errors`                                                                                                                                                                                                    |      0 | done: errors for an invalid cleanup value, `flush()` or `onCleanup` where Solid forbids them, in the development build                                                           |
 | `action-sync-yield`                                                                                                                                                                                                |      6 | a sync `yield` resuming at once                                                                                                                                                  |
 | `match-placement`                                                                                                                                                                                                  |      6 | a `<For>` or `<Show>` of `<Match>`es in a `<Switch>`                                                                                                                             |
 | `create-reaction`, `dispose-order`, `owner-ids`, `pull-memos`, `portal-events`, `reconcile-identity`, `store-in-place`, `symbol-keys`                                                                              | 5 each |                                                                                                                                                                                  |
@@ -210,12 +212,10 @@ Per target, per file and reason, the Solid test names (`×n`: that many permutat
 - actions.test.ts, an action's writes are not batched: each optimistic write runs the effect: "should revert multiple optimistic signals together when transition completes".
 - actions.test.ts, a plain store write in an action is not held: its effect runs at once: "should hold regular store value during transition while showing optimistic".
 
-#### `dev-checks` (15)
+#### `dev-checks` (7)
 
-- errors.test.ts, the dev build does not log an error that a fallback cannot see: "zero-arity fallback thunk renders".
-- context.test.ts, ContextNotFoundError has one generic message: "default-less, no provider: says so and suggests a null default"; "a default-less read with no Provider suggests a null default"; "a Provider passing undefined counts as not provided".
-- context.test.ts, createContext takes no name, and the message is generic: "explicit undefined default: says undefined is not a default"; "a provider passing undefined: says it counts as not provided"; "an explicit undefined default is no default; the dev message says so".
-- context.test.ts, ContextNotFoundError's message is reactre's own: "a ContextNotFoundError constructed without a context keeps the generic message".
+The development build has Solid's context messages now: `createContext(default, { name })` (or a string name, as Solid's signals layer takes it) and a `ContextNotFoundError` that says which case it is, `CONTEXT_NOT_FOUND` (no default, or `createContext(undefined)`, which gives none) or `CONTEXT_PROVIDED_UNDEFINED`, in reactre's `reactre CODE: what. Fix: fix.` form; the ports assert those texts, which say what Solid's do. And an `<Errored>` whose fallback is not a function of the error logs the error. Their 8 ports pass (context.test.ts's 7, errors.test.ts's "zero-arity fallback thunk renders"). The rest need the compiler to tell a component's body from an app's `untrack`: it compiles a component call to `untrack(() => C(props))`, the same call an app makes, and naming it apart would change every app's compiled code.
+
 - component.test.ts, a call of a component that is not a function throws a plain TypeError: "non-function component throws a descriptive dev error, not a name-read crash (#3005)".
 - component.test.ts, no strict-read warning for a signal read in a component body: "warns on direct signal read in component body"; "nested components each warn independently".
 - component.test.ts, no strict-read warning for a reactive prop read in a component body: "warns on props.value access backed by signal".
@@ -274,14 +274,9 @@ Its server `defer` port, "defer: true skips the initial effect run but still com
 - server.test.ts, an async read outside every `<Loading>` renders nothing: "throws on async content without Loading boundary".
 - server.test.ts, bind's apply does not run on the server, as no effect does there; Solid's render effect applies once: "computes and runs effect once".
 
-#### `misuse-errors` (6)
+#### `misuse-errors` (0)
 
-- timing.test.ts, flush() in an onSettled callback runs: "should throw when owner-backed onSettled calls flush reentrantly".
-- timing.test.ts, onCleanup in an onSettled callback is taken: "should forbid onCleanup inside owner-backed onSettled".
-- timing.test.ts, a cleanup returned where nothing owns is dropped: "should reject a returned cleanup in an unowned scope (#2766)".
-- timing.test.ts, a value that is not a function is ignored: "should throw on invalid cleanup values".
-- effects.test.ts, reaction ignores a cleanup that is not a function: "should throw on invalid cleanup values".
-- effects.test.ts, reactre lets a tracked effect make memos and cleanups: "should throw when creating tracked-effect children inside (\_\_DEV\_\_ only)".
+Landed in the development build, as Solid's are in its: an autorun's function and an `onSettled` callback that has an owner make nothing (`PRIMITIVE_IN_FORBIDDEN_SCOPE`, `CLEANUP_IN_FORBIDDEN_SCOPE`, from features/owner's `__ban`), `flush()` in such a callback throws (`FLUSH_IN_SETTLED`), and a cleanup that is not a function, from a reaction's apply or an `onSettled` callback, throws (`INVALID_CLEANUP`), as does one returned where nothing owns (`SETTLED_CLEANUP_UNOWNED`). The production build is as it was. Its 6 ports pass: timing.test.ts "should throw when owner-backed onSettled calls flush reentrantly", "should forbid onCleanup inside owner-backed onSettled", "should reject a returned cleanup in an unowned scope (#2766)", "should throw on invalid cleanup values"; effects.test.ts "should throw on invalid cleanup values" (createEffect.test.ts's), "should throw when creating tracked-effect children inside (\_\_DEV\_\_ only)".
 
 #### `ssr-helpers` (7)
 

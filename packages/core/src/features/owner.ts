@@ -15,6 +15,94 @@ declare const opaque: unique symbol;
 
 /** An owner, as `getOwner` returns it: opaque, to pass to `runWithOwner`. */
 export type Owner = { readonly [opaque]: true };
+// #if DEV
+
+// Where Solid 2.0 lets an owner make nothing (its development build throws): an `autorun`'s
+// function (features/effects), and an `onSettled` callback that has an owner (features/timing).
+// What such a run made would belong to an owner that does not know of it: an autorun's effect
+// is run again with what it read, and a settled owner's content may long outlive the callback.
+// `__ban` locks the owner while the run is under way: its two lists, of what it owns and of its
+// cleanups, get a `push` of their own that throws, so an effect, a memo, a root or a slot made
+// there (each puts itself in the first) and `onCleanup` (the second) throw, naming the fix; and
+// the core's code is as it was. The production build drops all of this.
+
+/** An owner of the core's. */
+type Core = NonNullable<typeof __owner>;
+
+/** A `push` for an owner's list that throws `code`'s error: what went wrong there, and the fix. */
+const refuse = (code: string, what: string, fix: string) => (): never => {
+  throw new Error(
+    `reactre ${code}: ${what} in an autorun's function or in an onSettled callback that has an owner, where Solid 2.0 lets nothing be made. Fix: ${fix}.`,
+  );
+};
+/** The error for `what`, made where nothing may be. */
+const made = (what: string): (() => never) =>
+  refuse(
+    "PRIMITIVE_IN_FORBIDDEN_SCOPE",
+    `${what} was made`,
+    "make it outside the callback, in the component's body or in an effect",
+  );
+const NO_PRIMITIVE = made("an effect, a memo, a root or a slot");
+const NO_CLEANUP = refuse(
+  "CLEANUP_IN_FORBIDDEN_SCOPE",
+  "onCleanup was called",
+  "return the cleanup function from the callback instead",
+);
+
+/** The owner locked now; null: none is. */
+let banned: Core | null = null;
+/** By locked owner, which of its lists were null before it was locked. */
+const was = new WeakMap<Core, readonly [boolean, boolean]>();
+
+/** Lock owner `o`'s lists. */
+function lock(o: Core): void {
+  was.set(o, [o.owned === null, o.cleanups === null]);
+  ((o.owned ??= []) as { push: unknown }).push = NO_PRIMITIVE;
+  ((o.cleanups ??= []) as { push: unknown }).push = NO_CLEANUP;
+}
+
+/** Unlock owner `o`'s lists: as they were, unless it was cleaned meanwhile (they are null then). */
+function unlock(o: Core): void {
+  const [owned, cleanups] = was.get(o)!;
+  if (o.owned !== null) {
+    delete (o.owned as { push?: unknown }).push;
+    if (owned && o.owned.length === 0) o.owned = null;
+  }
+  if (o.cleanups !== null) {
+    delete (o.cleanups as { push?: unknown }).push;
+    if (cleanups && o.cleanups.length === 0) o.cleanups = null;
+  }
+}
+
+/**
+ * Internal (features/effects and features/timing, development build): run `fn` with owner `o`
+ * locked (null: none is), where nothing may be made; the owner locked before is unlocked meanwhile.
+ */
+export function __ban<T>(o: object | null, fn: () => T): T {
+  const b = banned,
+    c = o as unknown as Core | null;
+  if (b !== null) unlock(b);
+  if (c !== null) lock(c);
+  banned = c;
+  try {
+    return fn();
+  } finally {
+    if (c !== null) unlock(c);
+    banned = b;
+    if (b !== null) lock(b);
+  }
+}
+
+/**
+ * Internal (features/effects, development build): throw where the current owner is locked, for
+ * `what`, which registers a cleanup before it makes its effect: the error names it, not onCleanup.
+ * An owner that ran again meanwhile (a write of the callback's re-ran it) cleaned its locked lists
+ * away, and makes what it likes.
+ */
+export function __refuse(what: string): void {
+  if (banned !== null && __owner === banned && (banned.cleanups?.push as unknown) === NO_CLEANUP) made(what)();
+}
+// #endif
 
 /**
  * The current owner: the effect whose run is making things, the row or `attach` or `createRoot`

@@ -42,6 +42,10 @@ import {
   onCleanup,
   untrack,
 } from "@reactre/core";
+// #if DEV
+// prettier-ignore
+import { __ban, __refuse } from "@reactre/core/features/owner";
+// #endif
 
 /** A cleanup, or nothing: what an effect's function may return. */
 type Cleanup = void | (() => void);
@@ -137,6 +141,9 @@ export function bind<T>(
   apply: (value: T, prev: T | undefined) => Cleanup,
   options?: BindOptions,
 ): void {
+  // #if DEV
+  __refuse("a bind");
+  // #endif
   const o = __owner;
   // 0: before the first run; 1: the first apply waits for the flush; 2: past both.
   let state = 0,
@@ -202,6 +209,9 @@ export function bind<T>(
  *   }
  */
 export function autorun(fn: () => Cleanup): void {
+  // #if DEV
+  __refuse("an autorun");
+  // #endif
   const o = __owner;
   let gone = false;
   onCleanup(() => (gone = true));
@@ -210,7 +220,12 @@ export function autorun(fn: () => Cleanup): void {
     if (!gone)
       __Owned.within(o, () =>
         effect(() => {
-          const c = cleanup(fn(), "autorun");
+          // #if DEV
+          // Its function makes nothing of its own: the effect it runs in owns only its cleanup.
+          const c = cleanup(__ban(__owner, fn), "autorun");
+          // #else
+          // const c = cleanup(fn(), "autorun");
+          // #endif
           if (c !== undefined) onCleanup(c);
         }),
       );

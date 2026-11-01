@@ -63,6 +63,12 @@ export function reaction<T>(compute: () => T, apply: (value: T, prev: T | undefi
     const v = value();
     untrack(() => {
       const c = apply(v, prev);
+      // #if DEV
+      if (c !== undefined && typeof c !== "function")
+        throw new TypeError(
+          `reactre INVALID_CLEANUP: a reaction's apply returned ${c === null ? "null" : typeof c}, not a cleanup function or undefined. Fix: return a function to run before the next apply and when the owner goes, or nothing.`,
+        );
+      // #endif
       prev = v;
       // The effect's cleanups run before its next run and when it is disposed.
       if (typeof c === "function") onCleanup(c);

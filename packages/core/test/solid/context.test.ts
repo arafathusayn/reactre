@@ -33,6 +33,19 @@ const kids = (n: FakeElement): FakeElement[] => n.childNodes as FakeElement[];
 /** Solid's NoOwnerError, which reactre does not have: undefined here. */
 const { NoOwnerError } = contextApi as unknown as { NoOwnerError?: new () => Error };
 
+// The development build's messages, which the ports of Solid's (#4181) read: Solid's texts are its
+// own, and reactre's say the same in its `reactre CODE: what. Fix: fix.` form. `which` is the
+// context as a message names it: `a context`, or `the context "Opt"` for one named Opt.
+const NULL_DEFAULT = "createContext<T | null>(null)";
+const noDefault = (which: string): string =>
+  `reactre CONTEXT_NOT_FOUND: useContext found no provider of ${which}, which has no default. Fix: render a provider above this read, or create the context with a default; for an optional context, use null as its empty default (${NULL_DEFAULT}), not undefined.`;
+const undefinedDefault = (which: string): string =>
+  `reactre CONTEXT_NOT_FOUND: useContext found no provider of ${which}, and createContext(undefined) gives it no default (undefined is "no value", for a context). Fix: render a provider above this read, or use null as its empty default (${NULL_DEFAULT}).`;
+const providedUndefined = (which: string): string =>
+  `reactre CONTEXT_PROVIDED_UNDEFINED: useContext read ${which}, and the provider above gave it undefined, which counts as not provided ("no value", for a context). Fix: for an empty value, create the context with a null default (${NULL_DEFAULT}) and provide null.`;
+/** What a ContextNotFoundError made without a context says: the production build's message. */
+const GENERIC = "reactre: useContext found no provider of a context that has no default";
+
 /** What reading `read` in a root throws, which must be a ContextNotFoundError. */
 function messageOf(read: () => unknown): string {
   try {
@@ -116,62 +129,36 @@ describe("signals/tests/context.test.ts", () => {
   });
 
   describe("ContextNotFoundError dev messages (#4181)", () => {
-    gap(
-      "dev-checks",
-      "ContextNotFoundError has one generic message",
-      "default-less, no provider: says so and suggests a null default",
-      () => {
-        const context = createContext<number>();
-        expect(messageOf(() => useContext(context))).toBe(
-          "Context has no provider above this read and no default value. Mount a provider above this read, or create the context with a default; for an optional context, use `null` as the empty default (`createContext<T | null>(null)`), not `undefined`.",
-        );
-      },
-    );
+    test("default-less, no provider: says so and suggests a null default", () => {
+      const context = createContext<number>();
+      expect(messageOf(() => useContext(context))).toBe(noDefault("a context"));
+    });
 
-    gap(
-      "dev-checks",
-      "createContext takes no name, and the message is generic",
-      "explicit undefined default: says undefined is not a default",
-      () => {
-        const Opt = (createContext as (v: unknown, name: string) => contextApi.Context<string | undefined>)(
-          undefined,
-          "Opt",
-        );
-        expect(messageOf(() => useContext(Opt))).toBe(
-          'Context "Opt" has no provider above this read, and `createContext(undefined)` does not give it a default: `undefined` means "no value" for context. Mount a provider above this read, or use `null` as an explicit empty default: `createContext<T | null>(null)`.',
-        );
-      },
-    );
+    test("explicit undefined default: says undefined is not a default", () => {
+      // Solid's signals layer takes the name as a string: so does reactre.
+      const Opt = createContext<string | undefined>(undefined, "Opt");
+      expect(messageOf(() => useContext(Opt))).toBe(undefinedDefault('the context "Opt"'));
+    });
 
-    gap(
-      "dev-checks",
-      "createContext takes no name, and the message is generic",
-      "a provider passing undefined: says it counts as not provided",
-      () => {
-        const Opt = (createContext as (v: unknown, name: string) => contextApi.Context<string | undefined>)(
-          undefined,
-          "Opt",
-        );
-        expect(
-          messageOf(() => {
-            let message: unknown;
-            Opt({
-              value: undefined,
-              children: () => {
-                try {
-                  createRoot(() => useContext(Opt));
-                } catch (err) {
-                  message = err;
-                }
-              },
-            });
-            throw message;
-          }),
-        ).toBe(
-          'Context "Opt" was provided with `undefined`, which counts as not provided: `undefined` means "no value" for context. To provide an empty value, create the context with a `null` default (`createContext<T | null>(null)`) and pass `null`.',
-        );
-      },
-    );
+    test("a provider passing undefined: says it counts as not provided", () => {
+      const Opt = createContext<string | undefined>(undefined, "Opt");
+      expect(
+        messageOf(() => {
+          let message: unknown;
+          Opt({
+            value: undefined,
+            children: () => {
+              try {
+                createRoot(() => useContext(Opt));
+              } catch (err) {
+                message = err;
+              }
+            },
+          });
+          throw message;
+        }),
+      ).toBe(providedUndefined('the context "Opt"'));
+    });
 
     test("null is a value: a null default and a provided null both read back", () => {
       const OptNull = createContext<string | null>(null);
@@ -184,16 +171,9 @@ describe("signals/tests/context.test.ts", () => {
       expect(read).toBeNull();
     });
 
-    gap(
-      "dev-checks",
-      "ContextNotFoundError's message is reactre's own",
-      "a ContextNotFoundError constructed without a context keeps the generic message",
-      () => {
-        expect(new ContextNotFoundError().message).toBe(
-          "Context must either be created with a default value or a value must be provided before accessing it.",
-        );
-      },
-    );
+    test("a ContextNotFoundError constructed without a context keeps the generic message", () => {
+      expect(new ContextNotFoundError().message).toBe(GENERIC);
+    });
   });
 });
 
@@ -220,36 +200,21 @@ describe("solid/test/signals.spec.ts: create and use context", () => {
     });
   });
 
-  gap(
-    "dev-checks",
-    "createContext takes no name, and the message is generic",
-    "an explicit undefined default is no default; the dev message says so",
-    () => {
-      const Opt = (createContext as (v: unknown, o: { name: string }) => contextApi.Context<string | undefined>)(
-        undefined,
-        { name: "Opt" },
-      );
-      createRoot(() => {
-        expect(() => useContext(Opt)).toThrow(
-          'Context "Opt" has no provider above this read, and `createContext(undefined)` does not give it a default: `undefined` means "no value" for context. Mount a provider above this read, or use `null` as an explicit empty default: `createContext<T | null>(null)`.',
-        );
-      });
-    },
-  );
+  test("an explicit undefined default is no default; the dev message says so", () => {
+    const Opt = createContext<string | undefined>(undefined, { name: "Opt" });
+    createRoot(() => {
+      expect(() => useContext(Opt)).toThrow(undefinedDefault('the context "Opt"'));
+    });
+  });
 
-  gap(
-    "dev-checks",
-    "ContextNotFoundError has one generic message",
-    "a default-less read with no Provider suggests a null default",
-    () => {
-      const Todos = createContext<number>();
-      createRoot(() => {
-        expect(() => useContext(Todos)).toThrow(
-          /has no provider above this read and no default value\..*`createContext<T \| null>\(null\)`/,
-        );
-      });
-    },
-  );
+  test("a default-less read with no Provider suggests a null default", () => {
+    const Todos = createContext<number>();
+    createRoot(() => {
+      expect(() => useContext(Todos)).toThrow(
+        /no provider of a context, which has no default\..*\(createContext<T \| null>\(null\)\)/,
+      );
+    });
+  });
 
   test("a null default is a value outside any Provider", () => {
     const OptNull = createContext<string | null>(null);
@@ -369,33 +334,26 @@ describe("web/test/context.spec.tsx: Context provided as undefined (#4181)", () 
     const Reader = () => <span>{String(useContext(Opt))}</span>;
   `;
 
-  gap(
-    "dev-checks",
-    "ContextNotFoundError has one generic message",
-    "a Provider passing undefined counts as not provided",
-    () => {
-      const div = new FakeElement("DIV");
-      compile(
-        `${optional}
-        render(
-          () => (
-            <Errored fallback={(err) => <p>{err.message}</p>}>
-              <Opt value={undefined}>
-                <Reader />
-              </Opt>
-            </Errored>
-          ),
-          root,
-        );
-        return {};`,
-        modules,
-        { root: div },
+  test("a Provider passing undefined counts as not provided", () => {
+    const div = new FakeElement("DIV");
+    compile(
+      `${optional}
+      render(
+        () => (
+          <Errored fallback={(err) => <p>{err.message}</p>}>
+            <Opt value={undefined}>
+              <Reader />
+            </Opt>
+          </Errored>
+        ),
+        root,
       );
-      expect(text(div)).toBe(
-        'Context "Opt" was provided with `undefined`, which counts as not provided: `undefined` means "no value" for context. To provide an empty value, create the context with a `null` default (`createContext<T | null>(null)`) and pass `null`.',
-      );
-    },
-  );
+      return {};`,
+      modules,
+      { root: div },
+    );
+    expect(text(div)).toBe(providedUndefined('the context "Opt"'));
+  });
 
   test("a Provider passing null provides null", () => {
     const div = new FakeElement("DIV");

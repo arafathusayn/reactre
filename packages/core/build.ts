@@ -5,9 +5,10 @@
 //   dist/async/      index.ts with the async runtime that @reactre/core/features/async and
 //                    features/actions need, for production: without the development blocks;
 //   dist/dev/        index.ts as it is: the async runtime and the development diagnostics; and
-//                    features/memo.ts, features/hydrate.ts and server.ts as they are, with their
-//                    checks, warnings and the error an <Errored>'s hydration marker names
-//                    (dist/features/memo.js, dist/features/hydrate.js and dist/server.js have none).
+//                    the feature modules with development blocks (DEV_FEATURES: features/memo.ts,
+//                    hydrate.ts, context.ts, ...) and server.ts as they are, with their checks,
+//                    warnings, misuse errors and the error an <Errored>'s hydration marker names
+//                    (dist/features/*.js and dist/server.js have none).
 //
 // dist/hydrate/ holds hydration's <Loading> and <Errored> (src/hydrate/*.ts), and dist/server/ the
 // server's versions of the feature modules.
@@ -21,7 +22,7 @@
 import { rmSync } from "node:fs";
 import { join } from "node:path";
 
-import { ASYNC_PRODUCTION, without, withoutAsync } from "./src/withoutAsync.ts";
+import { ASYNC_PRODUCTION, DEV_FEATURES, without, withoutAsync } from "./src/withoutAsync.ts";
 
 const dir = import.meta.dir;
 const features = [
@@ -82,12 +83,15 @@ for (const r of [
     outdir: join(dir, "dist/async"),
     plugins: [without(...ASYNC_PRODUCTION)],
   }),
-  // With the development builds of features/memo, which holds its checks too, of
-  // features/hydrate, which holds its mismatch warnings, and of server.ts, whose <Errored>
-  // marker names the error.
+  // With the development builds of the feature modules that have development blocks:
+  // features/memo, which holds its checks too, features/hydrate, which holds its mismatch
+  // warnings, and those with Solid 2.0's messages and misuse errors; and of server.ts, whose
+  // <Errored> marker names the error.
   await Bun.build({
     ...options,
-    entrypoints: ["index.ts", "features/memo.ts", "features/hydrate.ts", "server.ts"].map((f) => join(dir, "src", f)),
+    entrypoints: ["index.ts", ...DEV_FEATURES.map((f) => `features/${f}.ts`), "server.ts"].map((f) =>
+      join(dir, "src", f),
+    ),
     outdir: join(dir, "dist/dev"),
   }),
 ])

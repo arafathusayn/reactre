@@ -605,26 +605,21 @@ describe("web/test/errored.spec.tsx: Errored function-valued fallback resolves i
     return { calls, restore: () => (console.error = original) };
   }
 
-  gap(
-    "dev-checks",
-    "the dev build does not log an error that a fallback cannot see",
-    "zero-arity fallback thunk renders",
-    () => {
-      const div = new FakeElement("DIV");
-      const error = spyError();
-      try {
-        run(
-          `${throws}\nrender(() => <Errored fallback={() => <b>fell</b>}><Throws /></Errored>, root);\nreturn {};`,
-          div,
-        );
-        flush();
-        expect(html(div)).toBe("<b>fell</b>");
-        expect(error.calls.some((a) => (a[0] as Error | undefined)?.message === "Failure")).toBe(true);
-      } finally {
-        error.restore();
-      }
-    },
-  );
+  test("zero-arity fallback thunk renders", () => {
+    const div = new FakeElement("DIV");
+    const error = spyError();
+    try {
+      run(
+        `${throws}\nrender(() => <Errored fallback={() => <b>fell</b>}><Throws /></Errored>, root);\nreturn {};`,
+        div,
+      );
+      flush();
+      expect(html(div)).toBe("<b>fell</b>");
+      expect(error.calls.some((a) => (a[0] as Error | undefined)?.message === "Failure")).toBe(true);
+    } finally {
+      error.restore();
+    }
+  });
 
   gap(
     "fallback-tracking",

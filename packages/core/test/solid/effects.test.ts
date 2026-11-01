@@ -208,22 +208,17 @@ describe("createEffect.test.ts", () => {
     expect(fx).toHaveBeenCalledTimes(0);
   });
 
-  gap(
-    "misuse-errors",
-    "reaction ignores a cleanup that is not a function",
-    "should throw on invalid cleanup values",
-    () => {
-      expect(() => {
-        createRoot(() => {
-          reaction(
-            () => 1,
-            () => 123 as never,
-          );
-        });
-        flush();
-      }).toThrow();
-    },
-  );
+  test("should throw on invalid cleanup values", () => {
+    expect(() => {
+      createRoot(() => {
+        reaction(
+          () => 1,
+          () => 123 as never,
+        );
+      });
+      flush();
+    }).toThrow();
+  });
 
   test("should run all disposals before each new run", () => {
     const fx = mock(),
@@ -833,21 +828,16 @@ describe("createTrackedEffect.test.ts", () => {
     expect(mark).toBe("abab");
   });
 
-  gap(
-    "misuse-errors",
-    "reactre lets a tracked effect make memos and cleanups",
-    "should throw when creating tracked-effect children inside (__DEV__ only)",
-    () => {
-      createRoot(() => {
-        autorun(() => {
-          expect(() => autorun(() => {})).toThrow();
-          expect(() => memo(() => 1)).toThrow();
-          expect(() => onCleanup(() => {})).toThrow();
-        });
+  test("should throw when creating tracked-effect children inside (__DEV__ only)", () => {
+    createRoot(() => {
+      autorun(() => {
+        expect(() => autorun(() => {})).toThrow();
+        expect(() => memo(() => 1)).toThrow();
+        expect(() => onCleanup(() => {})).toThrow();
       });
-      flush();
-    },
-  );
+    });
+    flush();
+  });
 
   test("should throw uncaught tracked effect errors during flush", () => {
     createRoot(() => {

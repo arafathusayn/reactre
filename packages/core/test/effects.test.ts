@@ -9,7 +9,7 @@ import { FakeElement, installFakeDocument } from "@reactre/testdom";
 import { createContext, useContext } from "../src/features/context.ts";
 import * as effects from "../src/features/effects.ts";
 import { autorun, bind, onFlush } from "../src/features/effects.ts";
-import { createRoot, getOwner } from "../src/features/owner.ts";
+import { createRoot, getOwner, runWithOwner } from "../src/features/owner.ts";
 import { flush } from "../src/features/timing.ts";
 import * as core from "../src/index.ts";
 import { batch, effect, onCleanup, signal } from "../src/index.ts";
@@ -301,14 +301,15 @@ describe("autorun", () => {
     expect(seen).toBe("dark");
   });
 
-  test("one made by another's first run runs in the same flush", () => {
+  test("one made in another's first run, under the root (its own function makes nothing), runs in the same flush", () => {
     const seen: string[] = [];
-    createRoot(() =>
+    createRoot(() => {
+      const root = getOwner();
       autorun(() => {
         seen.push("outer");
-        autorun(() => void seen.push("inner"));
-      }),
-    );
+        runWithOwner(root, () => autorun(() => void seen.push("inner")));
+      });
+    });
     flush();
     expect(seen).toEqual(["outer", "inner"]);
   });
