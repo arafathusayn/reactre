@@ -171,6 +171,38 @@ function deferred<T = void>(): { p: Promise<T>; resolve: (v: T) => void } {
   return { p, resolve };
 }
 
+// The waits a scene makes. Both libraries chain tasks: a transition renders in one, its passive
+// effects run in another. React's scheduler posts its tasks with setImmediate here (Bun has it)
+// and yields to the host after each commit and every 5 ms; compat posts its with a MessageChannel.
+// A timer of 0 ms alone does not wait for the chain: it fires once a millisecond has passed, so
+// on a loaded machine it fires between two of React's tasks and the scene looks too soon.
+
+/**
+ * Let the tasks the libraries queued run, and the ones those queue: turns of setImmediate, as
+ * Bun runs every message and immediate queued before each turn first, however long it takes.
+ */
+async function drain(): Promise<void> {
+  for (let i = 0; i < 50; i++) await new Promise((r) => setImmediate(r));
+}
+
+/** Let one macrotask pass: a timer of 0 ms, with the libraries' tasks before and after it run. */
+async function task(): Promise<void> {
+  await drain();
+  await new Promise((r) => setTimeout(r, 0));
+  await drain();
+}
+
+/** Let everything settle but the libraries' longer timers: several tasks. */
+async function settle(): Promise<void> {
+  for (let i = 0; i < 6; i++) await task();
+}
+
+/** A timer of `ms`, then the tasks it lets run (a throttle's commit and its effects). */
+async function sleep(ms: number): Promise<void> {
+  await new Promise((r) => setTimeout(r, ms));
+  await drain();
+}
+
 /** What a scene gets: its library, its log, its root and container, and ways to wait. */
 interface Kit {
   L: Lib;
@@ -184,9 +216,9 @@ interface Kit {
   snap: (label: string) => void;
   /** Lets every queued microtask run (and the ones they queue). */
   micro: () => Promise<void>;
-  /** Lets one macrotask pass: a timer of 0 ms, after which the libraries' tasks have run. */
+  /** Lets one macrotask pass, after which the libraries' tasks have run (see task). */
   task: () => Promise<void>;
-  /** Lets everything settle: several timers. */
+  /** Lets everything settle: several tasks. */
   settle: () => Promise<void>;
   /** Dispatches a click from the element named `tag`, the first or the `nth`. */
   click: (tag: string, nth?: number) => void;
@@ -234,9 +266,7 @@ async function alignLanes(): Promise<void> {
       ),
     ),
   );
-  const tick = async (): Promise<void> => {
-    for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0));
-  };
+  const tick = settle;
   try {
     for (let tries = 0; tries < 10; tries++) {
       const a = deferred(),
@@ -286,10 +316,8 @@ async function same(scene: (k: Kit) => Promise<void>, renders = true): Promise<s
       micro: async () => {
         for (let i = 0; i < 10; i++) await null;
       },
-      task: () => new Promise((r) => setTimeout(r, 0)),
-      settle: async () => {
-        for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0));
-      },
+      task,
+      settle,
       click: (tag, nth = 0) => {
         const at = nodes(c).filter((n) => n.nodeName === tag.toUpperCase())[nth] as FakeElement;
         at.dispatchEvent(new FakeEvent("click"));
@@ -1068,7 +1096,7 @@ describe("updates that suspend", () => {
       Compat.flushSync(() => set("b"));
       expect(markup(c)).toBe("<div><h1>b</h1>A</div>");
       d.resolve("b");
-      await new Promise((r) => setTimeout(r, 0));
+      await task();
       expect(markup(c)).toBe("<div><h1>b</h1>B</div>");
       root.unmount();
     } finally {
@@ -1093,13 +1121,12 @@ describe("updates that suspend", () => {
       });
       flushSync(() => root.render(L.createElement(App)));
       L.startTransition(() => set("b"));
-      // Once its effects ran: one task races React's passive effects' task.
       await settle();
       snap("waiting");
       // React renders the content once its data comes and shows it 300 ms after the fallback
       // appeared; compat waits, then renders.
       d.resolve("b");
-      await new Promise((r) => setTimeout(r, 350));
+      await sleep(350);
       snap("resolved");
     }));
 
@@ -1124,14 +1151,12 @@ describe("updates that suspend", () => {
       await task();
       snap("waiting");
       d.resolve("b");
-      await new Promise((r) => setTimeout(r, 350));
+      await sleep(350);
       snap("resolved");
     }));
 });
 
 describe("throttled reveals", () => {
-  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
   test("content a boundary shows again within the throttle renders at once and commits when it ends", () =>
     same(async ({ L, log, root, flushSync, snap, task }) => {
       const d = deferred<string>();
@@ -1832,7 +1857,7 @@ test("on a core without the retry module, a mount a later slice renders that thr
     };
     Core.flushSync(() => root.render(h(App)));
     Core.startTransition(() => set(true));
-    for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0));
+    await settle();
     expect(seen).toEqual(["uncaught boom"]);
     expect(markup(c)).toBe("");
   } finally {
@@ -1876,7 +1901,7 @@ test("without @reactre/full-compat's time slicing, a transition renders whole in
     })();
     Compat.flushSync(() => root.render(Compat.createElement(List)));
     Compat.startTransition(() => set(1));
-    for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0));
+    await settle();
     expect(log).toEqual(["between <p><i>1</i><i>1</i><i>1</i><i>1</i></p>"]);
   } finally {
     Object.defineProperty(performance, "now", { configurable: true, writable: true, value: realNow });
