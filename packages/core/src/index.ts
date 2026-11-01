@@ -1510,6 +1510,10 @@ class MountList<T, K> extends ForList<T, K> {
   protected override create(item: T): Row<T> {
     const e = super.create(item) as MountRow<T>;
     e.own = new Root();
+    // Every hole's node is found now, in the clone as it was made: a mount puts nodes in the
+    // row (a slot's content, a component's, a list's rows), and a hole after it, looked up
+    // later by its path, would find one of those.
+    this.spec.t.locate(e.root, (e.nodes = []));
     this.mount(e);
     return e;
   }

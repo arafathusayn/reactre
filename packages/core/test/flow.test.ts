@@ -913,6 +913,64 @@ describe("refs", () => {
 
 // #endregion
 
+// #region Rows with mounts
+
+describe("<For> rows that hold mounts", () => {
+  test("a hole after a slot that puts in several nodes is still its own node", () => {
+    const root = box();
+    const api = run<{ setTitle: (t: string) => void; setRows: (r: { id: number }[]) => void }>(
+      `
+      import { render, signal, For, Show } from "@reactre/core";
+      const [title, setTitle] = signal("a");
+      const [rows, setRows] = signal([{ id: 1 }]);
+      render(() => (
+        <ul><For each={rows()} key={(r) => r.id}>{(r) => <li><Show when={true}><b>+</b><b>+</b></Show>{title()}</li>}</For></ul>
+      ), root);
+      return { setTitle, setRows };
+    `,
+      root,
+    );
+    expect(html(root)).toBe("<ul><li><b>+</b><b>+</b>a</li></ul>");
+    api.setTitle("b");
+    expect(html(root)).toBe("<ul><li><b>+</b><b>+</b>b</li></ul>");
+    // A row made later, after the hole was written, is located the same way.
+    api.setRows([{ id: 1 }, { id: 2 }]);
+    api.setTitle("c");
+    expect(html(root)).toBe("<ul><li><b>+</b><b>+</b>c</li><li><b>+</b><b>+</b>c</li></ul>");
+  });
+
+  test("a component followed by a nested <For> in the same element", () => {
+    const root = box();
+    const api = run<{ setRows: (r: { id: number; subs: string[] }[]) => void; setLabel: (l: string) => void }>(
+      `
+      import { render, signal, For } from "@reactre/core";
+      const [label, setLabel] = signal("x");
+      const [rows, setRows] = signal([{ id: 1, subs: ["p", "q"] }]);
+      const Head = () => <><i>{label()}</i><i>!</i></>;
+      render(() => (
+        <ul><For each={rows()} key={(r) => r.id}>{(r) => (
+          <li><Head /><For each={r.subs} key={(s) => s}>{(s) => <b>{s}</b>}</For><em>{label()}</em></li>
+        )}</For></ul>
+      ), root);
+      return { setRows, setLabel };
+    `,
+      root,
+    );
+    expect(html(root)).toBe("<ul><li><i>x</i><i>!</i><b>p</b><b>q</b><em>x</em></li></ul>");
+    api.setLabel("y");
+    expect(html(root)).toBe("<ul><li><i>y</i><i>!</i><b>p</b><b>q</b><em>y</em></li></ul>");
+    api.setRows([
+      { id: 2, subs: ["r"] },
+      { id: 1, subs: ["p", "q"] },
+    ]);
+    expect(html(root)).toBe(
+      "<ul><li><i>y</i><i>!</i><b>r</b><em>y</em></li><li><i>y</i><i>!</i><b>p</b><b>q</b><em>y</em></li></ul>",
+    );
+  });
+});
+
+// #endregion
+
 // #region Uncompiled
 
 describe("uncompiled", () => {
