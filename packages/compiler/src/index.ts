@@ -30,6 +30,21 @@
 //     not a child of an element is an array of nodes (`__frag`).
 //   - A key on an element outside a list rebuilds the element when the key
 //     changes (a slot that reads the key); a key that calls nothing is ignored.
+//   - Control flow, when the file imports it from "@reactre/core" (by any
+//     local name, or through a namespace import), compiles to slots, memos
+//     and lists, so it costs only where it is used. `<Show>` and `<Switch>`
+//     are a slot behind a memo of the condition (or of the matched case), so
+//     the content is rebuilt only when that changes. `<Repeat>` is a keyed
+//     list over the indexes, a `<For>`'s `fallback` a slot fed by the list's
+//     `each`, `<Portal>` an insert into another element undone by a cleanup,
+//     and `<Dynamic>` a slot that calls the component or builds the tag.
+//   - `class` written as an object or array literal is taken apart: literal
+//     classes join the template, an object's other keys are classList
+//     toggles (bound when they call something), and a part the compiler
+//     cannot resolve (an expression in an array, a computed key) makes the
+//     whole list one string through `__class`. `ref={[a, b]}` gives the
+//     element to each, and `defaultValue`, `defaultChecked`,
+//     `defaultSelected` and `defaultMuted` are set as properties.
 //
 // Nothing is left to a JSX runtime: a construct the compiler does not handle
 // (a `<For>` outside an element, a row that is not one element) is a compile
@@ -42,6 +57,9 @@
 //   - "Calls a function" is the whole test for a reactive hole: in reactre a signal is read by
 //     calling it. The test is conservative: a call that reads no signal only costs an effect.
 //   - Every name the output adds starts with `__rr`, so it cannot collide with the app's names.
+//   - Control flow is recognized by import, not by name: `Show`, `Switch` and `Dynamic` are names
+//     apps give components of their own (a toggle switch, a dynamic form), and those must stay
+//     components. `<For>` is also matched by its name alone, as it always was.
 //   - For a source map (`compileJsWithMap`), each piece of source carries where it starts in the
 //     input, and the output marks each token it copies with its place (./map.ts). Without a map,
 //     nothing is marked, so the code is the same either way.
@@ -120,6 +138,14 @@ const ALIASES: Record<string, string> = { className: "class", htmlFor: "for" };
 /** Props set as properties, not attributes, when their value is not a literal: what the user changes. */
 const PROPERTIES = new Set(["value", "checked", "selected"]);
 /**
+ * Props that are properties only, set even when their value is a literal: each reflects another
+ * attribute (`defaultValue` is `value`'s, or a textarea's text), so there is none of its name.
+ */
+const DEFAULTS = new Set(["defaultValue", "defaultChecked", "defaultSelected", "defaultMuted"]);
+/** The elements @reactre/core's control flow compiles, by their exported names. */
+const FLOW = ["For", "Show", "Switch", "Match", "Repeat", "Portal", "Dynamic"] as const;
+type Flow = (typeof FLOW)[number];
+/**
  * Tags that exist only in SVG. A template whose root is one is parsed inside an `<svg>`, so it
  * gets the SVG namespace (`a`, `title`, `style` and `script` are HTML ones too, so they are not here).
  */
@@ -153,21 +179,35 @@ interface Call {
  * where that starts in the input (-1 when not known, or when `expr` is compiled already).
  */
 type Hole = (
-  | { readonly kind: "value"; readonly marker: number; readonly expr: string }
+  | {
+      readonly kind: "value";
+      readonly marker: number;
+      readonly expr: string;
+      /** A function the compiled expression is passed through (`__rrClass`, for a class list). */
+      readonly wrap?: string;
+    }
   | { readonly kind: "event"; readonly type: string; readonly expr: string }
   /** A property (`value`, `checked`, `selected`), which cloning does not copy: set after the clone. */
   | { readonly kind: "prop"; readonly expr: string }
   /** What a runtime helper applies to the element itself: a style, a ref or spread props. */
   | { readonly kind: "el"; readonly fn: "style" | "ref" | "spread"; readonly expr: string }
+  /** A class object's keys whose values are expressions: [class, value, where it starts]. */
+  | { readonly kind: "el"; readonly fn: "toggle"; readonly expr: ""; readonly toggles: readonly Toggle[] }
   | {
       readonly kind: "slot";
-      readonly slot: "for" | "comp" | "expr";
+      /**
+       * "for": a list (`expr` is its props); "comp": content inserted once; "expr": an expression
+       * re-run as a slot; "fn": a slot whose function `expr` is (control flow's).
+       */
+      readonly slot: "for" | "comp" | "expr" | "fn";
       readonly expr: string;
       /** Whether the slot is its element's only child, so a list can own the element. */
       readonly only: boolean;
       /** A <For>'s key function (JSX passes `key` apart from the props), and where it starts. */
       readonly key?: string;
       readonly keyAt?: number;
+      /** For a list: a <Repeat>'s props, not a <For>'s. */
+      readonly repeat?: boolean;
     }
 ) & { readonly at: number };
 
@@ -181,6 +221,9 @@ interface Tree {
   /** Whether the root is an SVG element, so the markup is parsed inside an `<svg>`. */
   svg: boolean;
 }
+
+/** A class object's key toggled by an expression: the class, the expression, where it starts. */
+type Toggle = readonly [string, string, number];
 
 /** A compile error, pointing at the source it could not compile. */
 export class ReactreCompileError extends Error {}
@@ -224,7 +267,7 @@ function compile(js: string, map: boolean): string {
   if (helpers.size === 0) return js;
   const fragments = new Set<string>();
   for (const m of js.matchAll(/\bFragment_[a-z0-9]{8}\b/g)) fragments.add(m[0]);
-  const c = new Compiler(helpers, fragments, map);
+  const c = new Compiler(helpers, fragments, map, flowNames(js));
   const body = c.rewrite(js, 0);
   // Nothing may fall back to a JSX runtime, since reactre has none.
   for (const m of body.matchAll(/\b(jsxs|jsx|jsxDEV|Fragment)_[a-z0-9]{8}\b/g)) {
@@ -249,7 +292,29 @@ const EXTRA_HELPERS: readonly (readonly [string, string])[] = [
   ["__style", "__rrStyle"],
   ["__ref", "__rrRef"],
   ["__on", "__rrOn"],
+  ["memo", "__rrMemo"],
+  ["signal", "__rrSignal"],
+  ["onCleanup", "__rrOnCleanup"],
+  ["__class", "__rrClass"],
 ];
+
+/**
+ * The control flow elements the file imports from @reactre/core, by the type a jsx call names
+ * them with: `Show` (or its local name, `S` for `Show as S`), and `R.Show` for `import * as R`.
+ */
+function flowNames(js: string): Map<string, Flow> {
+  const names = new Map<string, Flow>();
+  const isFlow = (n: string): n is Flow => (FLOW as readonly string[]).includes(n);
+  for (const m of js.matchAll(/\bimport\s*\{([^}]*)\}\s*from\s*["']@reactre\/core["']/g)) {
+    for (const part of m[1]!.split(",")) {
+      const [name, local = name] = part.trim().split(/\s+as\s+/) as [string, string?];
+      if (isFlow(name)) names.set(local, name);
+    }
+  }
+  for (const m of js.matchAll(/\bimport\s*\*\s*as\s+([\w$]+)\s+from\s*["']@reactre\/core["']/g))
+    for (const name of FLOW) names.set(`${m[1]}.${name}`, name);
+  return names;
+}
 
 /**
  * Compiles the jsx calls of one file. It collects the hoisted template declarations in
@@ -266,15 +331,30 @@ class Compiler {
   selectors = false;
   /** Whether the output carries marks for a source map (./map.ts). */
   readonly map: boolean;
-  constructor(helpers: Set<string>, fragments: Set<string> = new Set(), map = false) {
+  /** The control flow the file imports, by the type its jsx calls name (see `flowNames`). */
+  private readonly flow: ReadonlyMap<string, Flow>;
+  /** Numbers the names control flow declares (`__rrC0`), so nested ones are told apart. */
+  private uid = 0;
+  constructor(
+    helpers: Set<string>,
+    fragments: Set<string> = new Set(),
+    map = false,
+    flow: ReadonlyMap<string, Flow> = new Map(),
+  ) {
     this.helpers = helpers;
     this.fragments = fragments;
     this.map = map;
+    this.flow = flow;
   }
 
   /** The mark for input offset `at`, when the output carries marks and `at` is known; else "". */
   private m(at: number): string {
     return this.map && at >= 0 ? mark(at) : "";
+  }
+
+  /** The control flow element a jsx call's type names, or null: `For` by its name too. */
+  private kind(type: string): Flow | null {
+    return this.flow.get(type) ?? (type === "For" ? "For" : null);
   }
 
   // #region Finding jsx calls
@@ -367,8 +447,16 @@ class Compiler {
       const keyed = this.keyed(c);
       return keyed === null ? this.host(c) : `__rrFrag([() => (${keyed})])`;
     }
+    const f = this.kind(c.type);
     // A list renders into a parent element, before an anchor in it, so it cannot stand alone.
-    if (c.type === "For") throw new ReactreCompileError("reactre: <For> must be the child of an element");
+    if (f === "For" || f === "Repeat") throw new ReactreCompileError(`reactre: <${f}> must be the child of an element`);
+    // Control flow that stands alone is a one-slot fragment, or for a <Portal> or a <Dynamic> of
+    // a component that calls nothing, the expression itself.
+    if (f !== null) {
+      const flow = this.flowOf(c, f, false);
+      if ("host" in flow) return this.call(flow.host);
+      return "fn" in flow ? `__rrFrag([${flow.fn}])` : flow.expr;
+    }
     if (this.fragments.has(c.type)) return this.fragment(c);
     return this.component(c);
   }
@@ -389,8 +477,13 @@ class Compiler {
    * makes a slot.
    */
   private fragment(c: Call): string {
+    return this.frag(this.childrenOf(c.props, c.propsAt));
+  }
+
+  /** `fragment`'s array of nodes, for a list of children. */
+  private frag(children: readonly [string, number][]): string {
     const kids: string[] = [];
-    for (const [child, at] of this.childrenOf(c.props, c.propsAt)) {
+    for (const [child, at] of children) {
       const lit = literal(child);
       if (lit === null || lit === undefined || typeof lit === "boolean") continue;
       if (typeof lit === "string" || typeof lit === "number") {
@@ -398,9 +491,14 @@ class Compiler {
         continue;
       }
       const inner = this.only(child, at);
-      if (inner !== null && inner.type === "For")
-        throw new ReactreCompileError("reactre: <For> must be the child of an element");
-      if (inner !== null) kids.push(this.m(at) + this.call(inner));
+      const f = inner === null ? null : this.kind(inner.type);
+      if (f === "For" || f === "Repeat")
+        throw new ReactreCompileError(`reactre: <${f}> must be the child of an element`);
+      // A slot of control flow joins the fragment's slots, not a fragment of its own.
+      const flow = inner !== null && f !== null ? this.flowOf(inner, f, false) : null;
+      if (flow !== null)
+        kids.push(this.m(at) + ("fn" in flow ? flow.fn : "host" in flow ? this.call(flow.host) : flow.expr));
+      else if (inner !== null) kids.push(this.m(at) + this.call(inner));
       else if (this.hasJsx(child) || reactive(child)) kids.push(`() => (${this.rewrite(child, at)})`);
       else kids.push(`(${this.rewrite(child, at)})`);
     }
@@ -508,12 +606,17 @@ class Compiler {
     if (entries.some(([k]) => k === "...")) {
       const rest = entries
         .filter(([k]) => k !== "children")
-        .map(([k, v]) => (k === "..." ? v : `${JSON.stringify(k)}: ${v}`));
+        .map(([k, v]) => (k === "..." ? v : `${JSON.stringify(k)}: ${spreadValue(k, v)}`));
       this.add(t, " rr-spread=");
       // The expression is made here, so its places in the input are not known.
       this.hole(t, { kind: "el", fn: "spread", expr: `{ ${rest.join(", ")} }`, at: -1 });
     }
     const spread = entries.some(([k]) => k === "...");
+    // A class object or array is taken apart with every other class prop of the element
+    // (`className` beside `class`), so that together they make one class list.
+    const classes = entries.filter(([k]) => k !== "..." && (ALIASES[k] ?? k) === "class");
+    const classList = !spread && classes.some(([, v]) => isLiteral(v, "{") || isLiteral(v, "["));
+    let classDone = false;
     for (const [rawName, value, at] of entries) {
       if (rawName === "children") {
         // Several children come as one array literal (jsxs); split it into one child each.
@@ -522,6 +625,20 @@ class Compiler {
       }
       if (spread) continue;
       const name = ALIASES[rawName] ?? rawName;
+      if (name === "class" && classList) {
+        // All of them, at the first class prop.
+        if (!classDone) this.classList(classes, t, inSvg);
+        classDone = true;
+        continue;
+      }
+      if (!inSvg && DEFAULTS.has(name)) {
+        // Always the property: a literal too, since no attribute has the name.
+        const lit = literal(value);
+        if (lit === null || lit === undefined) continue;
+        this.add(t, ` .${name}=`);
+        this.hole(t, { kind: "prop", expr: value, at });
+        continue;
+      }
       if (/^on[A-Z]/.test(name)) {
         // The hole sits where the attribute's value would; the clone adds a listener there instead.
         this.add(t, ` on${name.slice(2).toLowerCase()}=`);
@@ -563,6 +680,56 @@ class Compiler {
     this.add(t, `</${tag}>`);
   }
 
+  /**
+   * An element's class props, one of which is an object or array literal, as one class list.
+   * When every part is known while compiling, the literal classes join the template and an
+   * object's other keys become toggles (an element hole); otherwise the whole list is one class
+   * hole whose value goes through `__class`.
+   */
+  private classList(classes: readonly [string, string, number][], t: Tree, svg: boolean): void {
+    const tokens: string[] = [],
+      toggles: Toggle[] = [];
+    if (!classes.every(([, v, at]) => this.classParts(v, at, tokens, toggles))) {
+      // On SVG, class is an attribute (className is read-only there).
+      const [expr, at] =
+        classes.length === 1 ? [classes[0]![1], classes[0]![2]] : [`[${classes.map(([, v]) => v).join(", ")}]`, -1];
+      this.add(t, " class=");
+      this.hole(t, { kind: "value", marker: svg ? M_ATTR : M_CLASS, expr, at, wrap: "__rrClass" });
+      return;
+    }
+    if (tokens.length) this.add(t, ` class="${attrText(tokens.join(" "))}"`);
+    if (toggles.length) {
+      this.add(t, " rr-class=");
+      this.hole(t, { kind: "el", fn: "toggle", expr: "", toggles, at: -1 });
+    }
+  }
+
+  /**
+   * One class value taken apart: its literal classes into `tokens`, an object's keys whose values
+   * are expressions into `toggles`. False when some part of it is known only at runtime: an
+   * expression that is not an object or array literal, a spread, or a computed key.
+   */
+  private classParts(v: string, at: number, tokens: string[], toggles: Toggle[]): boolean {
+    const lit = literal(v);
+    const names = (s: string) => s.split(/\s+/).filter(Boolean);
+    if (lit !== NOT_LITERAL) {
+      if (typeof lit === "string" || (typeof lit === "number" && lit !== 0)) tokens.push(...names("" + lit));
+      return true;
+    }
+    if (isLiteral(v, "["))
+      return splitAt(v, 1, v.length - 1).every(([s, i]) => this.classParts(s, at < 0 ? -1 : at + i, tokens, toggles));
+    if (!isLiteral(v, "{")) return false;
+    const entries = this.object(v, true, at);
+    if (entries.some(([k]) => k === "..." || k.startsWith("["))) return false;
+    for (const [k, x, xAt] of entries) {
+      const l = literal(x);
+      // A key of several names toggles each.
+      if (l === NOT_LITERAL) for (const c of names(k)) toggles.push([c, x, xAt]);
+      else if (l) tokens.push(...names(k));
+    }
+    return true;
+  }
+
   /** Append an element's children to template t; a fragment's children join it in place. */
   private children(children: readonly [string, number][], t: Tree, svg: boolean): void {
     // Literal null, undefined and booleans render nothing. They are dropped first, so a list
@@ -590,16 +757,25 @@ class Compiler {
         else this.hole(t, { kind: "slot", slot: "expr", expr: this.m(at) + keyed, only, at: -1 });
         continue;
       }
-      if (inner !== null && inner.type === "For")
+      const f = inner === null ? null : this.kind(inner.type);
+      if (f === "For" || f === "Repeat")
         this.hole(t, {
           kind: "slot",
           slot: "for",
-          expr: inner.props,
+          expr: inner!.props,
           only,
-          at: inner.propsAt,
-          ...(inner.key !== undefined ? { key: inner.key, keyAt: inner.keyAt } : {}),
+          at: inner!.propsAt,
+          ...(inner!.key !== undefined ? { key: inner!.key, keyAt: inner!.keyAt } : {}),
+          ...(f === "Repeat" ? { repeat: true } : {}),
         });
-      else if (inner !== null)
+      else if (f !== null) {
+        // Control flow: a slot of its own function, content inserted once, or (a <Dynamic> of a
+        // tag name written as a string) an element of the template.
+        const flow = this.flowOf(inner!, f, svg);
+        if ("host" in flow) this.element(flow.host, t, svg);
+        else if ("fn" in flow) this.hole(t, { kind: "slot", slot: "fn", expr: this.m(at) + flow.fn, only, at: -1 });
+        else this.hole(t, { kind: "slot", slot: "comp", expr: this.m(at) + flow.expr, only, at: -1 });
+      } else if (inner !== null)
         this.hole(t, { kind: "slot", slot: "comp", expr: this.m(at) + this.component(inner), only, at: -1 });
       // An expression that holds JSX (a conditional, a map) may change what it renders: a slot.
       else if (this.hasJsx(child))
@@ -612,6 +788,12 @@ class Compiler {
   private hasJsx(src: string): boolean {
     for (const h of this.helpers) if (src.includes(h + "(")) return true;
     return false;
+  }
+
+  /** A value hole's compiled expression, through its `wrap` when it has one. */
+  private value(h: Extract<Hole, { kind: "value" }>): string {
+    const e = this.rewrite(h.expr, h.at);
+    return h.wrap === undefined ? e : `${h.wrap}(${e})`;
   }
 
   /** Hoist t to module scope, so it is built once, not on every render; returns its name. */
@@ -653,8 +835,8 @@ class Compiler {
       if (h.kind === "value") {
         if (reactive(h.expr)) {
           vals.push('""');
-          after.push(`${this.m(h.at)}__rrBind(${id}, ${i}, __n[${i}], () => (${this.rewrite(h.expr, h.at)}));`);
-        } else vals.push(`(${this.rewrite(h.expr, h.at)})`);
+          after.push(`${this.m(h.at)}__rrBind(${id}, ${i}, __n[${i}], () => (${this.value(h)}));`);
+        } else vals.push(`(${this.value(h)})`);
         return;
       }
       // An element hole is an attribute the clone must leave out: null is what the prototype holds.
@@ -680,7 +862,8 @@ class Compiler {
       }
       if (h.slot === "comp") after.push(`__rrInsert(__n[${i}], ${h.expr}, null);`);
       else if (h.slot === "expr") after.push(`__rrSlot(__n[${i}], () => (${h.expr}));`);
-      else after.push(this.forList(h.expr, h.at, h.key, h.keyAt ?? -1, `__n[${i}]`, h.only));
+      else if (h.slot === "fn") after.push(`__rrSlot(__n[${i}], ${h.expr});`);
+      else after.push(this.forList(h.expr, h.at, h.key, h.keyAt ?? -1, `__n[${i}]`, h.only, h.repeat));
     });
     after.push(...late);
     const locate = after.length ? `const __n = []; ${id}.locate(__r, __n); ` : "";
@@ -693,11 +876,17 @@ class Compiler {
 
   /**
    * `<For each key>{(row) => <tr/>}</For>` in the slot at `anchor`: a statement that starts the
-   * keyed list, with a spec in the shape of reactre's ForSpec.
+   * keyed list, with a spec in the shape of reactre's ForSpec. A `<Repeat count from>` is the
+   * same list over the indexes, keyed by the index.
+   *
+   * With a `fallback`, `each` also writes a signal of whether the list is empty, which a slot
+   * beside the list follows. The list then keeps its anchor even as its element's only child: a
+   * list that owns its parent clears it natively, which would take the fallback too.
    *
    * @param keyArg The key function when JSX passed it as the call's key argument.
    * @param only Whether the list is its element's only child. The list then takes the whole
    *   parent: the anchor is removed and rows append to the parent, with no anchor to insert before.
+   * @param repeat Whether `props` are a <Repeat>'s.
    */
   forList(
     props: string,
@@ -706,17 +895,44 @@ class Compiler {
     keyArgAt: number,
     anchor: string,
     only: boolean,
+    repeat = false,
   ): string {
+    const name = repeat ? "Repeat" : "For";
     const p = new Map(this.object(props, false, propsAt).map(([k, v, at]) => [k, [v, at] as const]));
-    const [each, eachAt] = p.get("each") ?? [],
-      [key, keyAt] = keyArg !== undefined ? [keyArg, keyArgAt] : (p.get("key") ?? []),
-      [children, childrenAt] = p.get("children") ?? [];
-    if (each === undefined || key === undefined || children === undefined) {
-      throw new ReactreCompileError("reactre: <For> needs each, key and a row function as its child");
+    const [children, childrenAt] = p.get("children") ?? [];
+    // The list's each and key, compiled where the spec is written (after the row's template).
+    let each: () => string, key: () => string;
+    if (repeat) {
+      const [count, countAt] = p.get("count") ?? [];
+      const other = [...p.keys()].find((k) => !["count", "from", "fallback", "children"].includes(k));
+      if (count === undefined || children === undefined || keyArg !== undefined || other !== undefined)
+        throw new ReactreCompileError(
+          "reactre: <Repeat> takes count, from, fallback and a row function as its child" +
+            (other !== undefined ? `, not ${other}` : keyArg !== undefined ? ", not key" : ""),
+        );
+      const from = p.get("from");
+      each = () => {
+        const range = `Array.from({ length: ${this.rewrite(count, countAt!)} }, (__rrU, __rrI) => `;
+        return from === undefined
+          ? `${range}__rrI)`
+          : `((__rrF) => ${range}__rrF + __rrI))(${this.rewrite(from[0], from[1])})`;
+      };
+      key = () => "(__rrI) => __rrI";
+    } else {
+      const [e, eAt] = p.get("each") ?? [],
+        [k, kAt] = keyArg !== undefined ? [keyArg, keyArgAt] : (p.get("key") ?? []);
+      if (e === undefined || k === undefined || children === undefined) {
+        throw new ReactreCompileError("reactre: <For> needs each, key and a row function as its child");
+      }
+      each = () => this.rewrite(e, eAt ?? -1);
+      key = () => this.rewrite(k, kAt ?? -1);
     }
     // One plain parameter, so it can name the row in every hole's own function below.
     const fn = /^\(?\s*([A-Za-z_$][\w$]*)\s*\)?\s*=>\s*([\s\S]*)$/.exec(children.trim());
-    if (fn === null) throw new ReactreCompileError(`reactre: a <For> row must be (row) => <element />: ${children}`);
+    if (fn === null)
+      throw new ReactreCompileError(
+        `reactre: a <${name}> row must be (${repeat ? "i" : "row"}) => <element />: ${children}`,
+      );
     const param = fn[1]!;
     // The body ends where children does (children is trimmed already).
     let [body, bodyAt] = trimAt(fn[2]!, childrenAt! < 0 ? -1 : childrenAt! + children.length - fn[2]!.length);
@@ -725,7 +941,7 @@ class Compiler {
       [body, bodyAt] = trimAt(body.slice(1, -1), bodyAt < 0 ? -1 : bodyAt + 1);
     const row = this.only(body, bodyAt);
     if (row === null || !row.type.startsWith('"'))
-      throw new ReactreCompileError(`reactre: a <For> row must be one element: ${body}`);
+      throw new ReactreCompileError(`reactre: a <${name}> row must be one element: ${body}`);
     const t = this.tree(row);
     const id = this.template(t);
     // fill/holes: values that depend on the row only, written at creation. dyn/dynHoles: values
@@ -751,8 +967,10 @@ class Compiler {
         // A nested list never owns its parent here: a new item rebuilds it before the same anchor.
         const stmt =
           h.slot === "for"
-            ? this.forList(h.expr, h.at, h.key, h.keyAt ?? -1, "__m", false)
-            : `__rrSlot(__m, () => (${h.expr}));`;
+            ? this.forList(h.expr, h.at, h.key, h.keyAt ?? -1, "__m", false, h.repeat)
+            : h.slot === "fn"
+              ? `__rrSlot(__m, ${h.expr});`
+              : `__rrSlot(__m, () => (${h.expr}));`;
         mounts.push(`[${i}, (${param}, __m) => { ${stmt} }]`);
         return;
       }
@@ -760,7 +978,7 @@ class Compiler {
         mounts.push(`[${i}, (${param}, __m) => { ${this.part(id, i, h, "__m")} }]`);
         return;
       }
-      const e = this.rewrite(h.expr, h.at);
+      const e = this.value(h);
       if (reactive(h.expr)) {
         keyCalls += callsWithArguments(h.expr);
         dyn.push(`__d[${dynHoles.length}] = (${e});`);
@@ -770,9 +988,14 @@ class Compiler {
         holes.push(i);
       }
     });
+    const fallback = p.get("fallback");
+    const n = fallback === undefined ? -1 : this.uid++;
     // dyn, events and mounts are left out when empty, so the runtime does no work for them per row.
     const spec =
-      `{ each: () => (${this.rewrite(each, eachAt ?? -1)}), key: ${this.rewrite(key, keyAt ?? -1)}, t: ${id}, ` +
+      (fallback === undefined
+        ? `{ each: () => (${each()}), `
+        : `{ each: () => { const __rrL = (${each()}); __rrS${n}(__rrL.length === 0); return __rrL; }, `) +
+      `key: ${key()}, t: ${id}, ` +
       `fill: (${param}, __v) => { ${fill.join(" ")} }, holes: ${JSON.stringify(holes)}` +
       (dyn.length ? `, dyn: (${param}, __d) => { ${dyn.join(" ")} }, dynHoles: ${JSON.stringify(dynHoles)}` : "") +
       (events.length ? `, events: [${events.join(", ")}]` : "") +
@@ -783,6 +1006,11 @@ class Compiler {
     // Only a row with mounts takes the list that runs them: a row of host elements and values
     // costs what it always has.
     const call = mounts.length ? "__rrForM" : "__rrFor";
+    if (fallback !== undefined) {
+      // The list's first run writes the signal, before the slot first reads it.
+      const shown = `__rrSlot(${anchor}, () => (__rrE${n}() ? (${this.rewrite(fallback[0], fallback[1])}) : null));`;
+      return `{ const [__rrE${n}, __rrS${n}] = __rrSignal(true); ${call}(${anchor}.parentNode, ${anchor}, ${spec}); ${shown} }`;
+    }
     return only
       ? `{ const __a = ${anchor}, __p = __a.parentNode; __p.removeChild(__a); ${call}(__p, null, ${spec}); }`
       : `${call}(${anchor}.parentNode, ${anchor}, ${spec});`;
@@ -793,6 +1021,29 @@ class Compiler {
    * its expression calls something.
    */
   private part(id: string, i: number, h: Extract<Hole, { kind: "prop" | "el" }>, node: string): string {
+    if (h.kind === "el" && h.fn === "toggle")
+      // One toggle per class, in an effect of its own when its value calls something.
+      return h.toggles
+        .map(([c, x, at]) => {
+          const e = this.rewrite(x, at),
+            name = JSON.stringify(c);
+          return reactive(x)
+            ? `${this.m(at)}__rrApply(${node}, (__rrE, __rrV) => __rrE.classList.toggle(${name}, !!__rrV), () => (${e}));`
+            : `${this.m(at)}${node}.classList.toggle(${name}, !!(${e}));`;
+        })
+        .join(" ");
+    if (h.kind === "el" && h.fn === "ref" && isLiteral(h.expr, "["))
+      // Each ref of an array literal gets the element, a spread item's refs each; a literal null
+      // or undefined is left out.
+      return splitAt(h.expr, 1, h.expr.length - 1)
+        .filter(([r]) => literal(r) !== null && literal(r) !== undefined)
+        .map(([r, i]) => {
+          const at = h.at < 0 ? -1 : h.at + i;
+          return r.startsWith("...")
+            ? `${this.m(at)}for (const __rrR of ${this.rewrite(r.slice(3), at < 0 ? -1 : at + 3)}) __rrRef(${node}, __rrR);`
+            : `${this.m(at)}__rrRef(${node}, ${this.rewrite(r, at)});`;
+        })
+        .join(" ");
     const e = this.rewrite(h.expr, h.at);
     const m = this.m(h.at);
     if (h.kind === "prop")
@@ -806,11 +1057,279 @@ class Compiler {
   }
 
   // #endregion
+
+  // #region Control flow
+
+  // <Show>, <Switch> and <Dynamic> of a component that may change are slots: each compiles to a
+  // function for `__slot` (`fn`), whose setup (the memos it reads) runs where the element is,
+  // under the same owner. A row of a list runs it again for a new item, as its other slots. The
+  // content is built inside the slot's run, so the slot owns what it makes and disposes it when
+  // the condition changes. Every name these declare carries a number of its own (`__rrC0`).
+
+  /**
+   * What control flow element `c` compiles to: a slot function (`fn`), an expression that builds
+   * its content once (`expr`), or a host element to compile in its place (`host`).
+   *
+   * @param svg Whether it is inside an SVG element, where a <Dynamic>'s tag is an SVG one.
+   */
+  private flowOf(
+    c: Call,
+    f: Exclude<Flow, "For" | "Repeat">,
+    svg: boolean,
+  ): { fn: string } | { expr: string } | { host: Call } {
+    if (f === "Show") return { fn: this.show(c) };
+    if (f === "Switch") return { fn: this.switchOf(c) };
+    if (f === "Portal") return { expr: this.portal(c) };
+    if (f === "Dynamic") return this.dynamicOf(c, svg);
+    throw new ReactreCompileError("reactre: <Match> must be a child of <Switch>");
+  }
+
+  /**
+   * `<Show when fallback keyed>`. Without `keyed`, a memo of whether `when` is truthy, so the
+   * content is rebuilt only when that changes; a function child gets an accessor of the value.
+   * With it, a memo of the value, so a new value rebuilds the content; a function child gets the
+   * value. A `when` that calls nothing never changes: it is read once, with no memo.
+   */
+  private show(c: Call): string {
+    const p = this.flowProps(c, "Show", ["when", "fallback", "keyed", "children"]);
+    const [when, whenAt] = need(p, "when", "Show");
+    const keyed = keyedOf(p, "Show");
+    const w = this.rewrite(when, whenAt),
+      fb = this.fallback(p),
+      n = this.uid++,
+      x = `__rrX${n}`;
+    const kids = (arg: () => string) => this.content(this.kids(p), arg);
+    if (!reactive(when)) return `((${x}) => () => (${x} ? ${kids(() => (keyed ? x : `() => ${x}`))} : ${fb}))(${w})`;
+    if (keyed) {
+      const v = `__rrV${n}`;
+      return `(() => { const ${v} = __rrMemo(() => (${w})); return () => ((${x}) => (${x} ? ${kids(() => x)} : ${fb}))(${v}()); })()`;
+    }
+    const cond = `__rrC${n}`;
+    return `(() => { const ${cond} = __rrMemo(() => !!(${w})); return () => (${cond}() ? ${kids(() => accessor(w))} : ${fb}); })()`;
+  }
+
+  /**
+   * `<Switch fallback>` of `<Match when keyed>`: a memo of the first truthy match's index, so the
+   * content is rebuilt only when another match becomes the first. With a keyed match the memo is
+   * of [index, value] (the same array while neither changes), so that match's new value rebuilds
+   * it too. The conditions are read in order, and only up to the first truthy one.
+   */
+  private switchOf(c: Call): string {
+    const p = this.flowProps(c, "Switch", ["fallback", "children"]);
+    const fb = this.fallback(p),
+      n = this.uid++;
+    const [memo, index, value, last, x] = ["M", "I", "V", "L", "X"].map((s) => `__rrS${s}${n}`) as [
+      string,
+      string,
+      string,
+      string,
+      string,
+    ];
+    // Space between the matches, as JSX keeps it on one line, is not a child.
+    const matches = this.kids(p)
+      .filter(([k]) => !isNothing(k) && !(typeof literal(k) === "string" && !(literal(k) as string).trim()))
+      .map(([k, at]) => {
+        const m = this.only(k, at);
+        if (m === null || this.kind(m.type) !== "Match")
+          throw new ReactreCompileError(`reactre: <Switch> takes only <Match> children: ${k}`);
+        const mp = this.flowProps(m, "Match", ["when", "keyed", "children"]);
+        const [when, whenAt] = need(mp, "when", "Match");
+        return { w: this.rewrite(when, whenAt), keyed: keyedOf(mp, "Match"), props: mp };
+      });
+    const keyed = matches.some((m) => m.keyed);
+    const chain = matches
+      .map((m, k) => (m.keyed ? `(${x} = (${m.w})) ? [${k}, ${x}]` : `(${m.w}) ? ${keyed ? `[${k}]` : k}`))
+      .concat(keyed ? "[-1]" : "-1")
+      .join(" : ");
+    const cases = matches
+      .map((m, k) => {
+        const kids = this.content(this.kids(m.props), () => (m.keyed ? value : accessor(m.w)));
+        return `case ${k}: return ${kids};`;
+      })
+      .join(" ");
+    const pick = `switch (${keyed ? index : `${memo}()`}) { ${cases} default: return ${fb}; }`;
+    if (!keyed) return `(() => { const ${memo} = __rrMemo(() => (${chain})); return () => { ${pick} }; })()`;
+    return (
+      `(() => { let ${x}, ${last} = []; const ${memo} = __rrMemo(() => { const ${index} = ${chain}; ` +
+      `return ${index}[0] === ${last}[0] && ${index}[1] === ${last}[1] ? ${last} : (${last} = ${index}); }); ` +
+      `return () => { const [${index}, ${value}] = ${memo}(); ${pick} }; })()`
+    );
+  }
+
+  /**
+   * `<Portal mount>`: the children inserted at the end of `mount` (read once, untracked), after
+   * an anchor of their own, and taken out with it by a cleanup of the current owner. It renders
+   * nothing where it is.
+   */
+  private portal(c: Call): string {
+    const p = this.flowProps(c, "Portal", ["mount", "children"]);
+    const mount = p.get("mount");
+    const into = mount === undefined ? "document.body" : `(${this.rewrite(mount[0], mount[1])} ?? document.body)`;
+    const kids = this.kids(p);
+    if (kids.length === 1 && isFunction(kids[0]![0]))
+      throw new ReactreCompileError(`reactre: <Portal>'s children are content, not a function: ${kids[0]![0]}`);
+    return (
+      `__rrUntrack(() => { const __rrA = ${into}.appendChild(document.createTextNode("")), ` +
+      `__rrN = __rrInsert(__rrA, ${this.content(kids, null)}, null); ` +
+      `__rrOnCleanup(() => { __rrInsert(__rrA, null, __rrN); __rrA.parentNode.removeChild(__rrA); }); return null; })`
+    );
+  }
+
+  /**
+   * `<Dynamic component {...props}>`. A tag name written as a string is that element, compiled
+   * as if written out. Any other `component` is looked at when the content is built: a function
+   * is called with the props, untracked, as a component is; a tag name builds its element, with
+   * the props applied as spread props (followed when they call something) and the children
+   * inserted; anything falsy renders nothing. A `component` that calls something is a slot.
+   */
+  private dynamicOf(c: Call, svg: boolean): { fn: string } | { expr: string } | { host: Call } {
+    if (c.key !== undefined) throw new ReactreCompileError("reactre: <Dynamic> takes no key");
+    const entries = this.object(c.props, true, c.propsAt);
+    const comp = entries.find(([k]) => k === "component");
+    if (comp === undefined) throw new ReactreCompileError("reactre: <Dynamic> needs component");
+    const rest = entries.filter((e) => e !== comp);
+    const raw = ([k, v]: readonly [string, string, number]) => (k === "..." ? v : `${JSON.stringify(k)}: ${v}`);
+    const tag = literal(comp[1]);
+    if (typeof tag === "string")
+      return {
+        host: {
+          type: JSON.stringify(tag),
+          props: `{ ${rest.map(raw).join(", ")} }`,
+          key: undefined,
+          typeAt: -1,
+          propsAt: -1,
+          keyAt: -1,
+        },
+      };
+    const compiled = ([k, v, at]: readonly [string, string, number], spread: boolean) =>
+      k === "..."
+        ? this.rewrite(v, at)
+        : `${JSON.stringify(k)}: ${spread ? spreadValue(k, this.rewrite(v, at)) : this.rewrite(v, at)}`;
+    const props = `{ ${rest.map((e) => compiled(e, false)).join(", ")} }`;
+    const attrs = rest.filter(([k]) => k !== "children"),
+      kids = rest.find(([k]) => k === "children");
+    const obj = `{ ${attrs.map((e) => compiled(e, true)).join(", ")} }`;
+    const set =
+      attrs.length === 0
+        ? ""
+        : attrs.some(([, v]) => reactive(v))
+          ? `__rrApply(__rrE, __rrSpread, () => (${obj})); `
+          : `__rrSpread(__rrE, ${obj}, undefined); `;
+    const put =
+      kids === undefined
+        ? ""
+        : `__rrInsert(__rrE.appendChild(document.createTextNode("")), ${this.content(this.items(kids[1], kids[2]), null)}, null); `;
+    const create = svg
+      ? `document.createElementNS("http://www.w3.org/2000/svg", __rrD)`
+      : "document.createElement(__rrD)";
+    const build =
+      `((__rrD) => __rrUntrack(() => typeof __rrD === "function" ? __rrD(${props}) : ` +
+      `__rrD ? ((__rrE) => { ${set}${put}return __rrE; })(${create}) : null))(${this.rewrite(comp[1], comp[2])})`;
+    return reactive(comp[1]) ? { fn: `() => ${build}` } : { expr: build };
+  }
+
+  /**
+   * The content of control flow's children, built where it shows. One element or component is
+   * its own expression; text is a string; several children are a fragment's nodes.
+   *
+   * @param arg For a function child: the argument it is called with (an accessor, or the value),
+   *   compiled only when used. A child that is a function literal is called with it, untracked;
+   *   one that may be a function (a name, which calls nothing) is called when it is one. Null when
+   *   the children are content only.
+   */
+  private content(children: readonly [string, number][], arg: (() => string) | null): string {
+    const kept = children.filter(([x]) => !isNothing(x));
+    if (kept.length === 0) return "null";
+    if (kept.length === 1) {
+      const [k, at] = kept[0]!;
+      const lit = literal(k);
+      if (typeof lit === "string" || typeof lit === "number") return this.m(at) + JSON.stringify("" + lit);
+      const inner = this.only(k, at);
+      if (inner !== null) return this.m(at) + this.call(inner);
+      if (arg !== null && isFunction(k)) return `__rrUntrack(() => (${this.rewrite(k, at)})(${arg()}))`;
+      if (arg !== null && !this.hasJsx(k) && !reactive(k))
+        return `((__rrK) => typeof __rrK === "function" ? __rrUntrack(() => __rrK(${arg()})) : __rrK)(${this.rewrite(k, at)})`;
+    }
+    return this.frag(kept);
+  }
+
+  /** A control flow element's props, checked against those it takes. */
+  private flowProps(c: Call, name: Flow, takes: readonly string[]): Map<string, readonly [string, number]> {
+    if (c.key !== undefined) throw new ReactreCompileError(`reactre: <${name}> takes no key`);
+    const p = new Map<string, readonly [string, number]>();
+    for (const [k, v, at] of this.object(c.props, false, c.propsAt)) {
+      if (!takes.includes(k)) throw new ReactreCompileError(`reactre: <${name}> takes ${takes.join(", ")}, not ${k}`);
+      p.set(k, [v, at]);
+    }
+    return p;
+  }
+
+  /** The children in control flow props, one source each. */
+  private kids(p: ReadonlyMap<string, readonly [string, number]>): [string, number][] {
+    const ch = p.get("children");
+    return ch === undefined ? [] : this.items(ch[0], ch[1]);
+  }
+
+  /** The compiled `fallback` of control flow props: null when there is none. */
+  private fallback(p: ReadonlyMap<string, readonly [string, number]>): string {
+    const f = p.get("fallback");
+    return f === undefined ? "null" : `(${this.rewrite(f[0], f[1])})`;
+  }
+
+  // #endregion
 }
 
 // #endregion
 
 // #region Helpers
+
+/** Whether src is one literal opened by `open` (`{` or `[`) and closed at its end. */
+function isLiteral(src: string, open: "{" | "["): boolean {
+  return src.startsWith(open) && until(src, 1, "") === src.length - 1;
+}
+
+/** Whether a child is a literal that renders nothing: null, undefined or a boolean. */
+function isNothing(src: string): boolean {
+  const lit = literal(src);
+  return lit === null || lit === undefined || typeof lit === "boolean";
+}
+
+/**
+ * A prop's value as spread props take it (`__spread`), which knows no class lists or ref arrays:
+ * a class object or array literal is made its string, a ref array literal a function that gives
+ * each ref the element.
+ */
+function spreadValue(k: string, v: string): string {
+  if ((ALIASES[k] ?? k) === "class" && (isLiteral(v, "{") || isLiteral(v, "["))) return `__rrClass(${v})`;
+  if (k === "ref" && isLiteral(v, "[")) return `(__rrE) => ${v}.forEach((__rrR) => __rrRef(__rrE, __rrR))`;
+  return v;
+}
+
+/** A control flow prop that must be there. */
+function need(p: ReadonlyMap<string, readonly [string, number]>, k: string, name: Flow): readonly [string, number] {
+  const v = p.get(k);
+  if (v === undefined) throw new ReactreCompileError(`reactre: <${name}> needs ${k}`);
+  return v;
+}
+
+/** Whether control flow props have `keyed`, which must be written as a boolean: it decides what compiles. */
+function keyedOf(p: ReadonlyMap<string, readonly [string, number]>, name: Flow): boolean {
+  const k = p.get("keyed");
+  if (k === undefined) return false;
+  const lit = literal(k[0]);
+  if (typeof lit !== "boolean")
+    throw new ReactreCompileError(`reactre: <${name}>'s keyed must be written as true or false, not ${k[0]}`);
+  return lit;
+}
+
+/**
+ * The accessor a function child of a condition `w` (compiled) gets without `keyed`: a memo of
+ * the value. It keeps the last truthy value, so content that has not yet been taken down when
+ * the value turns falsy (its effects may run before the condition's) never reads a falsy one.
+ */
+function accessor(w: string): string {
+  return `((__rrP) => __rrMemo(() => (__rrP = (${w}) || __rrP)))()`;
+}
 
 /**
  * Whether an expression may change: it calls something (a signal read). A `(` counts as a call

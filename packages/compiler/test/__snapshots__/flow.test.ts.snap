@@ -1,0 +1,160 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`golden the benchmark app compiles to the same code 1`] = `
+"import { __template as __rrT, __for as __rrFor, __insert as __rrInsert, __bind as __rrBind, __slot as __rrSlot, untrack as __rrUntrack } from "@reactre/core";
+const __rrT0 = __rrT(["<div class=\\"col-sm-6 smallpad\\"><button type=\\"button\\" class=\\"btn btn-primary btn-block\\" id="," onclick=",">","</button></div>"], [-4,0,-1]);
+const __rrT1 = __rrT(["<div class=\\"container\\"><div class=\\"jumbotron\\"><div class=\\"row\\"><div class=\\"col-md-6\\"><h1>reactre keyed</h1></div><div class=\\"col-md-6\\"><div class=\\"row\\">","","","","","","</div></div></div></div><table class=\\"table table-hover table-striped test-data\\"><tbody>","</tbody></table><span class=\\"preloadicon glyphicon glyphicon-remove\\" aria-hidden=\\"true\\"></span></div>"], [-5,-5,-5,-5,-5,-5,-5]);
+const __rrT2 = __rrT(["<tr class=","><td class=\\"col-md-1\\">","</td><td class=\\"col-md-4\\"><a onclick=",">","</a></td><td class=\\"col-md-1\\"><a onclick=","><span class=\\"glyphicon glyphicon-remove\\" aria-hidden=\\"true\\"></span></a></td><td class=\\"col-md-6\\"></td></tr>"], [-2,-1,0,-1,0]);
+import { batch, For, render, selector, signal } from "@reactre/core";
+const adjectives = [
+  "pretty",
+  "large",
+  "big",
+  "small",
+  "tall",
+  "short",
+  "long",
+  "handsome",
+  "plain",
+  "quaint",
+  "clean",
+  "elegant",
+  "easy",
+  "angry",
+  "crazy",
+  "helpful",
+  "mushy",
+  "odd",
+  "unsightly",
+  "adorable",
+  "important",
+  "inexpensive",
+  "cheap",
+  "expensive",
+  "fancy"
+];
+const colours = ["red", "yellow", "blue", "green", "pink", "brown", "purple", "brown", "white", "black", "orange"];
+const nouns = [
+  "table",
+  "chair",
+  "house",
+  "bbq",
+  "desk",
+  "car",
+  "pony",
+  "cookie",
+  "sandwich",
+  "burger",
+  "pizza",
+  "mouse",
+  "keyboard"
+];
+const pick = (list) => list[Math.round(Math.random() * 1000) % list.length];
+let nextId = 1;
+function build(count) {
+  const rows = new Array(count);
+  for (let i = 0;i < count; i++)
+    rows[i] = { id: nextId++, label: \`\${pick(adjectives)} \${pick(colours)} \${pick(nouns)}\` };
+  return rows;
+}
+const [rows, setRows] = signal([]);
+const [selected, setSelected] = signal(0);
+const isSelected = selector(selected);
+const run = (n) => batch(() => (setRows(build(n)), setSelected(0)));
+const add = () => setRows((r) => r.concat(build(1000)));
+const update = () => setRows((r) => {
+  const next = r.slice();
+  for (let i = 0;i < next.length; i += 10)
+    next[i] = { id: next[i].id, label: next[i].label + " !!!" };
+  return next;
+});
+const clear = () => batch(() => (setRows([]), setSelected(0)));
+const swapRows = () => setRows((r) => {
+  if (r.length <= 998)
+    return r;
+  const next = r.slice();
+  const a = next[1];
+  next[1] = next[998];
+  next[998] = a;
+  return next;
+});
+const remove = (id) => setRows((r) => {
+  const next = r.slice();
+  next.splice(next.findIndex((x) => x.id === id), 1);
+  return next;
+});
+function Button({ id, title, onClick }) {
+  return (() => { const __r = __rrT0.clone([(id), "", (title)]); const __n = []; __rrT0.locate(__r, __n); __n[1].addEventListener("click", onClick); return __r; })();
+}
+function App() {
+  return (() => { const __r = __rrT1.clone(["", "", "", "", "", "", ""]); const __n = []; __rrT1.locate(__r, __n); __rrInsert(__n[0], __rrUntrack(() => Button({
+                    id: "run",
+                    title: "Create 1,000 rows",
+                    onClick: () => run(1000)
+                  })), null); __rrInsert(__n[1], __rrUntrack(() => Button({
+                    id: "runlots",
+                    title: "Create 10,000 rows",
+                    onClick: () => run(1e4)
+                  })), null); __rrInsert(__n[2], __rrUntrack(() => Button({
+                    id: "add",
+                    title: "Append 1,000 rows",
+                    onClick: add
+                  })), null); __rrInsert(__n[3], __rrUntrack(() => Button({
+                    id: "update",
+                    title: "Update every 10th row",
+                    onClick: update
+                  })), null); __rrInsert(__n[4], __rrUntrack(() => Button({
+                    id: "clear",
+                    title: "Clear",
+                    onClick: clear
+                  })), null); __rrInsert(__n[5], __rrUntrack(() => Button({
+                    id: "swaprows",
+                    title: "Swap Rows",
+                    onClick: swapRows
+                  })), null); { const __a = __n[6], __p = __a.parentNode; __p.removeChild(__a); __rrFor(__p, null, { each: () => (rows()), key: (row) => row.id, t: __rrT2, fill: (row, __v) => { __v[1] = (row.id); __v[3] = (row.label); }, holes: [1,3], dyn: (row, __d) => { __d[0] = (isSelected(row.id) ? "danger" : ""); }, dynHoles: [0], events: [["click", 2, (row) => (() => setSelected(row.id))], ["click", 4, (row) => (() => remove(row.id))]] }); } return __r; })();
+}
+render(App, document.getElementById("main"));
+"
+`;
+
+exports[`golden a file of every older construct compiles to the same code 1`] = `
+"import { __template as __rrT, __for as __rrFor, __insert as __rrInsert, __bind as __rrBind, __slot as __rrSlot, untrack as __rrUntrack, __forMount as __rrForM, __apply as __rrApply, __spread as __rrSpread, __style as __rrStyle, __ref as __rrRef } from "@reactre/core";
+const __rrT0 = __rrT(["<b>","</b>"], [-1]);
+const __rrT1 = __rrT(["<i>no</i>"], []);
+const __rrT2 = __rrT(["<p>keyed</p>"], []);
+const __rrT3 = __rrT(["<main rr-spread=","><section class=\\"s\\" style="," ref="," onclick=","><input .value="," checked .selected=",">","","<em>frag</em></section><svg class=","><circle r=","></circle></svg><table><tbody>","</tbody></table></main>"], [-4,-4,-4,0,-3,-3,-5,-5,-4,-4,-5]);
+const __rrT4 = __rrT(["<tr class="," onclick="," onfocus=","><td>","</td><td>","</td><td><input .value=","></td></tr>"], [-2,0,0,-1,-5,-3]);
+import { For, render, selector, signal } from "@reactre/core";
+const [rows, setRows] = signal([]);
+const [sel, setSel] = signal(0);
+const isSel = selector(sel);
+const Row = (p) => (() => { const __r = __rrT0.clone([(p.label)]);  return __r; })();
+export const App = ({ extra, title }) => (() => { const __r = __rrT3.clone([null, null, null, "", "", "", "", "", "", "", ""]); const __n = []; __rrT3.locate(__r, __n); __rrApply(__n[0], __rrSpread, () => ({ "class": sel() ? "on" : "", "className": "m", "style": { color: "red" }, "title": title, ...extra })); __rrApply(__n[1], __rrStyle, () => (sel() ? "a" : "b")); __n[3].addEventListener("click", () => setSel(1)); __rrSlot(__n[6], () => (sel() ? __rrUntrack(() => Row({
+          label: "x"
+        })) : (() => { const __r = __rrT1.clone([]);  return __r; })())); __rrSlot(__n[7], () => ((sel()), (() => { const __r = __rrT2.clone([]);  return __r; })())); __rrBind(__rrT3, 8, __n[8], () => (sel() ? "a" : "b")); __rrBind(__rrT3, 9, __n[9], () => (sel())); { const __a = __n[10], __p = __a.parentNode; __p.removeChild(__a); __rrForM(__p, null, { each: () => (rows()), key: (r) => r.id, t: __rrT4, fill: (r, __v) => { __v[3] = (r.label); }, holes: [3], dyn: (r, __d) => { __d[0] = (isSel(r.id) ? "danger" : ""); }, dynHoles: [0], events: [["click", 1, (r) => (() => setSel(r.id))], ["focus", 2, (r) => (() => r), 1]], mounts: [[4, (r, __m) => { __rrSlot(__m, () => (__rrUntrack(() => Row({
+                  label: r.label
+                })))); }], [5, (r, __m) => { __rrT4.write(5, __m, (r.v)); }]] }); } __rrRef(__n[2], (el) => el); __rrBind(__rrT3, 4, __n[4], () => (sel())); __rrBind(__rrT3, 5, __n[5], () => (sel() > 1)); return __r; })();
+render(App, document.body);
+"
+`;
+
+exports[`golden a file of every older construct compiles to the same code 2`] = `
+"import { __template as __rrT, __for as __rrFor, __insert as __rrInsert, __bind as __rrBind, __slot as __rrSlot, untrack as __rrUntrack, __forMount as __rrForM, __apply as __rrApply, __spread as __rrSpread, __style as __rrStyle, __ref as __rrRef } from "@reactre/core";
+const __rrT0 = __rrT(["<b>","</b>"], [-1]);
+const __rrT1 = __rrT(["<i>no</i>"], []);
+const __rrT2 = __rrT(["<p>keyed</p>"], []);
+const __rrT3 = __rrT(["<main rr-spread=","><section class=\\"s\\" style="," ref="," onclick=","><input .value="," checked .selected=",">","","<em>frag</em></section><svg class=","><circle r=","></circle></svg><table><tbody>","</tbody></table></main>"], [-4,-4,-4,0,-3,-3,-5,-5,-4,-4,-5]);
+const __rrT4 = __rrT(["<tr class="," onclick="," onfocus=","><td>","</td><td>","</td><td><input .value=","></td></tr>"], [-2,0,0,-1,-5,-3]);
+import { For, render, selector, signal } from "@reactre/core";
+const [rows, setRows] = signal([]);
+const [sel, setSel] = signal(0);
+const isSel = selector(sel);
+const Row = (p) => (() => { const __r = __rrT0.clone([(p.label)]);  return __r; })();
+export const App = ({ extra, title }) => (() => { const __r = __rrT3.clone([null, null, null, "", "", "", "", "", "", "", ""]); const __n = []; __rrT3.locate(__r, __n); __rrApply(__n[0], __rrSpread, () => ({ "class": sel() ? "on" : "", "className": "m", "style": { color: "red" }, "title": title, ...extra })); __rrApply(__n[1], __rrStyle, () => (sel() ? "a" : "b")); __n[3].addEventListener("click", () => setSel(1)); __rrSlot(__n[6], () => (sel() ? __rrUntrack(() => Row({
+          label: "x"
+        })) : (() => { const __r = __rrT1.clone([]);  return __r; })())); __rrSlot(__n[7], () => ((sel()), (() => { const __r = __rrT2.clone([]);  return __r; })())); __rrBind(__rrT3, 8, __n[8], () => (sel() ? "a" : "b")); __rrBind(__rrT3, 9, __n[9], () => (sel())); { const __a = __n[10], __p = __a.parentNode; __p.removeChild(__a); __rrForM(__p, null, { each: () => (rows()), key: (r) => r.id, t: __rrT4, fill: (r, __v) => { __v[3] = (r.label); }, holes: [3], dyn: (r, __d) => { __d[0] = (isSel(r.id) ? "danger" : ""); }, dynHoles: [0], events: [["click", 1, (r) => (() => setSel(r.id))], ["focus", 2, (r) => (() => r), 1]], mounts: [[4, (r, __m) => { __rrSlot(__m, () => (__rrUntrack(() => Row({
+                  label: r.label
+                })))); }], [5, (r, __m) => { __rrT4.write(5, __m, (r.v)); }]] }); } __rrRef(__n[2], (el) => el); __rrBind(__rrT3, 4, __n[4], () => (sel())); __rrBind(__rrT3, 5, __n[5], () => (sel() > 1)); return __r; })();
+render(App, document.body);
+"
+`;
