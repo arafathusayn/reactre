@@ -56,13 +56,13 @@
 // too; so is a store's tuple kept whole, and a `<Show>`'s or `<Match>`'s child function's parameter.
 //
 // A prop is a store in a component (`<For each={props.todos}>` is copied, its rows bound) when a
-// call site passes it one, and only in a component whose callers are all in its module (one its
-// module neither exports nor uses as a value). A module seen alone (a dev server) cannot see an
-// exported component's callers, and taking each of its props for a store would bind holes in
-// files that use no store; so a program counts none for it either, and both render the same.
-// What holds a store that the scan cannot follow (such a prop, a store made by a re-export of
-// `createStore`) is not a root: its reads are written once, as any member read is, unless they
-// call something (`getStore().count`).
+// call site passes it one; and so is every prop of a component whose callers cannot all be seen
+// (`true` in the facts: one an entry exports, one used as a value, and, in a module seen alone,
+// one it exports), as it may be passed anything. Likewise a prop other than children that a call
+// site passes JSX is content, inserted as children are. So a dev server renders what a build does;
+// the build, seeing the callers, binds fewer holes. What holds a store that the scan cannot follow
+// (a store made by a re-export of `createStore`) is not a root: its reads are written once, as any
+// member read is, unless they call something (`getStore().count`).
 
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
@@ -87,17 +87,18 @@ export type PropFacts = ReadonlyMap<string, ReadonlySet<string> | true> & {
   readonly stores?: ReadonlySet<string>;
   /**
    * The props of each component, by its name, that some call site may pass a store (or a store's
-   * member or item), for a component whose reactive props are a set: a `<For each={props.todos}>`
-   * over one reads a copy, and its rows follow their items. A component missing here is passed
-   * none, as is one its module exports or uses as a value (see the module's comment).
+   * member or item), or true for every prop (a component whose callers cannot all be seen, or one
+   * passed what a spread may hold): a `<For each={props.todos}>` over one reads a copy, and its
+   * rows follow their items. A component missing here is passed none, unless it is missing from
+   * the facts too.
    */
-  readonly storeProps?: ReadonlyMap<string, ReadonlySet<string>>;
+  readonly storeProps?: ReadonlyMap<string, ReadonlySet<string> | true>;
   /**
-   * The props other than children of each component, by its name, that some call site passes
+   * The props other than children of each component, by its name, that some call site may pass
    * JSX (`<Card header={<h1>Hi</h1>} />`), or a prop that holds it: `{props.header}` is content,
-   * inserted as `{props.children}` is, not text. Missing, as for `storeProps`: none.
+   * inserted as `{props.children}` is, not text. True and missing, as for `storeProps`.
    */
-  readonly contentProps?: ReadonlyMap<string, ReadonlySet<string>>;
+  readonly contentProps?: ReadonlyMap<string, ReadonlySet<string> | true>;
 };
 
 /** Reactive props, as a set or true for all; also what an expression reads of a props object. */
@@ -619,6 +620,11 @@ interface Site {
   readonly target: Target;
   readonly props: readonly (readonly [string, PropUse])[];
   readonly spread: boolean;
+  /**
+   * The components whose whole props object it spreads (`{...props}`), which pass on the stores
+   * and JSX theirs may hold; null when it spreads what the scan cannot see into.
+   */
+  readonly spreads: readonly Def[] | null;
 }
 
 /** An import binding: the module's specifier and the export (`*` for the namespace). */
@@ -910,17 +916,26 @@ export function scanModule(src: string): ModuleInfo {
       here = rootsAt(tok.s);
     const used: [string, PropUse][] = [];
     let spread = false;
+    // The components whose props object a spread passes on whole (`{...props}`), or null when a
+    // spread (or a computed key) passes what the scan cannot see into.
+    let spreads: Def[] | null = [];
+    const spreadOf = (e: string) => {
+      spread = true;
+      const r = /^[A-Za-z_$][\w$]*$/.test(e) ? propReads(e, scope, helpers) : [];
+      if (spreads !== null && r.length === 1 && r[0]![1] === true) spreads.push(r[0]![0]);
+      else spreads = null;
+    };
     const p = props?.[0] ?? "";
-    if (!p.startsWith("{")) spread = true;
+    if (!p.startsWith("{")) spreadOf(p.trim());
     else
       for (const [part] of splitAt(p, 1, p.length - 1)) {
         if (part.startsWith("...")) {
-          spread = true;
+          spreadOf(part.slice(3).trim());
           continue;
         }
         const colon = until(part, 0, ":");
         const key = part.slice(0, colon).trim();
-        if (key.startsWith("[")) spread = true;
+        if (key.startsWith("[")) [spread, spreads] = [true, null];
         else {
           const use = propUse(colon < part.length ? part.slice(colon + 1).trim() : part, helpers, scope, here);
           const u = use.stores === undefined ? null : under(use.stores, tok.s);
@@ -930,7 +945,7 @@ export function scanModule(src: string): ModuleInfo {
           ]);
         }
       }
-    sites.push({ target, props: used, spread });
+    sites.push({ target, props: used, spread, spreads });
   }
   // Every other mention of a component or an import is a use as a value.
   const escapes = new Set<string>(),
@@ -1117,13 +1132,10 @@ export class Program {
   private readonly entries: Set<string>;
   /** Each component's reactive props, computed when first asked for; null when stale. */
   private facts: Map<Def, Props> | null = null;
-  /** The reactive props `solve` is finding (or found), and the props that may be passed a store. */
-  private work = new Map<Def, Props>();
-  private stored = new Map<Def, Set<string>>();
+  /** The props each component may be passed a store in, as `solve` finds them (`storeOf`). */
+  private stored = new Map<Def, Props>();
   /** The props other than children each component may be passed JSX in (`contentOf`). */
-  private content = new Map<Def, Set<string>>();
-  /** The components their modules export, which count no store props (`storeOf`). */
-  private shared = new Set<Def>();
+  private content = new Map<Def, Props>();
   /** The facts each compiled module was given, to check that later modules leave them true. */
   private readonly given = new Map<string, PropFacts>();
 
@@ -1166,20 +1178,17 @@ export class Program {
   factsOf(file: string): PropFacts {
     const facts = this.solve(),
       out = new Map<string, Set<string> | true>(),
-      storeProps = new Map<string, Set<string>>(),
-      contentProps = new Map<string, Set<string>>();
+      storeProps = new Map<string, Set<string> | true>(),
+      contentProps = new Map<string, Set<string> | true>();
     const mod = this.modules.get(file);
-    for (const d of mod?.info.defs ?? []) out.set(d.name, union(out.get(d.name), facts.get(d)!));
-    for (const d of mod?.info.defs ?? [])
+    for (const d of mod?.info.defs ?? []) {
+      out.set(d.name, union(out.get(d.name), facts.get(d)!));
       for (const [into, s] of [
         [storeProps, this.storeOf(d)],
         [contentProps, this.contentOf(d)],
-      ] as const) {
-        if (out.get(d.name) === true || s.size === 0) continue;
-        const set = into.get(d.name) ?? new Set();
-        for (const k of s) set.add(k);
-        into.set(d.name, set);
-      }
+      ] as const)
+        if (s === true || s.size > 0) into.set(d.name, union(into.get(d.name), s));
+    }
     this.given.set(file, out);
     // The module's store roots: its own, the stores it imports, what it imports from where the
     // program cannot see (`unseen`), which may be one, and its locals made of a store or of a prop
@@ -1203,21 +1212,26 @@ export class Program {
 
   /**
    * Check that every module compiled so far was given facts that still hold: each component's
-   * reactive props are among those it was given. Its store roots and store props hold already: a
-   * module that joins later cannot call a component its module does not export, nor change what
-   * the modules it reaches export.
+   * reactive props, and the props it may be passed a store or JSX in, are among those it was
+   * given.
    *
-   * @returns The first component that now takes a reactive prop it was compiled without, or null.
+   * @returns The first component that now takes a reactive prop (or a store, or JSX) it was
+   *   compiled without, or null.
    */
   check(): { file: string; component: string; prop: string } | null {
     const facts = this.solve();
     for (const [file, given] of this.given) {
       for (const d of this.modules.get(file)!.info.defs) {
-        const was = given.get(d.name)!,
-          now = facts.get(d)!;
-        if (was === true) continue;
-        if (now === true) return { file, component: d.name, prop: "(every prop)" };
-        for (const k of now) if (!was.has(k)) return { file, component: d.name, prop: k };
+        const kinds = [
+          [facts.get(d)!, given.get(d.name)!, ""],
+          [this.storeOf(d), given.storeProps?.get(d.name), " (a store)"],
+          [this.contentOf(d), given.contentProps?.get(d.name), " (JSX)"],
+        ] as const;
+        for (const [now, was, what] of kinds) {
+          if (was === true) continue;
+          if (now === true) return { file, component: d.name, prop: `(every prop)${what}` };
+          for (const k of now) if (was?.has(k) !== true) return { file, component: d.name, prop: k + what };
+        }
       }
     }
     return null;
@@ -1225,38 +1239,32 @@ export class Program {
 
   /**
    * The props component `d` may be passed a store in, as far as `solve` has found them: those its
-   * call sites pass one, for a component whose callers are all in its module. A module seen alone
-   * sees no other's callers, so for one it exports or uses as a value, a program counts none
-   * either: each file alone and the whole program render the same (see the module's comment).
+   * call sites pass one, or every prop (true) for a component whose callers cannot all be seen,
+   * which may be passed anything (see the module's comment).
    */
-  private storeOf(d: Def): Set<string> {
-    return this.work.get(d) === true || this.shared.has(d) ? NO_PROPS : (this.stored.get(d) ?? NO_PROPS);
+  private storeOf(d: Def): Props {
+    return this.stored.get(d) ?? NO_PROPS;
   }
 
   /** The props other than children that component `d` may be passed JSX in: as `storeOf`. */
-  private contentOf(d: Def): Set<string> {
-    return this.work.get(d) === true || this.shared.has(d) ? NO_PROPS : (this.content.get(d) ?? NO_PROPS);
+  private contentOf(d: Def): Props {
+    return this.content.get(d) ?? NO_PROPS;
   }
 
   /** Each component's reactive props: what escapes is true, and call sites add the rest. */
   private solve(): Map<Def, Props> {
     if (this.facts !== null) return this.facts;
     const facts = new Map<Def, Props>();
-    // The props each component may be passed a store in, found with the reactive ones, but for a
-    // component its module exports (`storeOf`).
-    this.work = facts;
+    // The props each component may be passed a store or JSX in, found with the reactive ones.
     this.stored = new Map();
     this.content = new Map();
-    this.shared = new Set();
-    for (const { info } of this.modules.values()) {
-      const out = new Set<string>();
-      for (const e of info.exports.values()) if ("local" in e) out.add(e.local);
-      for (const d of info.defs) if (out.has(d.name)) this.shared.add(d);
-    }
-    for (const { info } of this.modules.values()) for (const d of info.defs) facts.set(d, d.open ? true : new Set());
+    // A component whose callers cannot all be seen may be passed anything: every prop is reactive,
+    // and may hold a store or JSX.
     const all = (ds: Iterable<Def>) => {
-      for (const d of ds) facts.set(d, true);
+      for (const d of ds) (facts.set(d, true), this.stored.set(d, true), this.content.set(d, true));
     };
+    for (const { info } of this.modules.values())
+      for (const d of info.defs) d.open ? all([d]) : facts.set(d, new Set());
     for (const [file, { info, resolved }] of this.modules) {
       if (this.entries.has(file)) all(this.exported(file));
       for (const n of info.escapes) all(this.local(file, n));
@@ -1283,13 +1291,15 @@ export class Program {
                   ? this.export(resolved.get(info.imports.get(t.ns)!.spec), t.member)
                   : [];
           for (const d of targets) {
-            const f = facts.get(d)!;
-            if (f === true) continue;
             if (site.spread) {
-              facts.set(d, true);
-              changed = true;
-              continue;
+              if (facts.get(d) !== true) (facts.set(d, true), (changed = true));
+              // A spread passes on the stores and JSX the props it spreads may hold; what the scan
+              // cannot see into may hold any.
+              for (const map of [this.stored, this.content])
+                if (site.spreads === null) changed = widen(map, d, true) || changed;
+                else for (const o of site.spreads) changed = widen(map, d, map.get(o) ?? NO_PROPS) || changed;
             }
+            const f = facts.get(d)!;
             for (const [k, use] of site.props) {
               // A store, a store's member or item, or a prop that may be one: reactive, and a store
               // in the component too.
@@ -1297,19 +1307,13 @@ export class Program {
                 (use.stores?.some((n) => this.storeIn(file, n)) ?? false) ||
                 use.reads.some(([o, r]) => touches(this.storeOf(o), r)) ||
                 (use.storeReads?.some(([o, r]) => touches(this.storeOf(o), r)) ?? false);
-              if (store && !this.stored.get(d)?.has(k)) {
-                this.stored.set(d, (this.stored.get(d) ?? new Set()).add(k));
-                changed = true;
-              }
+              if (store) changed = widen(this.stored, d, new Set([k])) || changed;
               // JSX, or a prop that may hold it, passed on: content, as children are.
               const content =
                 k !== "children" && (use.lazy || use.reads.some(([o, r]) => touches(this.contentOf(o), r)));
-              if (content && !this.content.get(d)?.has(k)) {
-                this.content.set(d, (this.content.get(d) ?? new Set()).add(k));
-                changed = true;
-              }
+              if (content) changed = widen(this.content, d, new Set([k])) || changed;
               const changes = store || use.calls || use.reads.some(([o, r]) => touches(facts.get(o)!, r));
-              if (f.has(k) || !changes) continue;
+              if (f === true || f.has(k) || !changes) continue;
               f.add(k);
               changed = true;
             }
@@ -1405,6 +1409,19 @@ export class Program {
       .flatMap((k) => this.export(file, k))
       .concat(mod.info.stars.flatMap((s) => this.exported(mod.resolved.get(s), seen, true)));
   }
+}
+
+/** Add props `add` to what `map` holds for `d`. @returns Whether that changed it. */
+function widen(map: Map<Def, Props>, d: Def, add: Props): boolean {
+  const cur = map.get(d);
+  if (cur === true) return false;
+  if (add === true) return (map.set(d, true), true);
+  const set = cur ?? new Set<string>(),
+    size = set.size;
+  for (const k of add) set.add(k);
+  if (set.size === size) return false;
+  map.set(d, set);
+  return true;
 }
 
 /** Two facts as one. */

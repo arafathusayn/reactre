@@ -290,22 +290,27 @@ describe("compiling store reads", () => {
     expect(out).toContain("fill: (r, __v) => { __v[0] = (r.title); }");
   });
 
-  test("a component its file exports is passed no store, as its file seen alone cannot see its callers: as before", () => {
+  test("an exported component seen alone may be passed a store in any prop; a whole program that sees its callers is exact", () => {
     const list = `
       import { For } from "@reactre/core";
       export function List(props) { return <ul><For each={props.todos} key={(t) => t.id}>{(t) => <li>{t.title}</li>}</For></ul>; }
-      export const Count = ({ value }) => <p>{value}</p>;
+      export function Rows(props) { return <ul><For each={props.rows} key={(r) => r.id}>{(r) => <li>{r.title}</li>}</For></ul>; }
     `;
+    // Seen alone, its file cannot see the callers: each list is copied, its rows bound.
     const alone = compileSource(list);
-    expect(alone).toContain("each: () => (props.todos)");
-    expect(alone).toContain("clone([(value)])");
-    // A program that sees a caller pass it a store's array compiles it the same.
+    expect(alone).toContain("each: () => ([...(props.todos)])");
+    expect(alone).toContain("each: () => ([...(props.rows)])");
+    expect(alone).toContain("dyn: (r, __d) => { __d[0] = (r.title); }");
+    // The program sees List passed a store's array and Rows plain rows.
     const p = program({
       list,
-      main: `${STORE} import { List, Count } from "./list"; const [s] = createStore({ todos: [] }); export const A = () => <div><List todos={s.todos} /><Count value={s} /></div>;`,
+      main: `${STORE} import { List, Rows } from "./list"; const [s] = createStore({ todos: [] }); export const A = () => <div><List todos={s.todos} /><Rows rows={[{ id: 1, title: "a" }]} /></div>;`,
     });
-    expect(compileJs(js(list), { props: p.factsOf("list") })).toBe(alone);
-    expect(p.factsOf("list").storeProps).toBeUndefined();
+    const whole = compileJs(js(list), { props: p.factsOf("list") });
+    expect(whole).toContain("each: () => ([...(props.todos)])");
+    expect(whole).toContain("dyn: (t, __d) => { __d[0] = (t.title); }");
+    expect(whole).toContain("each: () => (props.rows)");
+    expect(whole).toContain("fill: (r, __v) => { __v[0] = (r.title); }");
   });
 
   test("a keyed <Show>'s and <Match>'s child gets a store: its holes that read it are bound", () => {

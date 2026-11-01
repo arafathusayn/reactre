@@ -221,7 +221,7 @@ describe("a program", () => {
     expect(p.info("nowhere")).toBeUndefined();
   });
 
-  test("the props other than children a call site passes JSX are content, in a component its module keeps", () => {
+  test("the props other than children a call site passes JSX are content; every prop of one used as a value", () => {
     const main = `
       import { Card as Shared } from "./card";
       function Card(props) { return <section>{props.header}<Inner title={props.header} /></section>; }
@@ -234,16 +234,67 @@ describe("a program", () => {
     `;
     const p = program({ main, card: `export function Card(props) { return <p>{props.header}</p>; }` });
     const facts = p.factsOf("main");
-    expect([...facts.contentProps!].map(([k, v]) => [k, [...v]])).toEqual([
+    const plainOf = (m: ReadonlyMap<string, ReadonlySet<string> | true>) =>
+      [...m].map(([k, v]) => [k, v === true ? true : [...v]]);
+    // Used is used as a value, and the entry's App is rendered by callers the program cannot see:
+    // each may be passed JSX in any prop.
+    expect(plainOf(facts.contentProps!)).toEqual([
       ["Card", ["header"]],
       ["Inner", ["title"]],
+      ["Used", true],
+      ["App", true],
     ]);
-    // An exported component, and one used as a value, are passed none.
-    expect(p.factsOf("card").contentProps).toBeUndefined();
+    // An exported component the program sees every caller of is exact.
+    expect(plainOf(p.factsOf("card").contentProps!)).toEqual([["Card", ["header"]]]);
     const out = compileJs(js(main), { props: facts });
     expect(out).toContain("__rrInsert(__n[0], props.header, null)");
     expect(out).toContain("__rrInsert(__n[0], props.title, null)");
-    expect(out).toContain("__rrBind(__rrT2, 0, __n[0], () => (props.icon))");
+    expect(out).toContain("__rrSlot(__n[0], () => (props.icon))");
+  });
+
+  test("a module that joins late and passes a compiled component a store or JSX fails the check", () => {
+    const card = `export function Card(props) { return <p>{props.header}{props.list}</p>; }`;
+    const p = program({
+      main: `import { Card } from "./card"; export const A = () => <Card header="a" list={n()} />;`,
+      card,
+    });
+    p.factsOf("card");
+    const late = (src: string) => {
+      const code = js(src);
+      p.add("late", code, new Map(scanModule(code).specs.map((s) => [s, s.startsWith("./") ? s.slice(2) : false])));
+      return p.check();
+    };
+    expect(late(`import { Card } from "./card"; export const L = () => <Card header={<b />} />;`)).toEqual({
+      file: "card",
+      component: "Card",
+      prop: "header (JSX)",
+    });
+    expect(
+      late(`import { createStore } from "@reactre/core/features/store"; import { Card } from "./card";
+        const [s] = createStore({}); export const L = () => <Card header="b" list={s.list} />;`),
+    ).toEqual({ file: "card", component: "Card", prop: "list (a store)" });
+    // Used as a value: reactive in every prop.
+    expect(late(`import { Card } from "./card"; export const L = [Card];`)).toEqual({
+      file: "card",
+      component: "Card",
+      prop: "(every prop)",
+    });
+  });
+
+  test("a spread of the props around the call passes on their stores and JSX; another spread, any", () => {
+    const p = program({
+      main: `
+        function Outer(props) { return <Inner {...props} />; }
+        function Inner(props) { return <p>{props.header}</p>; }
+        function Other(props) { return <Any {...extra} />; }
+        function Any(props) { return <p>{props.x}</p>; }
+        export const A = () => <div><Outer header={<b />} /><Other /></div>;
+      `,
+    });
+    const content = p.factsOf("main").contentProps!;
+    expect(content.get("Inner")).toEqual(new Set(["header"]));
+    expect(content.get("Any")).toBe(true);
+    expect(plain(p.factsOf("main"))).toMatchObject({ Inner: true, Any: true });
   });
 
   test("an entry's exports, and what escapes, are reactive in every prop", () => {

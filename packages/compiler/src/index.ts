@@ -150,11 +150,11 @@ export interface CompileOptions {
    * (`@reactre/compiler/program` finds them for a whole program). A component missing from the
    * map is reactive in every prop. Without the option, the file is seen alone: a component it
    * neither exports nor uses as a value has all its call sites in it, and any other is reactive in
-   * every prop. The facts' `stores` are the stores the file imports (`Program.factsOf` gives
-   * them); without them, only the stores the file binds itself are known. Their `storeProps` are
-   * the props its call sites pass a store, of each component it neither exports nor uses as a
-   * value. Without the option, any import from outside @reactre (but an asset's) may be a store,
-   * and is taken for one.
+   * every prop, and may be passed a store or JSX in each. The facts' `stores` are the stores the
+   * file imports (`Program.factsOf` gives them); without them, only the stores the file binds
+   * itself are known. Their `storeProps` and `contentProps` are the props its call sites may pass
+   * a store or JSX. Without the option, any import from outside @reactre (but an asset's) may be a
+   * store, and is taken for one.
    */
   readonly props?: PropFacts;
   /**
@@ -704,15 +704,24 @@ export class Compiler {
   }
 
   /**
+   * The props of component `d` that some call site may pass what `given` says (a store, or JSX):
+   * every prop of one the facts do not know.
+   */
+  private passed(
+    d: Def,
+    given: ReadonlyMap<string, ReadonlySet<string> | true> | undefined,
+  ): ReadonlySet<string> | true {
+    return this.props.has(d.name) ? (given?.get(d.name) ?? NO_STORES) : true;
+  }
+
+  /**
    * Whether `expr` mentions a store root (see `rootsIn`), or reads a prop that some call site of
-   * the component it is written in may pass a store (`PropFacts.storeProps`).
+   * the component it is written in may pass a store (`PropFacts.storeProps`, and every prop of a
+   * component whose callers cannot all be seen).
    */
   private readsStore(expr: string): boolean {
     if (rootsIn(expr, this.stores).length > 0) return true;
-    const given = this.props.storeProps;
-    return (
-      given !== undefined && propReads(expr, this.scope).some(([d, r]) => touches(given.get(d.name) ?? NO_STORES, r))
-    );
+    return propReads(expr, this.scope).some(([d, r]) => touches(this.passed(d, this.props.storeProps), r));
   }
 
   /**
@@ -737,14 +746,10 @@ export class Compiler {
    * may be nodes, so it is inserted, not text.
    */
   readsChildren(expr: string): boolean {
-    // Children, or a prop some call site passes JSX (`PropFacts.contentProps`).
-    const given = this.props.contentProps;
-    const content = (d: Def, r: ReadonlySet<string> | true) => {
-      if (r === true) return false;
-      if (r.has("children")) return true;
-      const c = given?.get(d.name);
-      return c !== undefined && touches(c, r);
-    };
+    // Children, or a prop some call site may pass JSX (`PropFacts.contentProps`; any prop of a
+    // component whose callers cannot all be seen).
+    const content = (d: Def, r: ReadonlySet<string> | true) =>
+      r !== true && (r.has("children") || touches(this.passed(d, this.props.contentProps), r));
     for (const d of this.scope) {
       if (d.param.kind === "pattern") {
         for (const [local, key] of d.param.locals)
