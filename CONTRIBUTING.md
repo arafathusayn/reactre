@@ -39,6 +39,10 @@ docs/roadmap.md         what is left to do
 
 A change to the runtime's speed is kept only when [`apps/profiling/ab.ts`](apps/profiling) proves it faster on some benchmark test and slower on none.
 
+## Features
+
+`@reactre/core`'s default build stays as small and fast as it is: an app that does not use a feature ships no byte of it, and [`sizes.json`](packages/core/sizes.json)'s profiles, compared byte for byte by the tests, show whether a change kept that. A feature beyond the core goes in an opt-in module, `@reactre/core/features/*`, or behind a compiler or plugin option. When a feature is used without its opt-in (a plugin option not set, the default build where another is needed, a call the compiler did not compile), it throws an error that names the plugin or option that turns it on. It never quietly falls back to other behaviour. Where even that check would cost the production build bytes, the development build throws and the production build has no check.
+
 ## Commits
 
 Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/): `type(scope): summary`, where the scope is a package (`dom`, `core`, `compiler`, `compat`) or an app (`jfb`, `profiling`, `react-compat`).
