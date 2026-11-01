@@ -1,31 +1,31 @@
 {
   "jfb": {
     "min": 15861,
-    "gzip": 6757
+    "gzip": 6756
   },
   "plain": {
     "min": 13563,
-    "gzip": 5840
+    "gzip": 5839
   },
   "slot": {
     "min": 6553,
-    "gzip": 2901
+    "gzip": 2903
   },
   "attach": {
     "min": 6237,
-    "gzip": 2772
+    "gzip": 2771
   },
   "imported": {
     "min": 13930,
-    "gzip": 5950
+    "gzip": 5951
   },
   "root": {
-    "min": 6519,
-    "gzip": 2871
+    "min": 6542,
+    "gzip": 2891
   },
   "settled": {
-    "min": 6951,
-    "gzip": 3053
+    "min": 7014,
+    "gzip": 3083
   },
   "reaction": {
     "min": 6359,

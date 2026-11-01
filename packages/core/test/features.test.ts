@@ -13,10 +13,12 @@
 //              imported by the compiler for a row whose reactive holes make two or more calls
 //              with arguments, or by the app. Without it, a row's second key throws.
 //   owner and timing APIs
-//              `createRoot`, `getOwner`, `runWithOwner`, `onSettled`, `flush` and `reaction`
-//              (Solid 2.0's). Each comes only with its import and hooks into nothing that runs
-//              without it: an app that does not call them ships the same code as before.
-//              `createRoot` and `reaction` bring ownership, as `attach` and `effect` do.
+//              Solid 2.0's, as feature modules: @reactre/core/features/owner (`createRoot`,
+//              `getOwner`, `runWithOwner`), features/timing (`onSettled`, `flush`) and
+//              features/reaction (`reaction`). Each comes only with its import and hooks into
+//              nothing that runs without it: an app that does not import them ships the same
+//              code as before. `createRoot` and `reaction` bring ownership, as `attach` and
+//              `effect` do.
 //
 // The size profiles (../sizes.json), one app each:
 //   jfb       the js-framework-benchmark app (apps/jfb/app/reactre.tsx): no opt-in at all.
@@ -157,7 +159,8 @@ const apps = {
   `,
   /** A root around a render, disposed by hand, and a cleanup added to it later through its owner. */
   root: `
-    import { createRoot, getOwner, onCleanup, render, runWithOwner, signal } from "@reactre/core";
+    import { onCleanup, render, signal } from "@reactre/core";
+    import { createRoot, getOwner, runWithOwner } from "@reactre/core/features/owner";
     const [n, setN] = signal(0);
     let cleaned = 0;
     const [dispose, owner] = createRoot((dispose) => {
@@ -169,7 +172,8 @@ const apps = {
   `,
   /** onSettled in a slot's content: rendered in a flush, then swapped in and out by writes. */
   settled: `
-    import { batch, flush, onSettled, render, signal } from "@reactre/core";
+    import { batch, render, signal } from "@reactre/core";
+    import { flush, onSettled } from "@reactre/core/features/timing";
     const log = [];
     const [show, setShow] = signal(true);
     function A() {
@@ -184,7 +188,8 @@ const apps = {
   `,
   /** A reaction, which applies only on a change of value, beside a view of the same signal. */
   reaction: `
-    import { reaction, render, signal } from "@reactre/core";
+    import { render, signal } from "@reactre/core";
+    import { reaction } from "@reactre/core/features/reaction";
     const [id, setId] = signal(1);
     const log = [];
     reaction(
@@ -271,7 +276,7 @@ describe("selectors", () => {
 });
 
 describe("owner and timing APIs", () => {
-  test("off: an app that does not call them ships none of their code", async () => {
+  test("off: an app that does not import them ships none of their code", async () => {
     for (const name of ["plain", "slot", "attach"] as const) {
       const code = await bundle(name, apps[name], false);
       for (const fn of ["createRoot", "getOwner", "runWithOwner", "onSettled", "flush", "reaction"])

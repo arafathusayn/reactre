@@ -1,27 +1,36 @@
-// onSettled and flush, on the unbundled runtime: TSX sources here are compiled as the plugin
-// compiles them. onSettled's timing is checked in each place it can be called from: a render, an
-// attach, a slot re-rendered in a batch, an effect, a batch's drain, and another callback.
+// onSettled and flush (@reactre/core/features/timing), on the unbundled runtime: TSX sources here
+// are compiled as the plugin compiles them. onSettled's timing is checked in each place it can be
+// called from: a render, an attach, a slot re-rendered in a batch, an effect, a batch's drain, and
+// another callback.
 
 import { beforeEach, describe, expect, test } from "bun:test";
 
 import { compileSource } from "@reactre/compiler";
 import { FakeElement, installFakeDocument } from "@reactre/testdom";
 
-import * as runtime from "../src/index.ts";
-import { batch, createRoot, effect, flush, onSettled, signal } from "../src/index.ts";
+import { createRoot } from "../src/features/owner.ts";
+import * as timing from "../src/features/timing.ts";
+import { flush, onSettled } from "../src/features/timing.ts";
+import * as core from "../src/index.ts";
+import { batch, effect, signal } from "../src/index.ts";
+
+/** What a source's imports of @reactre/core and of its timing feature bind to. */
+const runtime = { ...core, ...timing };
 
 beforeEach(installFakeDocument);
 
 /** Compile a TSX module body ending in `return { ... }` and run it, `root` in scope. */
 function run<T>(src: string, root: FakeElement): T {
-  const js = compileSource(src).replace(/^import \{([^}]*)\} from "@reactre\/core";$/gm, (_, names: string) =>
-    names
-      .split(",")
-      .map((n) => {
-        const [a, b] = n.trim().split(" as ");
-        return `const ${b ?? a} = rr.${a};`;
-      })
-      .join("\n"),
+  const js = compileSource(src).replace(
+    /^import \{([^}]*)\} from "@reactre\/core(?:\/features\/timing)?";$/gm,
+    (_, names: string) =>
+      names
+        .split(",")
+        .map((n) => {
+          const [a, b] = n.trim().split(" as ");
+          return `const ${b ?? a} = rr.${a};`;
+        })
+        .join("\n"),
   );
   return new Function("rr", "root", js)(runtime, root) as T;
 }
@@ -86,7 +95,8 @@ describe("onSettled", () => {
     const root = box();
     const api = run<{ log: string[] }>(
       `
-      import { onSettled, render } from "@reactre/core";
+      import { render } from "@reactre/core";
+      import { onSettled } from "@reactre/core/features/timing";
       const log = [];
       function Child() {
         onSettled(() => void log.push("child " + root.textContent));
@@ -110,7 +120,8 @@ describe("onSettled", () => {
     const root = box();
     const api = run<{ log: string[] }>(
       `
-      import { flush, onSettled, render } from "@reactre/core";
+      import { render } from "@reactre/core";
+      import { flush, onSettled } from "@reactre/core/features/timing";
       const log = [];
       function App() {
         onSettled(() => void log.push(root.textContent));
@@ -128,7 +139,8 @@ describe("onSettled", () => {
     const root = box();
     const api = run<{ log: string[]; setShow: (b: boolean) => void }>(
       `
-      import { onSettled, render, signal } from "@reactre/core";
+      import { render, signal } from "@reactre/core";
+      import { onSettled } from "@reactre/core/features/timing";
       const log = [];
       const [show, setShow] = signal(false);
       function A() {
@@ -157,7 +169,8 @@ describe("onSettled", () => {
       A: () => unknown;
     }>(
       `
-      import { attach, onSettled } from "@reactre/core";
+      import { attach } from "@reactre/core";
+      import { onSettled } from "@reactre/core/features/timing";
       const log = [];
       function A() {
         onSettled(() => {

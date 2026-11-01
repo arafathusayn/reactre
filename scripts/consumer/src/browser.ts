@@ -15,6 +15,9 @@ import * as serverEdge from "@reactre/compat/server.edge";
 import * as serverNode from "@reactre/compat/server.node";
 import * as staticApi from "@reactre/compat/static";
 import * as core from "@reactre/core";
+import * as coreOwner from "@reactre/core/features/owner";
+import * as coreReaction from "@reactre/core/features/reaction";
+import * as coreTiming from "@reactre/core/features/timing";
 import * as jsxDevRuntime from "@reactre/core/jsx-dev-runtime";
 import * as jsxRuntime from "@reactre/core/jsx-runtime";
 // Every runtime entry of the packages, for a browser app with no Node or Bun types.
@@ -50,6 +53,9 @@ const fullEl: unknown = full.createElement("span", null);
 export const all: unknown[] = [
   dom,
   core,
+  coreOwner,
+  coreTiming,
+  coreReaction,
   jsxRuntime,
   jsxDevRuntime,
   compat,

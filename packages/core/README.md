@@ -123,26 +123,38 @@ The template is parsed once. `mount` clones it with values for its holes, in ord
 
 ## API
 
-| Export                     | What it does                                                                                                                                  |
-| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `signal(value)`            | A getter and a setter. Reading the getter inside an effect or a hole subscribes it.                                                           |
-| `effect(fn)`               | Runs `fn` now, and again whenever a signal it read changes.                                                                                   |
-| `memo(fn)`                 | A derived value, recomputed when what it reads changes.                                                                                       |
-| `batch(fn)`                | Runs `fn` and applies its writes together, so effects run once.                                                                               |
-| `untrack(fn)`              | Reads signals without subscribing to them.                                                                                                    |
-| `selector(source)`         | `isSelected(key)`, where a change of selection re-runs only the readers of the old and new key.                                               |
-| `onCleanup(fn)`            | Runs `fn` when the effect, component or row it was called in re-runs or goes away.                                                            |
-| `onSettled(fn)`            | Runs `fn` once, untracked, when the work under way has finished and the DOM shows it ([timing](#timing)). A function it returns is a cleanup. |
-| `reaction(compute, apply)` | An effect in two halves: `compute` is tracked, `apply(value, prev)` runs untracked when the value changes, and may return a cleanup.          |
-| `flush(fn?)`               | `flush(fn)` runs `fn` and applies its writes before it returns, inside a batch too. `flush()` applies what the current batch has queued.      |
-| `createRoot(fn)`           | Runs `fn(dispose)` under a new owner; `dispose` stops what it made. It goes with the owner it was made in.                                    |
-| `getOwner()`               | The current owner, or null.                                                                                                                   |
-| `runWithOwner(o, fn)`      | Runs `fn`, untracked, with `o` as the owner of what it makes; null makes it belong to nothing.                                                |
-| `<For each key>`           | A keyed list in TSX.                                                                                                                          |
-| `render(view, root)`       | Mounts a TSX view into an element, for good.                                                                                                  |
-| `attach(view, root)`       | `render`, returning a function that removes the view and stops its effects.                                                                   |
+| Export               | What it does                                                                                    |
+| -------------------- | ----------------------------------------------------------------------------------------------- |
+| `signal(value)`      | A getter and a setter. Reading the getter inside an effect or a hole subscribes it.             |
+| `effect(fn)`         | Runs `fn` now, and again whenever a signal it read changes.                                     |
+| `memo(fn)`           | A derived value, recomputed when what it reads changes.                                         |
+| `batch(fn)`          | Runs `fn` and applies its writes together, so effects run once.                                 |
+| `untrack(fn)`        | Reads signals without subscribing to them.                                                      |
+| `selector(source)`   | `isSelected(key)`, where a change of selection re-runs only the readers of the old and new key. |
+| `onCleanup(fn)`      | Runs `fn` when the effect, component or row it was called in re-runs or goes away.              |
+| `<For each key>`     | A keyed list in TSX.                                                                            |
+| `render(view, root)` | Mounts a TSX view into an element, for good.                                                    |
+| `attach(view, root)` | `render`, returning a function that removes the view and stops its effects.                     |
 
-`onSettled`, `flush`, `createRoot`, `getOwner` and `runWithOwner` are Solid 2.0's, and `reaction` is its `createEffect(compute, apply)`, under MobX's name. An app that does not call them ships none of their code, and its updates run as before.
+## Feature modules
+
+`@reactre/core` itself holds what the compiler makes free. Runtime APIs beyond it are feature modules, imported by path: an app that does not import one ships none of its code, and its updates run as before.
+
+| Import                            | Export                     | What it does                                                                                                                                  |
+| --------------------------------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@reactre/core/features/owner`    | `createRoot(fn)`           | Runs `fn(dispose)` under a new owner; `dispose` stops what it made. It goes with the owner it was made in.                                    |
+|                                   | `getOwner()`               | The current owner, or null.                                                                                                                   |
+|                                   | `runWithOwner(o, fn)`      | Runs `fn`, untracked, with `o` as the owner of what it makes; null makes it belong to nothing.                                                |
+| `@reactre/core/features/timing`   | `onSettled(fn)`            | Runs `fn` once, untracked, when the work under way has finished and the DOM shows it ([timing](#timing)). A function it returns is a cleanup. |
+|                                   | `flush(fn?)`               | `flush(fn)` runs `fn` and applies its writes before it returns, inside a batch too. `flush()` applies what the current batch has queued.      |
+| `@reactre/core/features/reaction` | `reaction(compute, apply)` | An effect in two halves: `compute` is tracked, `apply(value, prev)` runs untracked when the value changes, and may return a cleanup.          |
+
+```tsx
+import { createRoot } from "@reactre/core/features/owner";
+import { flush, onSettled } from "@reactre/core/features/timing";
+```
+
+`onSettled`, `flush`, `createRoot`, `getOwner` and `runWithOwner` are Solid 2.0's, and `reaction` is its `createEffect(compute, apply)`, under MobX's name. Rows with several selector keys are a feature module too (see [What an app ships](#what-an-app-ships)).
 
 ## Timing
 

@@ -45,10 +45,10 @@
 //   - An app ships only what it uses. Ownership comes with what owns (see
 //     "Ownership"); rows with several selector keys come with
 //     @reactre/core/features/selectors. The benchmark app ships neither.
-//   - Solid 2.0's owner and timing APIs (`createRoot`, `getOwner`, `runWithOwner`,
-//     `onSettled`, `flush`, and `reaction` for its split effect) sit beside the runtime and
-//     hook into nothing that runs without them: an app that does not call them ships none of
-//     them, and its updates run the same code (see "Settled").
+//   - Solid 2.0's owner and timing APIs are feature modules, since they are runtime functions
+//     and not compiled away: @reactre/core/features/owner (`createRoot`, `getOwner`,
+//     `runWithOwner`), features/timing (`onSettled`, `flush`) and features/reaction. They build
+//     on the `__` internals below and hook into nothing that runs without them.
 //
 // The list is @reactre/dom's keyed List (reuse, minimal moves, swaps and
 // removals in place). Nothing here depends on React.
@@ -157,45 +157,22 @@ export function batch<T>(fn: () => T): T {
 }
 
 /**
- * Apply writes now: Solid 2.0's `flush`, which replaces its `batch`.
- *
- * `flush(fn)` runs `fn` as `batch` does and returns its result, and its writes have applied by
- * the time it returns. Outside a batch that is `batch(fn)` itself. Inside one, where `batch`
- * would leave the writes to the outer batch's end, `flush` drains the queue: what `fn` wrote
- * and what the outer batch had queued before it, in the order they were queued.
- *
- * `flush()` inside a batch applies what the batch has queued so far; writes after it queue
- * again, for the batch's end. Outside a batch it does nothing: a write there applies at once.
- * Either form also runs the `onSettled` callbacks that wait for the queue it drains.
- *
- * @example
- *   const [n, setN] = signal(0);
- *   effect(() => console.log(n())); // logs 0
- *   batch(() => {
- *     setN(1);
- *     flush(); // logs 1
- *     setN(2);
- *   }); // logs 2
- *   flush(() => setN(3)); // logs 3 before it returns
+ * Internal (@reactre/core/features/timing's `flush`): drain the queue now, even inside a batch.
+ * It runs with `batching` at 0, as the outermost batch's end does, so that the effects it runs
+ * apply their own writes at once; then `batching` is put back.
  */
-export function flush(): void;
-export function flush<T>(fn: () => T): T;
-export function flush<T>(fn?: () => T): T | void {
-  const r = fn === undefined ? undefined : batch(fn);
-  // A batch's end drains the queue with `batching` at 0, so that the effects it runs apply their
-  // own writes at once: this drain does the same inside an outer batch, then puts it back.
+export function __drain(): void {
   const b = batching;
   batching = 0;
   try {
-    batch(noop);
+    batch(() => {});
   } finally {
     batching = b;
   }
-  return r;
 }
 
-/** What `flush` batches to drain the queue. */
-const noop = (): void => {};
+/** Internal: the batch queue and where it stands, read by @reactre/core/features/timing. */
+export { batching as __batching, head as __head, pending as __pending };
 
 /**
  * Run `fn` without recording what it reads: the observer around it does not
@@ -359,17 +336,17 @@ function track(fn: () => void): void {
 // bytes and does nothing until something owns.
 
 /** An owner: what it owns, and its cleanups. Both stay null until something is owned. */
-interface OwnerNode {
-  owned: OwnerNode[] | null;
+interface Owner {
+  owned: Owner[] | null;
   cleanups: (() => void)[] | null;
   dispose(): void;
 }
 
 /** The owner that effects and cleanups made now belong to; null outside any (nothing disposes them). */
-let owner: OwnerNode | null = null;
+let owner: Owner | null = null;
 
 /** Dispose what `o` owns and run its cleanups, then forget both. */
-function clean(o: OwnerNode): void {
+function clean(o: Owner): void {
   const owned = o.owned,
     c = o.cleanups;
   o.owned = null;
@@ -379,8 +356,8 @@ function clean(o: OwnerNode): void {
 }
 
 /** An owner that is not an effect: an `attach` root, or a row with mounts. */
-class Root implements OwnerNode {
-  owned: OwnerNode[] | null = null;
+class Root implements Owner {
+  owned: Owner[] | null = null;
   cleanups: (() => void)[] | null = null;
   dispose(): void {
     clean(this);
@@ -388,8 +365,8 @@ class Root implements OwnerNode {
 }
 
 /** An effect that owns what its run makes, and belongs to the owner it was made in. */
-class OwnedEffect extends Effect implements OwnerNode {
-  owned: OwnerNode[] | null = null;
+class OwnedEffect extends Effect implements Owner {
+  owned: Owner[] | null = null;
   cleanups: (() => void)[] | null = null;
   private dead = false;
   constructor(fn: () => void) {
@@ -419,7 +396,7 @@ class OwnedEffect extends Effect implements OwnerNode {
     clean(this);
   }
   /** Run `fn` with `o` as the owner and no reader: what it creates belongs to `o`. */
-  static within<T>(o: OwnerNode | null, fn: () => T): T {
+  static within<T>(o: Owner | null, fn: () => T): T {
     const po = owner,
       pc = current;
     owner = o;
@@ -444,7 +421,7 @@ function installOwners(): typeof OwnedEffect {
 }
 
 /** Ownership, installed as the module loads; dropped from a bundle that never uses it. */
-const Owned = /* @__PURE__ */ installOwners();
+const Owned: typeof OwnedEffect = /* @__PURE__ */ installOwners();
 
 /**
  * Run `fn` when the current owner is disposed or re-runs: in an effect,
@@ -465,87 +442,21 @@ export function onCleanup(fn: () => void): void {
   if (owner !== null) (owner.cleanups ??= []).push(fn);
 }
 
-declare const opaque: unique symbol;
-
-/** An owner, as `getOwner` returns it: opaque, to pass to `runWithOwner`. */
-export type Owner = { readonly [opaque]: true };
-
 /**
- * The current owner: the effect whose run is making things, the row or `attach` or `createRoot`
- * root whose content is being built, or null outside any (at module scope, in a view given to
- * `render`, under `runWithOwner(null, ...)`). Keep it to make things later that belong to it,
- * with `runWithOwner`. Reads only a variable, so it brings no part of ownership with it.
- *
- * @example
- *   function Widget() {
- *     const o = getOwner();
- *     setTimeout(() => runWithOwner(o, () => onCleanup(() => console.log("gone"))), 100);
- *     return <p />;
- *   }
+ * Internal (@reactre/core/features/owner's `runWithOwner`): make `o` the current owner, and
+ * return the one it replaces, to put back. Brings no part of ownership with it.
  */
-export function getOwner(): Owner | null {
-  return owner as unknown as Owner | null;
+export function __swapOwner(o: Owner | null): Owner | null {
+  const p = owner;
+  owner = o;
+  return p;
 }
 
 /**
- * Run `fn` with `o` as the owner and nothing tracking its reads, and return its result: the
- * effects and cleanups it makes belong to `o`, and go when `o` is disposed or re-runs. With null
- * they belong to nothing: they live until disposed by hand (a `createRoot`'s `dispose`).
- *
- * @example
- *   const o = getOwner();
- *   fetch(url).then((r) => runWithOwner(o, () => effect(() => console.log(r.status, n()))));
+ * Internal: the current owner, the root owner class, and ownership itself (`Owned.within`), for
+ * @reactre/core/features/owner. Only what uses `__Owned` brings ownership.
  */
-export function runWithOwner<T>(o: Owner | null, fn: () => T): T {
-  // `OwnedEffect.within`, without bringing the classes: owners exist only where something made
-  // one, which brought them already.
-  const po = owner,
-    pc = current;
-  owner = o as unknown as OwnerNode | null;
-  current = null;
-  try {
-    return fn();
-  } finally {
-    owner = po;
-    current = pc;
-  }
-}
-
-/**
- * Run `fn` under a new root owner and return its result. `fn` gets the root's `dispose`, which
- * stops the effects and runs the cleanups `fn` made, deepest first; calling it again does
- * nothing. Reads in `fn` are not tracked.
- *
- * As in Solid 2.0, a root made inside an owner belongs to it, and goes when the owner is disposed
- * or re-runs (an effect's run, a row, an `attach`, another root), or earlier by `dispose`. For a
- * root that outlives its owner, make it under `runWithOwner(null, ...)`. A root made outside any
- * owner lives until `dispose`.
- *
- * @example
- *   const [n, setN] = signal(0);
- *   const stop = createRoot((dispose) => {
- *     effect(() => console.log(n()));
- *     return dispose;
- *   }); // logs 0
- *   setN(1); // logs 1
- *   stop();
- *   setN(2); // logs nothing
- */
-export function createRoot<T>(fn: (dispose: () => void) => T): T {
-  const r = new Root(),
-    p = owner;
-  if (p !== null) (p.owned ??= []).push(r);
-  return Owned.within(r, () =>
-    fn(() => {
-      r.dispose();
-      // Out of the owner's list, so that an owner that lives long does not keep every root
-      // disposed under it. Gone already when the owner itself cleaned.
-      const ps = p === null ? null : p.owned,
-        i = ps === null ? -1 : ps.indexOf(r);
-      if (i >= 0) ps!.splice(i, 1);
-    }),
-  );
-}
+export { owner as __owner, Root as __Root, Owned as __Owned };
 
 /**
  * Run `fn` now and again whenever a signal it read changes. Each run records
@@ -578,147 +489,6 @@ export function memo<T>(fn: () => T): () => T {
   const [read, write] = signal<T>(undefined as T);
   effect(() => write(fn()));
   return read;
-}
-
-/**
- * An effect split in two (MobX's `reaction`, Solid 2.0's `createEffect(compute, apply)`).
- * `compute` is tracked, and should only read. `apply(value, prev)` runs untracked after it, now
- * and whenever the value `compute` returns differs (!==) from the last one, with the last one as
- * `prev` (undefined the first time). A function `apply` returns is a cleanup: it runs before the
- * next `apply` and when the reaction is disposed with its owner, as do the effects `apply` made.
- *
- * `effect(fn)` is the same thing with both halves in one function. The split keeps what `apply`
- * reads (and writes) from becoming a dependency, and runs `apply` only on a change of value.
- *
- * @example
- *   const [id, setId] = signal(1);
- *   reaction(
- *     () => id(),
- *     (id, prev) => {
- *       console.log("from", prev, "to", id);
- *       const t = setInterval(() => poll(id), 1000);
- *       return () => clearInterval(t);
- *     },
- *   ); // logs "from undefined to 1"
- *   setId(2); // clears the first interval, logs "from 1 to 2"
- */
-export function reaction<T>(compute: () => T, apply: (value: T, prev: T | undefined) => void | (() => void)): void {
-  // A memo skips a value equal to the last, so the effect runs `apply` only on a change.
-  const value = memo(compute);
-  let prev: T | undefined;
-  effect(() => {
-    const v = value();
-    untrack(() => {
-      const c = apply(v, prev);
-      prev = v;
-      // The effect's cleanups run before its next run and when it is disposed.
-      if (typeof c === "function") onCleanup(c);
-    });
-  });
-}
-
-// #endregion
-
-// #region Settled
-
-// When an `onSettled` callback runs depends on where it was queued:
-//
-//   - In a batch (`batch`, `flush(fn)`, a row's delegated handler), or while a batch's queue
-//     drains (the effects it queued are running: a slot rendering new content for a write in a
-//     batch), it waits in `soon`, and `settler` waits in the batch's own queue. The drain reaches
-//     `settler` after every effect queued before it, and runs `soon` once nothing is queued after
-//     it: when the batch's writes have all applied.
-//   - Anywhere else (a component rendered by `render` or `attach`, an effect re-run by a write
-//     outside any batch), it gets a microtask of its own. Nothing marks the end of such work (a
-//     `render` may still be building the view when a batch inside it ends), but a microtask
-//     runs only once all of it has returned.
-//
-// Neither is a hook in the update path. The batch queue runs `settler` as it runs any observer,
-// and `render`, slots and `batch` are as they were, so an app that never calls `onSettled`
-// ships none of this and checks nothing.
-
-/** Callbacks to run when the current batch's queue has drained. */
-const soon: (() => void)[] = [];
-
-/** Put `settler` in the batch queue, once. */
-function queueSettler(): void {
-  if (!settler.q) {
-    settler.q = true;
-    // Never a reader, so it has no `read`: nothing records it as one.
-    pending.push(settler as unknown as Observer);
-  }
-}
-
-/** The observer in a batch's queue that runs `soon`. */
-const settler = {
-  q: false,
-  stale(): void {
-    // What was queued after it (by a batch that an effect of the drain opened) runs first.
-    if (head < pending.length) return queueSettler();
-    // Each callback leaves the queue as it runs. One that throws leaves the rest for the next
-    // batch's end, as the drain leaves the effects after one that throws.
-    let i = 0;
-    try {
-      while (i < soon.length) soon[i++]!();
-    } finally {
-      soon.splice(0, i);
-      if (soon.length !== 0) queueSettler();
-    }
-  },
-};
-
-/**
- * Run `fn` once, untracked, when the work under way has finished and the DOM shows it (Solid
- * 2.0's `onSettled`, which replaces `onMount`). `fn` runs under the owner that was current when
- * `onSettled` was called, and not at all if that owner is disposed or re-runs first. A function
- * `fn` returns is a cleanup of that owner: it runs when the owner is disposed or re-runs.
- *
- * When `fn` runs:
- *
- * - Called in a batch, a `flush(fn)` or a `<For>` row's handler, or in an effect their writes
- *   re-ran (a slot rendering new content): when the batch's queue has drained, after every
- *   effect its writes queued, and before `batch` or `flush` returns. A `flush()` inside the
- *   batch runs those queued so far. They run in the order they were queued.
- * - Called anywhere else (a component rendered by `render` or `attach`, an effect re-run by a
- *   write outside any batch): in a microtask, once the code that called it has returned, and
- *   before the browser paints. To run them before returning, render in a flush:
- *   `flush(() => render(App, el))`.
- *
- * Either way, in a component body, the view has been inserted (by `render`, `attach`, a slot or
- * a row) by the time `fn` runs.
- *
- * @example
- *   function Field() {
- *     let input!: HTMLInputElement;
- *     onSettled(() => {
- *       input.focus();
- *       const ro = new ResizeObserver(() => console.log(input.offsetWidth));
- *       ro.observe(input);
- *       return () => ro.disconnect();
- *     });
- *     return <input ref={(el) => (input = el)} />;
- *   }
- */
-export function onSettled(fn: () => void | (() => void)): void {
-  const o = owner as unknown as Owner | null;
-  // 0 until it runs; then 1, or the cleanup `fn` returned. 1 too when the owner goes first.
-  let s: 0 | 1 | (() => void) = 0;
-  onCleanup(() => {
-    if (typeof s === "function") s();
-    s = 1;
-  });
-  const run = (): void => {
-    if (s !== 0) return;
-    s = 1;
-    const c = runWithOwner(o, fn);
-    if (typeof c === "function") s = c;
-  };
-  // In a batch, or while its queue drains: then `head` is past 0, as it stays after an effect of
-  // the drain threw, until the next batch's end runs the rest (and this with them).
-  if (batching || head) {
-    soon.push(run);
-    queueSettler();
-  } else queueMicrotask(run);
 }
 
 // #endregion

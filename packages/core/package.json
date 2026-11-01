@@ -58,7 +58,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/index.ts src/jsx-runtime.ts src/jsx-dev-runtime.ts src/features/selectors.ts --outdir dist --target browser --format esm --packages external && bun ../../scripts/declarations.ts"
+    "build": "rm -rf dist && bun build src/index.ts src/jsx-runtime.ts src/jsx-dev-runtime.ts src/features/selectors.ts src/features/owner.ts src/features/timing.ts src/features/reaction.ts --outdir dist --target browser --format esm --packages external && bun ../../scripts/declarations.ts"
   },
   "dependencies": {
     "@reactre/dom": "workspace:*"

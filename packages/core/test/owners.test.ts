@@ -1,19 +1,18 @@
-// createRoot, getOwner and runWithOwner, and reaction (the split effect), on the unbundled
-// runtime. Each test disposes the roots it makes, so no effect outlives it into another file.
+// createRoot, getOwner and runWithOwner (@reactre/core/features/owner), and reaction, the split
+// effect (@reactre/core/features/reaction), on the unbundled runtime. Each test disposes the roots
+// it makes, so no effect outlives it into another file.
 
 import { describe, expect, test } from "bun:test";
 
-import {
-  batch,
-  createRoot,
-  effect,
-  getOwner,
-  onCleanup,
-  type Owner,
-  reaction,
-  runWithOwner,
-  signal,
-} from "../src/index.ts";
+import { createRoot, getOwner, type Owner, runWithOwner } from "../src/features/owner.ts";
+import { reaction } from "../src/features/reaction.ts";
+import * as core from "../src/index.ts";
+import { batch, effect, onCleanup, signal } from "../src/index.ts";
+
+test("@reactre/core leaves the owner and timing APIs to its feature modules", () => {
+  for (const name of ["createRoot", "getOwner", "runWithOwner", "onSettled", "flush", "reaction"])
+    expect(core).not.toHaveProperty(name);
+});
 
 describe("createRoot", () => {
   test("its dispose stops what fn made, deepest first; fn is untracked and its result returned", () => {
