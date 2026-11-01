@@ -147,9 +147,10 @@ export interface ReactreOptions {
   /**
    * Core mode: build for the server, to render with @reactre/core/server: the app's JSX compiles
    * to HTML strings (@reactre/compiler's server mode), and its imports of @reactre/core and of
-   * the core's feature modules point at the server's versions. Unset: Vite's SSR builds and its
-   * dev server's server renders are server builds (an environment whose consumer is the server),
-   * and no other bundler's build is; `true` or `false` decides for every build.
+   * the core's feature modules point at the server's versions. Off by default: every build, in
+   * every Vite environment too, is the browser's. With `true`, in Vite, its SSR builds and its dev
+   * server's server renders (an environment whose consumer is the server) are server builds and
+   * its client's environment stays the browser's; any other bundler's build is a server build.
    */
   readonly ssr?: boolean;
 }
@@ -285,9 +286,13 @@ export const reactre: UnpluginInstance<ReactreOptions | undefined, boolean> = cr
   };
   let serve = false;
   const envOf = (ctx: unknown) => (ctx as { environment?: { name?: string } } | undefined)?.environment?.name ?? "";
-  /** Whether a transform builds for the server: the `ssr` option, else Vite's environment or `ssr` flag. */
+  /**
+   * Whether a transform builds for the server: never without the `ssr` option; with it, in Vite,
+   * where its environment (or, in a Vite without environments, its `ssr` flag) is the server's.
+   */
   const ssrOf = (ctx: unknown, args: readonly unknown[]): boolean => {
-    if (options.ssr !== undefined) return options.ssr;
+    if (options.ssr !== true) return false;
+    if (meta.framework !== "vite") return true;
     const consumer = (ctx as SsrContext | undefined)?.environment?.config?.consumer;
     return consumer !== undefined ? consumer === "server" : (args[0] as { ssr?: boolean } | undefined)?.ssr === true;
   };
@@ -360,12 +365,12 @@ export const reactre: UnpluginInstance<ReactreOptions | undefined, boolean> = cr
         await build;
       };
     // Vite's dependency scanner compiles JSX on its own, for React's runtime, and would then fail
-    // to find react/jsx-runtime. It needs only the imports, so it keeps JSX as written. A server
-    // render bundles @reactre/core, so its feature modules reach the server's core (`server`).
+    // to find react/jsx-runtime. It needs only the imports, so it keeps JSX as written. With `ssr`,
+    // a server render bundles @reactre/core, so its feature modules reach the server's core.
     plugin.vite = {
       config: () => ({
         optimizeDeps: { rolldownOptions: { transform: { jsx: "preserve" } } },
-        ...(options.ssr === false ? {} : { ssr: { noExternal: [CORE_PACKAGE] } }),
+        ...(options.ssr === true ? { ssr: { noExternal: [CORE_PACKAGE] } } : {}),
       }),
       configResolved(config) {
         serve = config.command === "serve";
@@ -374,10 +379,10 @@ export const reactre: UnpluginInstance<ReactreOptions | undefined, boolean> = cr
     // A server build: @reactre/core's feature modules import @reactre/core/server for the core, so
     // a context's provider or an <Errored> renders on the server's `__frag`, and the app's modules
     // that are not compiled (a .ts file) import the server's core as compiled ones do.
-    // Only where a build may be for the server: with the option, or in Vite, where the environment
-    // says. Elsewhere the hook is not there, so a client build loads every module as before.
+    // Only with the option (in Vite, the environment then says which builds are the server's).
+    // Without it the hook is not there, so every build loads every module as the browser's.
     const servers: UnpluginOptions[] = [];
-    if (options.ssr === true || (options.ssr === undefined && meta.framework === "vite"))
+    if (options.ssr === true)
       servers.push({
         name: "@reactre/plugin:server",
         enforce: "pre",

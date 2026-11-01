@@ -467,8 +467,7 @@ describe("vite: the dev server and a production build of one app behave the same
       configFile: false,
       logLevel: "silent",
       root: FIXTURES + "props",
-      // ssrLoadModule runs the app here, on a fake DOM: `ssr: false` keeps it the browser's code.
-      plugins: [vitePlugin({ ssr: false })],
+      plugins: [vitePlugin()],
       appType: "custom",
       server: { middlewareMode: true, ws: false },
     });

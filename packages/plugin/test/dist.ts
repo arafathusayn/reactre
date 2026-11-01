@@ -193,10 +193,10 @@ try {
     console.log(`ok - vite build, react-dom/server for the ${target === "ssr" ? "SSR" : "browser"} target`);
   }
 
-  // A Vite SSR build of a core app: the plugin compiles it for the server, as the environment is
-  // the server's, and @reactre/core/server's dist build renders it, its <Loading> streamed after
-  // the shell.
-  await ssr(fixtures + "ssr/entry.tsx", "ssr.js", {});
+  // A Vite SSR build of a core app, with `ssr: true`: the plugin compiles it for the server, as the
+  // environment is the server's, and @reactre/core/server's dist build renders it, its <Loading>
+  // streamed after the shell.
+  await ssr(fixtures + "ssr/entry.tsx", "ssr.js", { ssr: true });
   {
     const app = (await import(join(out, "ssr.js"))) as {
       isServer: boolean;

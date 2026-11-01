@@ -1,8 +1,10 @@
-// Server builds through the plugin (`ssr`): the app in fixtures/ssr built for the server by Vite
-// (its SSR build and its dev server, which the plugin tells apart by the environment), esbuild and
-// Bun (with `ssr: true`), then rendered with @reactre/core/server: control flow, a context, an
-// <Errored> boundary, effects that do not run, and a <Loading> whose content streams once its
-// async data comes. The same app built for the browser has none of the server's code. The
+// Server builds through the plugin (`ssr: true`): the app in fixtures/ssr built for the server by
+// Vite (its SSR build and its dev server, where the option makes the server's environment a server
+// build and leaves the client's alone), esbuild and Bun, then rendered with @reactre/core/server:
+// control flow, a context, an <Errored> boundary, effects that do not run, and a <Loading> whose
+// content streams once its async data comes. The same app built for the browser has none of the
+// server's code, and without the option a Vite SSR build and the dev server's server environment
+// get the browser's code, as every build did before the option. The
 // packages resolve to their dist builds, as an app's do once installed, so those are built first.
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -70,11 +72,11 @@ async function renders(app: Entry): Promise<void> {
 }
 
 describe("server builds", () => {
-  test("Vite's SSR build: the environment makes it a server build", async () => {
+  test("Vite's SSR build, with `ssr: true`: the environment makes it a server build", async () => {
     await vite({
       configFile: false,
       logLevel: "silent",
-      plugins: [vitePlugin()],
+      plugins: [vitePlugin({ ssr: true })],
       build: {
         ssr: ENTRY,
         outDir: join(out, "vite"),
@@ -90,7 +92,7 @@ describe("server builds", () => {
     await renders((await import(join(out, "vite/entry.js"))) as Entry);
   }, 60_000);
 
-  test("Vite's dev server renders the app with ssrLoadModule", async () => {
+  test("Vite's dev server, with `ssr: true`, renders the app with ssrLoadModule", async () => {
     const server = await createServer({
       configFile: false,
       logLevel: "silent",
@@ -98,7 +100,7 @@ describe("server builds", () => {
       cacheDir: join(out, "vite-dev"),
       appType: "custom",
       server: { middlewareMode: true, ws: false },
-      plugins: [vitePlugin()],
+      plugins: [vitePlugin({ ssr: true })],
     });
     try {
       await renders((await server.ssrLoadModule("/entry.tsx")) as Entry);
@@ -155,6 +157,68 @@ describe("server builds", () => {
   }, 60_000);
 });
 
+describe("Vite's server environments are the browser's without `ssr: true`, the server's with it", () => {
+  /** An import of the server's core, by its name or, in the dev server, by its resolved path. */
+  const SERVER_CORE = /["'](?:@reactre\/core\/server|[^"']*\/core\/(?:src|dist)\/(?:dev\/)?server\.[jt]s)["']/;
+  /** The server's compiled code: an HTML string helper, a server helper or the server's core. */
+  const SERVER = new RegExp(String.raw`\b__rrsH\b|\b__ssr[A-Za-z]+\b|` + SERVER_CORE.source);
+  /** The browser's compiled code: a template. */
+  const BROWSER = /\b__(?:rrT|template)\b/;
+
+  for (const [what, options, server] of [
+    ["unset", {}, false],
+    ["false", { ssr: false }, false],
+    ["true", { ssr: true }, true],
+  ] as const) {
+    test(`\`ssr\` ${what}: an SSR build of the app`, async () => {
+      const file = `app-${what}.js`;
+      await vite({
+        configFile: false,
+        logLevel: "silent",
+        plugins: [vitePlugin(options)],
+        build: {
+          ssr: FIXTURES + "ssr/app.tsx",
+          outDir: join(out, "vite-ssr-option"),
+          emptyOutDir: false,
+          minify: false,
+          rolldownOptions: { output: { entryFileNames: file } },
+        },
+      });
+      const code = await Bun.file(join(out, "vite-ssr-option", file)).text();
+      expect(SERVER.test(code)).toBe(server);
+      expect(BROWSER.test(code)).toBe(!server);
+    }, 60_000);
+
+    test(`\`ssr\` ${what}: the dev server's server environment, and ssrLoadModule`, async () => {
+      const dev = await createServer({
+        configFile: false,
+        logLevel: "silent",
+        root: FIXTURES + "ssr",
+        cacheDir: join(out, `vite-dev-${what}`),
+        appType: "custom",
+        server: { middlewareMode: true, ws: false },
+        plugins: [vitePlugin(options)],
+      });
+      try {
+        const code = (await dev.environments.ssr.transformRequest("/app.tsx"))!.code;
+        expect(SERVER.test(code)).toBe(server);
+        expect(BROWSER.test(code)).toBe(!server);
+        // The state module, which the plugin does not compile: the server's core only with the option.
+        const state = (await dev.environments.ssr.transformRequest("/state.ts"))!.code;
+        expect(SERVER_CORE.test(state)).toBe(server);
+        const app = (await dev.ssrLoadModule("/app.tsx")) as { App: unknown };
+        expect(typeof app.App).toBe("function");
+        // The client's environment is the browser's either way.
+        const client = (await dev.transformRequest("/app.tsx"))!.code;
+        expect(client).toMatch(BROWSER);
+        expect(client).not.toMatch(SERVER);
+      } finally {
+        await dev.close();
+      }
+    }, 60_000);
+  }
+});
+
 // #region The hooks
 
 describe("the hooks", () => {
@@ -165,17 +229,20 @@ describe("the hooks", () => {
     return plugins.find((p) => p.name === name)?.transform;
   };
 
-  test("a Vite without environments: the transform's `ssr` flag says", () => {
-    const compile = hook("@reactre/plugin")!;
+  test("a Vite without environments, with `ssr: true`: the transform's `ssr` flag says", () => {
+    const compile = hook("@reactre/plugin", { ssr: true })!;
     const code = "export const A = () => <p>{n()}</p>;";
     const ssr = compile.handler.call({}, code, "/app/a.tsx", { ssr: true }) as { code: string };
     expect(ssr.code).toContain("__rrsH(");
     const client = compile.handler.call({}, code, "/app/a.tsx") as { code: string };
     expect(client.code).toContain("__rrT(");
+    // Without the option, the flag changes nothing.
+    const off = hook("@reactre/plugin")!.handler.call({}, code, "/app/a.tsx", { ssr: true }) as { code: string };
+    expect(off.code).toContain("__rrT(");
   });
 
   test("the server hook: what it points at the server, and what it leaves", () => {
-    const server = hook("@reactre/plugin:server")!;
+    const server = hook("@reactre/plugin:server", { ssr: true })!;
     const ctx = { environment: { config: { consumer: "server" } } };
     const run = (code: string, id: string) => server.handler.call(ctx, code, id);
     const imports = `import { effect } from "@reactre/core";`;
@@ -195,11 +262,14 @@ describe("the hooks", () => {
     expect(server.handler.call({ environment: { config: { consumer: "client" } } }, imports, "/app/a.ts")).toBeNull();
   });
 
-  test("with `ssr: false` the hook is not there, and a Vite server render does not bundle the core", () => {
-    expect(hook("@reactre/plugin:server", { ssr: false })).toBeUndefined();
-    const plugins = [vitePlugin({ ssr: false })].flat() as { name: string; config?: () => Record<string, unknown> }[];
-    expect(plugins.find((p) => p.name === "@reactre/plugin")!.config!()["ssr"]).toBeUndefined();
-    const on = [vitePlugin()].flat() as { name: string; config?: () => Record<string, unknown> }[];
+  test("without `ssr: true` the hook is not there, and a Vite server render does not bundle the core", () => {
+    type Named = { name: string; config?: () => Record<string, unknown> };
+    for (const options of [{}, { ssr: false }]) {
+      expect(hook("@reactre/plugin:server", options)).toBeUndefined();
+      const plugins = [vitePlugin(options)].flat() as Named[];
+      expect(plugins.find((p) => p.name === "@reactre/plugin")!.config!()["ssr"]).toBeUndefined();
+    }
+    const on = [vitePlugin({ ssr: true })].flat() as Named[];
     expect(on.find((p) => p.name === "@reactre/plugin")!.config!()["ssr"]).toEqual({
       noExternal: [/^@reactre\/core(?:\/|$)/],
     });

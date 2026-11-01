@@ -113,8 +113,7 @@ describe("a store in one module, read in others", () => {
       configFile: false,
       logLevel: "silent",
       root: FIXTURE,
-      // ssrLoadModule runs the app here, on a fake DOM: `ssr: false` keeps it the browser's code.
-      plugins: [vitePlugin({ ssr: false })],
+      plugins: [vitePlugin()],
       appType: "custom",
       server: { middlewareMode: true, ws: false },
     });

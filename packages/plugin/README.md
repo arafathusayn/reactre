@@ -95,22 +95,25 @@ reactre({
   // @reactre/core/features/async and /actions need; false, its default build. Unset: the async
   // runtime where the program imports either module, or where no program is read.
   async: undefined,
-  // reactre mode: build for the server, to render with @reactre/core/server. Unset: Vite's SSR
-  // builds and its dev server's server renders are, and no other bundler's build is.
-  ssr: undefined,
+  // reactre mode: build for the server, to render with @reactre/core/server. Off by default; with
+  // true, Vite's SSR builds and its dev server's server renders are, and any other bundler's build.
+  ssr: false,
 });
 ```
 
 ### Server rendering
 
-In reactre mode the plugin compiles an app for [@reactre/core/server](https://www.npmjs.com/package/@reactre/core#server-rendering) in a server build: its JSX builds HTML strings, and its imports of `@reactre/core` and of the core's feature modules point at the server's versions (the core's effects do not run there). Vite tells it which builds are for the server: `vite build --ssr`, and the dev server's `ssrLoadModule`, whose environment is the server's, while the same dev server's browser modules compile as before. Vite's server render bundles `@reactre/core` (`ssr.noExternal`), so its feature modules reach the server's core. Other bundlers build the server's bundle with `ssr: true`, as a build of its own:
+In reactre mode, with `ssr: true`, the plugin compiles an app for [@reactre/core/server](https://www.npmjs.com/package/@reactre/core#server-rendering) in a server build: its JSX builds HTML strings, and its imports of `@reactre/core` and of the core's feature modules point at the server's versions (the core's effects do not run there). In Vite the option opts its server environments in: `vite build --ssr`, and the dev server's `ssrLoadModule`, are server builds, while the client's environment, the same dev server's browser modules included, compiles as before. Vite's server render then bundles `@reactre/core` (`ssr.noExternal`), so its feature modules reach the server's core. Other bundlers build the server's bundle with `ssr: true`, as a build of its own:
 
 ```ts
+// Vite: SSR builds and ssrLoadModule render on the server
+export default defineConfig({ plugins: [reactre({ ssr: true })] });
+
 // esbuild, for the server
 await build({ entryPoints: ["server.tsx"], bundle: true, platform: "node", plugins: [reactre({ ssr: true })] });
 ```
 
-A browser build is what it is without SSR, byte for byte. `ssr: false` turns server builds off in Vite too: pass it where Vite's server environment runs the browser's code on a DOM of its own (`ssrLoadModule` with a fake document, Vitest's `node` environment with one).
+Without the option, every build is the browser's, in every Vite environment too, byte for byte as before server rendering existed: a Vite server environment that runs the browser's code on a DOM of its own (`ssrLoadModule` with a fake document, Vitest's `node` environment with one) needs nothing.
 
 ### The whole program
 
