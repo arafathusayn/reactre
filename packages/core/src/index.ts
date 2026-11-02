@@ -1295,10 +1295,9 @@ export function __affect(t: __Transition, sources: readonly object[]): void {
 export function __begin(): __Transition {
   let t = acting ?? fresh;
   if (t === null) {
-    const n = (t = fresh = new __Transition());
-    queueMicrotask(() => {
-      if (fresh === n) fresh = null;
-    });
+    t = fresh = new __Transition();
+    // The tick ends: the next action called runs in a transition of its own.
+    queueMicrotask(() => (fresh = null));
   }
   t.holds++;
   return t;
