@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.0.4] - 2026-11-02
+
 ### Every package
 
 - Changed: the repository is Bun and TypeScript only, and CI no longer installs Node. `packages/plugin/test/dist.ts`, run by Bun, replaces `test/node.mjs`: it installs the packages' dist builds into a temp folder, with export conditions that leave out `bun` and `reactre-source`, and checks the plugin there in Vite builds, an SSR build and Vite's dev server. `scripts/consumer.ts` installs the packed packages with `bun install` and type-checks the user's project with `bun check`, not tsc, `skipLibCheck` still off. The test fixtures and the benchmark's React app are `.tsx` files, and the two JavaScript modules `test/missed.test.ts` needs are written to a temp folder when it runs. @reactre/plugin and @reactre/preact drop their `engines.node` field, and the READMEs their npm install lines and notes on Node. What the packages do is unchanged: they still compile `.js` and `.jsx` files, and @reactre/compat still maps `react-dom/server.node`.
@@ -352,7 +354,8 @@ First release.
 
 All packages ship ES modules for browsers and bundlers, and TypeScript sources for types.
 
-[Unreleased]: https://github.com/arafathusayn/reactre/compare/v0.0.3...HEAD
+[Unreleased]: https://github.com/arafathusayn/reactre/compare/v0.0.4...HEAD
+[0.0.4]: https://github.com/arafathusayn/reactre/releases/tag/v0.0.4
 [0.0.3]: https://github.com/arafathusayn/reactre/releases/tag/v0.0.3
 [0.0.2]: https://github.com/arafathusayn/reactre/releases/tag/v0.0.2
 [0.0.1]: https://github.com/arafathusayn/reactre/releases/tag/v0.0.1

@@ -174,7 +174,7 @@
     },
     "packages/compat": {
       "name": "@reactre/compat",
-      "version": "0.0.3",
+      "version": "0.0.4",
       "dependencies": {
         "@reactre/compiler": "workspace:*",
         "@reactre/dom": "workspace:*",
@@ -187,22 +187,22 @@
     },
     "packages/compiler": {
       "name": "@reactre/compiler",
-      "version": "0.0.3",
+      "version": "0.0.4",
     },
     "packages/core": {
       "name": "@reactre/core",
-      "version": "0.0.3",
+      "version": "0.0.4",
       "dependencies": {
         "@reactre/dom": "workspace:*",
       },
     },
     "packages/dom": {
       "name": "@reactre/dom",
-      "version": "0.0.3",
+      "version": "0.0.4",
     },
     "packages/full-compat": {
       "name": "@reactre/full-compat",
-      "version": "0.0.3",
+      "version": "0.0.4",
       "dependencies": {
         "@reactre/compat": "workspace:*",
         "@reactre/dom": "workspace:*",
@@ -210,7 +210,7 @@
     },
     "packages/plugin": {
       "name": "@reactre/plugin",
-      "version": "0.0.3",
+      "version": "0.0.4",
       "dependencies": {
         "@jridgewell/remapping": "catalog:",
         "@reactre/compat": "workspace:*",
@@ -237,7 +237,7 @@
     },
     "packages/preact": {
       "name": "@reactre/preact",
-      "version": "0.0.3",
+      "version": "0.0.4",
       "dependencies": {
         "@reactre/compiler": "workspace:*",
         "@reactre/dom": "workspace:*",
