@@ -76,16 +76,16 @@
     "gzip": 4179
   },
   "async": {
-    "min": 13705,
-    "gzip": 5596
+    "min": 14364,
+    "gzip": 5876
   },
   "actions": {
-    "min": 11361,
-    "gzip": 4778
+    "min": 13093,
+    "gzip": 5451
   },
   "dev": {
-    "min": 19470,
-    "gzip": 8245
+    "min": 19700,
+    "gzip": 8350
   },
   "hydrate": {
     "min": 19261,

@@ -153,6 +153,10 @@ const memos: Observer[] = [];
 let mhead = 0;
 /** How many `drainAsync` calls are under way: a memo that goes pending meanwhile holds the drain. */
 let draining = 0;
+/** Which values a read sees (see "Async"): 0, the page's; 1, a memo's run, the newest; 2, `latest`'s, the newest. */
+let nv = 0;
+/** The transition that holds a value the running memo read: it holds the memo's value too. */
+let taint: __Transition | null = null;
 // #endif
 // #if DEV
 
@@ -208,7 +212,15 @@ function notify(s: Source): void {
       // A memo: queued STALE where it stands, among the observers; what reads it is marked after.
       if (!o.f) marked.push(o as Memo<unknown>);
       mark!(o as Memo<unknown>, STALE);
+      // #if ASYNC
+      // A change the page sees: the memo computes what the page sees again (see `Computed.set`).
+      if (!(s as Partial<Held>).h) (o as Partial<Computed<unknown>>).u = true;
+      // #endif
     } else if (!o.q) {
+      // #if ASYNC
+      // A change a transition holds: what the page shows runs when it ends, but what reads the newest.
+      if ((s as Partial<Held>).h && !o.lv) continue;
+      // #endif
       o.q = true;
       pending.push(o);
     }
@@ -321,6 +333,11 @@ export type Setter<T> = (v: T | ((prev: T) => T)) => void;
 class Signal<T> implements Source {
   subs: Observer[] = [];
   v: T;
+  // #if ASYNC
+  /** The transition that holds `v`, a write the page sees when it ends; `c` is what the page sees until then. */
+  h: __Transition | null = null;
+  c: unknown = undefined;
+  // #endif
   constructor(v: T) {
     this.v = v;
   }
@@ -342,6 +359,9 @@ export function signal<T>(v: T): [() => T, Setter<T>] {
   const s = new Signal(v);
   const read = (): T => {
     if (current !== null) current.read(s);
+    // #if ASYNC
+    if (s.h !== null) return seen!(s) as T;
+    // #endif
     return s.v;
   };
   const write: Setter<T> = (next) => {
@@ -355,6 +375,10 @@ export function signal<T>(v: T): [() => T, Setter<T>] {
       );
     // #endif
     const v2 = typeof next === "function" ? (next as (p: T) => T)(s.v) : next;
+    // #if ASYNC
+    // In an action's code, a write is held by its transition; outside, one to a held value frees it.
+    if (acting !== null ? v2 !== s.v : s.h !== null) return held!(s, v2);
+    // #endif
     if (v2 === s.v) return;
     s.v = v2;
     notify(s);
@@ -465,6 +489,11 @@ class Effect implements Observer {
     const o = current;
     current = this;
     // #if ASYNC
+    // A memo computes the newest values, what a transition holds included; an effect shows the page's.
+    const pv = nv,
+      pt = taint;
+    nv = (this as Observer).f === undefined ? 0 : 1;
+    taint = null;
     try {
       this.fn();
       if (this.nr !== null) ready(this);
@@ -477,6 +506,8 @@ class Effect implements Observer {
       if (this.nr === null && !this.m) this.nr = A.wait(this, null);
     } finally {
       current = o;
+      nv = pv;
+      taint = pt;
     }
     // #else
     // try {
@@ -847,11 +878,19 @@ const Memoed: typeof Memo = /* @__PURE__ */ installMemos();
 //     `latest`), and they run when every memo of the transition has its new value. So an update
 //     that makes an async read pending keeps the old UI, whole, until it settles. A batch in which
 //     a memo of the transition gets its value, the transition still waiting for others, is held
-//     too. One transition is open at a time: what overlaps it joins it.
-//   - Writes apply at once, as without the runtime: what is held is the effects, not the values.
-//     A read outside an effect (a handler, `latest`) sees the newest value.
-//   - Actions (features/actions) hold the transition open while they run (`holds`); its `done`
-//     list resolves them and reverts their optimistic writes when it ends.
+//     too. One such transition is open at a time (`T`): what overlaps it joins it. Its writes
+//     apply at once, as without the runtime: what it holds is the effects, not the values.
+//   - Actions (features/actions) run in transitions of their own, held open while they run
+//     (`holds`). Actions called in one tick (before a microtask) share one, as do an action and
+//     those its code calls; two that write one value become one (`join`). A write in an action's
+//     code is held by its transition: the value's `h` is the transition, and its `c` what the
+//     page sees until the transition ends. A memo computes the newest values (`nv` is 1 while it
+//     runs), so an async memo fetches with the held writes, and the transition waits for it;
+//     a memo whose run read a held value is held too (`taint`), its `c` computed again as the
+//     page sees it after a change the page sees (`u`). Effects, holes and reads outside a memo
+//     see `c`; `latest` sees the newest values. A held change runs no effect, and when the
+//     transition ends (`complete`) what read a value it held runs, with the values, its
+//     optimistic writes revert (its `done` list) and the actions settle.
 
 /** What @reactre/core/features/async gives the core: the boundaries that runs wait under. */
 export interface AsyncHooks {
@@ -897,20 +936,75 @@ export class __Transition {
   readonly done: (() => void)[] = [];
   /** The actions running in it: it ends only when none is. */
   holds = 0;
-  /** What `affects` marked pending in it. */
-  affected: Set<object> | null = null;
+  /** The values whose newest it holds, a write the page sees when it ends (with `h` of it). */
+  readonly w: Held[] = [];
+  /** The transition it became part of (`join`), or null. */
+  into: __Transition | null = null;
 }
 
-/** The open transition, if any. */
+/** A signal or a memo, as a transition holds its value: `v` the newest, `c` what the page sees. */
+interface Held extends Source {
+  h: __Transition | null;
+  v: unknown;
+  c: unknown;
+}
+
+/** The open transition of an update that made an async memo pending, if any. */
 let T: __Transition | null = null;
 /** The transition of the action whose code is running (`__act`). */
 let acting: __Transition | null = null;
+/** The transition of the actions called in this tick: the next one called joins it. */
+let fresh: __Transition | null = null;
 /** The transition the observers of this drain are held for; null: they run. */
 let entangled: __Transition | null = null;
 /** The memo `refresh` runs: it runs again without a transition. */
 let quiet: Computed<unknown> | null = null;
 /** Read by `isPending`'s readers: notified when what is pending changes. */
 const pendSrc: Source = { subs: [] };
+/** What `affects` marked pending, by the transition it is pending in. */
+const aff: Map<object, __Transition> = new Map();
+
+/** The transition `t` is part of. */
+function root(t: __Transition): __Transition {
+  while (t.into !== null) t = t.into;
+  return t;
+}
+
+/** Make transition `b` part of `a`: they end together. */
+function join(a: __Transition, b: __Transition): __Transition {
+  a = root(a);
+  b = root(b);
+  if (a === b) return a;
+  b.into = a;
+  a.holds += b.holds;
+  for (const m of b.pending) {
+    a.pending.add(m);
+    (m as Computed<unknown>).pt = a;
+  }
+  for (const s of b.w) {
+    if (s.h === b) s.h = a;
+    a.w.push(s);
+  }
+  a.marked.push(...b.marked);
+  a.done.push(...b.done);
+  if (acting === b) acting = a;
+  if (fresh === b) fresh = a;
+  return a;
+}
+
+// Held writes, which only an action makes: features/actions installs them (`__installHolds`), so
+// an app without actions ships none of their code. Until then, each is null, and no value is held.
+
+/** A read of `s`, whose newest value a transition holds: the page's value, or, in a memo or `latest`, the newest. */
+let seen: ((s: Held) => unknown) | null = null;
+/** Signal `s` is written `v`: held, in an action's code; outside, a write the page sees, which frees it. */
+let held: ((s: Signal<unknown>, v: unknown) => void) | null = null;
+/** Memo `m`'s newest value is held by `t`, the page seeing `c`. */
+let keep: ((m: Computed<unknown>, t: __Transition, c: unknown) => void) | null = null;
+/** `fn()` as the page sees it: what a memo's run computes again for the page. */
+let page: ((fn: () => unknown) => unknown) | null = null;
+/** Transition `t` has ended: the page sees what it held, and what read it runs. */
+let release: ((t: __Transition) => void) | null = null;
 
 /**
  * The end of a batch with the async runtime on: memos first, then the other observers, each
@@ -943,9 +1037,10 @@ function drainAsync(): void {
 
 /** Transition `t` has what it waited for: clear what is pending, revert, and run what it held. */
 function complete(t: __Transition): void {
-  T = null;
+  if (T === t) T = null;
   if (entangled === t) entangled = null;
   const end = (): void => {
+    release?.(t);
     for (const c of t.marked) c.pend = false;
     notify(pendSrc);
     for (const f of t.done) f();
@@ -975,6 +1070,13 @@ class Computed<T> extends Memo<T> {
   it: AsyncIterator<T> | null = null;
   /** What `refresh` returned and waits for the next result. */
   w: [() => void, (e: unknown) => void][] | null = null;
+  /** The transition that holds `v`; `c` is what the page sees until it ends (see "Async"). */
+  h: __Transition | null = null;
+  c: unknown = undefined;
+  /** Marked by a change the page sees since its last run. */
+  u = false;
+  /** The transition that waits for the result of its run. */
+  pt: __Transition | null = null;
   override get(): T {
     if (this.f) this.up();
     if (current !== null) current.read(this);
@@ -983,12 +1085,15 @@ class Computed<T> extends Memo<T> {
       waiting = this;
       throw NOT_READY;
     }
+    if (this.h !== null) return seen!(this) as T;
     return this.v as T;
   }
   /** What a run of `fn` returned. */
-  set(r: unknown): void {
-    const it = this.it;
+  set(r: unknown, fn: () => unknown): void {
+    const it = this.it,
+      u = this.u;
     this.it = null;
+    this.u = false;
     if (it !== null) void it.return?.();
     if (typeof r === "object" && r !== null) {
       if (typeof (r as PromiseLike<T>).then === "function") return this.start(r as PromiseLike<T>, null);
@@ -997,25 +1102,32 @@ class Computed<T> extends Memo<T> {
     }
     this.tok = null;
     this.err = NONE;
-    this.put(r as T);
-    const t = T;
+    // Its run read a held value, and the page's changed too: compute what the page sees.
+    this.put(r as T, taint, taint !== null && u ? page!(fn) : NONE);
+    const t = this.pt;
+    this.pt = null;
     if (t !== null && t.pending.delete(this)) __settle(t);
   }
   /** Wait for a Promise's value, or an iterator's values. */
   private start(p: PromiseLike<T> | null, it: AsyncIterator<T> | null): void {
-    const tok = (this.tok = {});
+    const tok = (this.tok = {}),
+      q = quiet !== this && this.has,
+      // What waits for it: a change, the update's transition, or one that holds a value its run
+      // read; `refresh`, or a first run, the transition of the action whose code runs.
+      t = q ? (taint ?? (T ??= new __Transition())) : (acting ?? taint),
+      old = this.pt;
     this.it = it;
-    if (quiet !== this && this.has) {
-      // A change made it pending: the update's transition.
-      const t = (T ??= new __Transition());
-      if (!this.pend) {
+    if (old !== null && old !== t && old.pending.delete(this)) __settle(old);
+    this.pt = t;
+    if (t !== null) {
+      if (q && !this.pend) {
         this.pend = true;
         t.marked.push(this);
         notify(pendSrc);
       }
       t.pending.add(this);
-      if (draining) entangled = t;
-    } else if (acting !== null) acting.pending.add(this);
+      if (q && t === T && draining) entangled = t;
+    }
     const no = (e: unknown): void => {
       if (this.tok === tok) this.settle(undefined, e, true);
     };
@@ -1040,15 +1152,18 @@ class Computed<T> extends Memo<T> {
   private settle(v: T | undefined, err: unknown, last: boolean): void {
     if (last) this.tok = null;
     batch(() => {
-      const t = T;
+      const t = this.pt;
+      let h: __Transition | null = null;
+      this.pt = null;
       if (t !== null && t.pending.delete(this)) {
-        // The transition still waits: what this value re-runs waits with it.
-        if (t.pending.size !== 0 || t.holds !== 0) entangled = t;
+        // The transition still waits: what this value re-runs waits with it, an update's, or, an
+        // action's, the value too.
+        if (t.pending.size !== 0 || t.holds !== 0) t === T ? (entangled = t) : (h = t);
         else complete(t);
       }
       if (err === NONE) {
         this.err = NONE;
-        this.put(v as T);
+        this.put(v as T, h);
       } else {
         this.err = err;
         notify(this);
@@ -1058,11 +1173,26 @@ class Computed<T> extends Memo<T> {
       if (w !== null) for (const [ok, no] of w) err === NONE ? ok() : no(err);
     });
   }
-  override put(v: T): void {
-    if (this.has && v === this.v) return;
+  /**
+   * Its newest value is `v`, which transition `t` holds, the page seeing `c` until it ends; with
+   * `t` null (or `c` the same), the page sees `v` now.
+   */
+  override put(v: T, t: __Transition | null = null, c: unknown = NONE): void {
+    const h = this.h,
+      was = h !== null ? this.c : this.v;
+    if (t === null) c = v;
+    else if (c === NONE) c = was;
+    if (this.has && v === this.v && c === was) return;
+    // `c` is not `v`: `t` is not null, and an action's.
+    if (c === v || !this.has) this.h = null;
+    else keep!(this as Computed<unknown>, t!, c);
     this.has = true;
     this.v = v;
+    // A change the page sees notifies as a write does; one only the newest values see is held.
+    const k = this.h;
+    if (c !== was) this.h = null;
     notify(this);
+    this.h = k;
   }
   /** Run again, outside any transition (but an action's), and wait for the result. */
   refresh(): Promise<void> {
@@ -1084,7 +1214,7 @@ export const __refreshers: WeakMap<object, () => Promise<void>> = new WeakMap();
 
 /** `memo(fn)` with the async runtime on. */
 function computed<T>(fn: () => T): () => T {
-  const c: Computed<T> = new Computed<T>(() => c.set(fn()));
+  const c: Computed<T> = new Computed<T>(() => c.set(fn(), fn));
   const read = (): T => c.get();
   __refreshers.set(read, () => c.refresh());
   c.run();
@@ -1106,7 +1236,7 @@ class Probe implements Reader {
 
 /** Whether a change to `s` is in flight: an async memo's run, a memo of one, what `affects` marked. */
 function pendingOf(s: Source): boolean {
-  if (T !== null && T.affected !== null && T.affected.has(s)) return true;
+  if (aff.has(s)) return true;
   if (!(s instanceof Computed)) return false;
   if (s.pend) return true;
   const ss = s.sources;
@@ -1153,34 +1283,123 @@ export function __capture(fn: () => unknown): object[] {
 
 /** Internal: mark `sources` pending until transition `t` ends. */
 export function __affect(t: __Transition, sources: readonly object[]): void {
-  const a = (t.affected ??= new Set());
-  for (const s of sources) a.add(s);
+  for (const s of sources) aff.set(s, t);
   notify(pendSrc);
 }
 
-/** Internal: the open transition, made if there is none. */
-export function __transition(): __Transition {
-  return (T ??= new __Transition());
+/**
+ * Internal (features/actions): the transition an action called now runs in, held open for it
+ * until `__end`: that of the action whose code calls it, or of the actions called in this tick,
+ * or a new one.
+ */
+export function __begin(): __Transition {
+  let t = acting ?? fresh;
+  if (t === null) {
+    const n = (t = fresh = new __Transition());
+    queueMicrotask(() => {
+      if (fresh === n) fresh = null;
+    });
+  }
+  t.holds++;
+  return t;
 }
 
-/** Internal: the open transition, or null. */
+/** Internal (features/actions): an action of transition `t` returned; `f` runs when the transition ends. */
+export function __end(t: __Transition, f: (() => void) | null): void {
+  t = root(t);
+  if (f !== null) t.done.push(f);
+  t.holds--;
+  __settle(t);
+}
+
+/** Internal: the open transition of an update, or null. */
 export function __open(): __Transition | null {
   return T;
 }
 
 /** Internal: end transition `t` if it waits for nothing and runs no action. */
 export function __settle(t: __Transition): void {
-  if (t === T && t.pending.size === 0 && t.holds === 0) complete(t);
+  if (t.pending.size === 0 && t.holds === 0) complete(t);
 }
 
-/** Internal: run `fn` as code of an action of transition `t`. */
-export function __act<R>(t: __Transition, fn: () => R): R {
+/**
+ * Internal: run `fn` as code of an action of transition `t` (null: of none, so that its writes
+ * are not held), in a batch, whose effects run once the code has returned.
+ */
+export function __act<R>(t: __Transition | null, fn: () => R): R {
   const p = acting;
-  acting = t;
+  return batch(() => {
+    acting = t && root(t);
+    try {
+      return fn();
+    } finally {
+      acting = p;
+    }
+  });
+}
+
+/** Internal (features/actions): turn held writes on (see "Async"). */
+export function __installHolds(): void {
+  seen = (s) => {
+    if (nv === 0) return s.c;
+    // A memo that read it is held by the same transition.
+    if (nv === 1 && taint !== s.h) taint = taint === null ? s.h : join(taint, s.h!);
+    return s.v;
+  };
+  held = (s, v) => {
+    const t = acting;
+    if (t === null) s.h = null;
+    else if (s.h === null) {
+      s.c = s.v;
+      s.h = t;
+      t.w.push(s);
+    } else if (s.h !== t) join(s.h, t);
+    s.v = v;
+    notify(s);
+  };
+  keep = (m, t, c) => {
+    if (m.h === null) {
+      m.h = t;
+      t.w.push(m);
+    } else if (m.h !== t) join(m.h, t);
+    m.c = c;
+  };
+  page = (fn) => {
+    const o = current;
+    current = null;
+    nv = 0;
+    try {
+      return fn();
+    } finally {
+      current = o;
+      nv = 1;
+    }
+  };
+  release = (t) => {
+    if (fresh === t) fresh = null;
+    for (const [s, u] of aff) if (root(u) === t) aff.delete(s);
+    // What it held, the page sees now: what read the page's value runs. Memos have the newest.
+    for (const s of t.w)
+      if (s.h === t) {
+        s.h = null;
+        if (s.c !== s.v)
+          for (const o of s.subs)
+            if (o.f === undefined && !o.q) {
+              o.q = true;
+              pending.push(o);
+            }
+      }
+  };
+}
+
+/** Internal (features/async's `latest`): `fn()`, its reads seeing the newest values, held ones included. */
+export function __newest<R>(fn: () => R): R {
+  const p = nv;
+  nv = 2;
   try {
     return fn();
   } finally {
-    acting = p;
+    nv = p;
   }
 }
 
@@ -1196,7 +1415,8 @@ export function __acting(): __Transition | null {
 export function __installAsync(hooks?: AsyncHooks | false): void {
   if (hooks === false) {
     A = null;
-    T = acting = entangled = null;
+    T = acting = fresh = entangled = null;
+    aff.clear();
     return;
   }
   A = hooks ?? A ?? NO_BOUNDARIES;

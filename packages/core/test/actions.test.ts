@@ -16,7 +16,7 @@ import {
   until,
 } from "../src/features/actions.ts";
 import * as asyncApi from "../src/features/async.ts";
-import { __hooks, isPending, memo, NotReadyError, refresh } from "../src/features/async.ts";
+import { __hooks, isPending, latest, memo, NotReadyError, refresh } from "../src/features/async.ts";
 import * as context from "../src/features/context.ts";
 import { createStore } from "../src/features/store.ts";
 import * as core from "../src/index.ts";
@@ -138,7 +138,9 @@ describe("action", () => {
     ds[1]!.ok("b");
     await tick();
     expect(seen).toEqual(["a"]);
-    expect(data()).toBe("b");
+    // What it fetched is held with the action's writes: the page, and a read, see it at the end.
+    expect(data()).toBe("a");
+    expect(latest(data)).toBe("b");
     gate.ok();
     await p;
     expect(seen).toEqual(["a", "b"]);
@@ -188,6 +190,272 @@ describe("action", () => {
     gate.ok();
     await Promise.all([a, b]);
     expect(order.sort()).toEqual(["quick", "slow"]);
+  });
+});
+
+describe("held writes", () => {
+  test("a write in an action's code is held: reads and effects see it when the transition ends", async () => {
+    const [n, setN] = signal(0);
+    const seen: number[] = [];
+    effect(() => void seen.push(n()));
+    const gate = deferred<void>();
+    let inside = -1;
+    const go = action(function* () {
+      setN(1);
+      setN((v) => v + 1);
+      yield gate.p;
+      inside = n();
+    });
+    const p = go();
+    expect(n()).toBe(0);
+    expect(latest(n)).toBe(2);
+    expect(seen).toEqual([0]);
+    gate.ok();
+    await p;
+    // Its own code reads what the page sees, as Solid's does.
+    expect(inside).toBe(0);
+    expect(n()).toBe(2);
+    expect(seen).toEqual([0, 2]);
+  });
+
+  test("an async memo fetches with the held write, through a memo, and lands with it", async () => {
+    const [id, setId] = signal(1);
+    const key = memo(() => `u${id()}`);
+    const asked: string[] = [];
+    const replies = new Map<string, ReturnType<typeof deferred<string>>>();
+    const user = memo(() => {
+      const k = key();
+      asked.push(k);
+      const d = deferred<string>();
+      replies.set(k, d);
+      return d.p;
+    });
+    const page: string[] = [];
+    effect(() => void page.push(`${id()} ${user()}`));
+    replies.get("u1")!.ok("ann");
+    await tick();
+    expect(page).toEqual(["1 ann"]);
+    const pending: boolean[] = [];
+    effect(() => void pending.push(isPending(user)));
+    const go = action(function* () {
+      setId(2);
+      yield Promise.resolve();
+    });
+    const p = go();
+    // It fetched for the held id at once, not for the old one when the action ended.
+    expect(asked).toEqual(["u1", "u2"]);
+    expect(pending.at(-1)).toBe(true);
+    await tick();
+    // The action has returned; its transition waits for the fetch.
+    expect(page).toEqual(["1 ann"]);
+    expect(key()).toBe("u1");
+    replies.get("u2")!.ok("bob");
+    await p;
+    expect(page).toEqual(["1 ann", "2 bob"]);
+    expect(pending.at(-1)).toBe(false);
+    expect(asked).toEqual(["u1", "u2"]);
+  });
+
+  test("a refresh in the action's code fetches with its held writes", async () => {
+    const [id, setId] = signal(1);
+    const asked: number[] = [];
+    const user = memo(() => {
+      asked.push(id());
+      return Promise.resolve(`user ${id()}`);
+    });
+    const page: string[] = [];
+    effect(() => void page.push(user()));
+    await tick();
+    const go = action(function* () {
+      setId(7);
+      yield refresh(user);
+    });
+    await go();
+    expect(asked.at(-1)).toBe(7);
+    expect(page.at(-1)).toBe("user 7");
+  });
+
+  test("independent transitions hold their own writes: one ends without the other's", async () => {
+    const [a, setA] = signal(0);
+    const [b, setB] = signal(0);
+    const double = memo(() => b() * 2);
+    const seen: string[] = [];
+    effect(() => void seen.push(`${a()} ${b()} ${double()}`));
+    const ga = deferred<void>(),
+      gb = deferred<void>();
+    let sawA = -1;
+    const first = action(function* () {
+      setA(1);
+      yield ga.p;
+    });
+    const second = action(function* () {
+      setB(10);
+      yield gb.p;
+      sawA = a();
+    });
+    const pa = first();
+    await tick();
+    const pb = second();
+    gb.ok();
+    await pb;
+    // The page sees the second's write, without the first's.
+    expect(seen).toEqual(["0 0 0", "0 10 20"]);
+    expect(sawA).toBe(0);
+    expect(a()).toBe(0);
+    ga.ok();
+    await pa;
+    expect(seen).toEqual(["0 0 0", "0 10 20", "1 10 20"]);
+  });
+
+  test("two transitions made one wait for what either waited for", async () => {
+    const [n, setN] = signal(0);
+    const [k, setK] = signal(0);
+    const d = deferred<string>();
+    let calls = 0;
+    const data = memo(() => {
+      k();
+      return calls++ === 0 ? Promise.resolve("a") : d.p;
+    });
+    const seen: string[] = [];
+    effect(() => void seen.push(`${n()} ${data()}`));
+    await tick();
+    const gate = deferred<void>();
+    const first = action(function* () {
+      setN(1);
+      yield gate.p;
+    });
+    const second = action(function* () {
+      // Its fetch is its transition's; then it writes what the first holds.
+      setK(1);
+      yield Promise.resolve();
+      setN((v) => v + 1);
+    });
+    const pa = first();
+    await tick();
+    const pb = second();
+    await tick();
+    gate.ok();
+    await tick();
+    expect(seen).toEqual(["0 a"]);
+    d.ok("b");
+    await Promise.all([pa, pb]);
+    expect(seen).toEqual(["0 a", "2 b"]);
+  });
+
+  test("a memo that reads what two transitions hold makes them one: they end together", async () => {
+    const [a, setA] = signal(0);
+    const [b, setB] = signal(0);
+    const sum = memo(() => a() + b());
+    const seen: number[] = [];
+    effect(() => void seen.push(sum()));
+    const ga = deferred<void>(),
+      gb = deferred<void>();
+    let done = false;
+    const first = action(function* () {
+      setA(1);
+      yield ga.p;
+    });
+    const second = action(function* () {
+      setB(10);
+      yield gb.p;
+    });
+    const pa = first();
+    await tick();
+    const pb = second().then(() => (done = true));
+    gb.ok();
+    await tick();
+    expect(done).toBe(false);
+    expect(seen).toEqual([0]);
+    ga.ok();
+    await Promise.all([pa, pb]);
+    expect(seen).toEqual([0, 11]);
+  });
+
+  test("two actions that write one value, in different ticks, end together", async () => {
+    const [n, setN] = signal(0);
+    const seen: number[] = [];
+    effect(() => void seen.push(n()));
+    const ga = deferred<void>(),
+      gb = deferred<void>();
+    const order: string[] = [];
+    const first = action(function* () {
+      setN(1);
+      yield ga.p;
+    });
+    const second = action(function* () {
+      setN((v) => v + 10);
+      yield gb.p;
+    });
+    const pa = first().then(() => order.push("first"));
+    await tick();
+    const pb = second().then(() => order.push("second"));
+    gb.ok();
+    await tick();
+    expect(order).toEqual([]);
+    expect(seen).toEqual([0]);
+    ga.ok();
+    await Promise.all([pa, pb]);
+    expect(seen).toEqual([0, 11]);
+    expect(order.sort()).toEqual(["first", "second"]);
+  });
+
+  test("a memo of a held value and one the page sees: the page's change shows at once", async () => {
+    const [held, setHeld] = signal(1);
+    const [now, setNow] = signal(1);
+    const both = memo(() => held() * 10 + now());
+    const seen: number[] = [];
+    effect(() => void seen.push(both()));
+    const gate = deferred<void>();
+    const go = action(function* () {
+      setHeld(2);
+      yield gate.p;
+    });
+    const p = go();
+    expect(seen).toEqual([11]);
+    setNow(5);
+    expect(seen).toEqual([11, 15]);
+    expect(both()).toBe(15);
+    expect(latest(both)).toBe(25);
+    gate.ok();
+    await p;
+    expect(seen).toEqual([11, 15, 25]);
+  });
+
+  test("a write outside an action's code to a held value applies at once, and wins", async () => {
+    const [n, setN] = signal(0);
+    const seen: number[] = [];
+    effect(() => void seen.push(n()));
+    const gate = deferred<void>();
+    const go = action(function* () {
+      setN(1);
+      yield gate.p;
+    });
+    const p = go();
+    setN(5);
+    expect(n()).toBe(5);
+    expect(seen).toEqual([0, 5]);
+    gate.ok();
+    await p;
+    expect(seen).toEqual([0, 5]);
+  });
+
+  test("a store write in an action: the store changes at once, its effects run at the end", async () => {
+    const [s, set] = createStore({ n: 0 });
+    const seen: number[] = [];
+    effect(() => void seen.push(s.n));
+    const gate = deferred<void>();
+    const go = action(function* () {
+      set((d) => {
+        d.n = 1;
+      });
+      yield gate.p;
+    });
+    const p = go();
+    expect(s.n).toBe(1);
+    expect(seen).toEqual([0]);
+    gate.ok();
+    await p;
+    expect(seen).toEqual([0, 1]);
   });
 });
 

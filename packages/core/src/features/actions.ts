@@ -46,6 +46,7 @@ const NEEDS =
 if (typeof core.__installAsync !== "function") throw new Error(NEEDS);
 
 core.__installAsync();
+core.__installHolds();
 
 /** A transition, as the core keeps it. */
 type Transition = core.__Transition;
@@ -53,7 +54,11 @@ type Transition = core.__Transition;
 /** While `until`'s condition runs: optimistic values read as their base, the authoritative view. */
 let authoritative = 0;
 
-const inc = (n: number): number => n + 1;
+/** A version signal and its bump, which the page sees at once, in an action's code too. */
+function counter(): [() => number, () => void] {
+  const [read, write] = signal(0);
+  return [read, () => core.__act(null, () => write((n) => n + 1))];
+}
 
 /**
  * An action: a mutation written as a generator (or an async generator), run in a transition.
@@ -90,15 +95,12 @@ export function action<A extends unknown[], R>(
       // Called in another action's code, it settles when its generator ends, for that action to
       // yield: settled with the transition, which waits for that action, it never would.
       const inner = core.__acting() !== null,
-        t = core.__transition();
-      t.holds++;
+        t = core.__begin();
       let it: Generator<unknown, R, unknown> | AsyncGenerator<unknown, R, unknown> | undefined;
       const end = (failed: boolean, v: unknown): void => {
         const settle = (): void => (failed ? no(v) : ok(v as R));
+        core.__end(t, inner ? null : settle);
         if (inner) settle();
-        else t.done.push(settle);
-        t.holds--;
-        core.__settle(t);
       };
       const next = (r: IteratorResult<unknown, R>): void => {
         if (r.done) return end(false, r.value);
@@ -138,7 +140,7 @@ export function action<A extends unknown[], R>(
 export function createOptimistic<T>(fn: () => T): [() => T, Setter<T>];
 export function createOptimistic<T>(value: T): [() => T, Setter<T>];
 export function createOptimistic<T>(init: T | (() => T)): [() => T, Setter<T>] {
-  const [version, bump] = signal(0);
+  const [version, bump] = counter();
   // The value a write outside an action set; for a derived one, until `fn` runs again.
   let local: { v: T } | null = null,
     over: { t: Transition; v: T } | null = null;
@@ -148,7 +150,7 @@ export function createOptimistic<T>(init: T | (() => T)): [() => T, Setter<T>] {
           const v = (init as () => T)();
           if (local !== null) {
             local = null;
-            bump(inc);
+            bump();
           }
           return v;
         })
@@ -167,10 +169,10 @@ export function createOptimistic<T>(init: T | (() => T)): [() => T, Setter<T>] {
       const o = (over = { t, v });
       t.done.push(() => {
         if (over === o) over = null;
-        bump(inc);
+        bump();
       });
     }
-    bump(inc);
+    bump();
   };
   return [read, write];
 }
@@ -217,7 +219,7 @@ export function createOptimisticStore<T extends object>(
   } else [base, setBase] = createStore(a as T);
   // The transitions' writes, applied in order over a copy of the base.
   const writes: { t: Transition; f: (draft: T) => T | void }[] = [];
-  const [version, bump] = signal(0);
+  const [version, bump] = counter();
   const opt = createProjection<T>(
     (d) => {
       version();
@@ -247,10 +249,10 @@ export function createOptimisticStore<T extends object>(
     if (!writes.some((w) => w.t === t))
       t.done.push(() => {
         for (let i = writes.length; i--;) if (writes[i]!.t === t) writes.splice(i, 1);
-        bump(inc);
+        bump();
       });
     writes.push({ t, f });
-    bump(inc);
+    bump();
   };
   core.__refreshers.set(store, () => (source === undefined ? Promise.resolve() : core.__refreshers.get(source)!()));
   return [store, set];

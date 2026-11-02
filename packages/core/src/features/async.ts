@@ -290,17 +290,17 @@ export function isPending(fn: () => unknown): boolean {
 }
 
 /**
- * `fn()`, read at once: an effect or a hole that reads through `latest` is not held by a
- * transition, so it shows the newest value while the rest of the page keeps the old one until
- * the update settles. (Writes apply at once in reactre, so `fn()` outside an effect is already
- * the newest value.)
+ * `fn()`, read at once, with the newest values: an effect or a hole that reads through `latest`
+ * is not held by a transition, so it shows the newest value while the rest of the page keeps the
+ * old one until the update settles, and it sees the writes an action's transition holds
+ * (@reactre/core/features/actions) before the page does.
  *
  * @example
  *   <p>Showing {latest(() => page())} of {pages()}</p>
  */
 export function latest<T>(fn: () => T): T {
   try {
-    return fn();
+    return core.__newest(fn);
   } finally {
     core.__live();
   }

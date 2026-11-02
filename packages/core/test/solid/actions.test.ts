@@ -215,107 +215,87 @@ describe("signals/tests/action.test.ts", () => {
       expect(values).toEqual([1, 2, 3]);
     });
 
-    gap(
-      "action-writes",
-      "a plain write in an action is not held: it reads at once, and its effects run at once",
-      "should maintain transition context across async boundaries",
-      async () => {
-        const [$x, setX] = signal(0);
-        const values: number[] = [];
-        watch(
-          () => $x(),
-          (v) => values.push(v),
-        );
-        flush();
-        expect(values).toEqual([0]);
-        const myAction = action(function* () {
-          setX(1);
-          yield Promise.resolve();
-          setX(2);
-          yield Promise.resolve();
-        });
-        void myAction();
-        flush();
-        expect(values).toEqual([0]);
-        expect($x()).toBe(0);
-        await micro();
-        flush();
-        expect(values).toEqual([0]);
-        expect($x()).toBe(0);
-        await micro();
-        expect(values).toEqual([0, 2]);
-        expect($x()).toBe(2);
-      },
-    );
+    test("should maintain transition context across async boundaries", async () => {
+      const [$x, setX] = signal(0);
+      const values: number[] = [];
+      watch(
+        () => $x(),
+        (v) => values.push(v),
+      );
+      flush();
+      expect(values).toEqual([0]);
+      const myAction = action(function* () {
+        setX(1);
+        yield Promise.resolve();
+        setX(2);
+        yield Promise.resolve();
+      });
+      void myAction();
+      flush();
+      expect(values).toEqual([0]);
+      expect($x()).toBe(0);
+      await micro();
+      flush();
+      expect(values).toEqual([0]);
+      expect($x()).toBe(0);
+      await micro();
+      expect(values).toEqual([0, 2]);
+      expect($x()).toBe(2);
+    });
   });
 
   describe("transition management", () => {
-    gap(
-      "action-writes",
-      "a plain write in an action is not held: it reads at once, and its effects run at once",
-      "should initialize a transition when action starts",
-      async () => {
-        const [$x, setX] = signal(0);
-        const myAction = action(function* () {
-          setX(1);
-          yield Promise.resolve();
-        });
-        void myAction();
-        flush();
-        expect($x()).toBe(0);
-        await micro();
-        expect($x()).toBe(1);
-      },
-    );
+    test("should initialize a transition when action starts", async () => {
+      const [$x, setX] = signal(0);
+      const myAction = action(function* () {
+        setX(1);
+        yield Promise.resolve();
+      });
+      void myAction();
+      flush();
+      expect($x()).toBe(0);
+      await micro();
+      expect($x()).toBe(1);
+    });
 
-    gap(
-      "action-writes",
-      "a plain write in an action is not held: it reads at once, and its effects run at once",
-      "should keep transition alive while action is running",
-      async () => {
-        const [$x, setX] = signal(0);
-        const reads: number[] = [];
-        const myAction = action(function* () {
-          setX(1);
-          yield Promise.resolve();
-          reads.push($x());
-          setX(2);
-          yield Promise.resolve();
-          reads.push($x());
-        });
-        void myAction();
-        flush();
-        await micro();
-        expect(reads).toEqual([0]);
-        await micro();
-        expect(reads).toEqual([0, 0]);
-        expect($x()).toBe(2);
-      },
-    );
+    test("should keep transition alive while action is running", async () => {
+      const [$x, setX] = signal(0);
+      const reads: number[] = [];
+      const myAction = action(function* () {
+        setX(1);
+        yield Promise.resolve();
+        reads.push($x());
+        setX(2);
+        yield Promise.resolve();
+        reads.push($x());
+      });
+      void myAction();
+      flush();
+      await micro();
+      expect(reads).toEqual([0]);
+      await micro();
+      expect(reads).toEqual([0, 0]);
+      expect($x()).toBe(2);
+    });
 
-    gap(
-      "action-writes",
-      "a plain write in an action is not held: its effect runs at once",
-      "should complete transition when action finishes",
-      async () => {
-        const [$x, setX] = signal(0);
-        const values: number[] = [];
-        watch(
-          () => $x(),
-          (v) => values.push(v),
-        );
-        flush();
-        const myAction = action(function* () {
-          setX(5);
-          yield Promise.resolve();
-        });
-        void myAction();
-        flush();
-        expect(values).toEqual([0]);
-        await micro();
-        expect(values).toEqual([0, 5]);
-      },
-    );
+    test("should complete transition when action finishes", async () => {
+      const [$x, setX] = signal(0);
+      const values: number[] = [];
+      watch(
+        () => $x(),
+        (v) => values.push(v),
+      );
+      flush();
+      const myAction = action(function* () {
+        setX(5);
+        yield Promise.resolve();
+      });
+      void myAction();
+      flush();
+      expect(values).toEqual([0]);
+      await micro();
+      expect(values).toEqual([0, 5]);
+    });
 
     test("should complete transition and commit final values when action finishes", async () => {
       const [$a, setA] = signal(1);
@@ -339,95 +319,80 @@ describe("signals/tests/action.test.ts", () => {
   });
 
   describe("multiple actions", () => {
-    gap(
-      "action-writes",
-      "a plain write in an action is not held: it reads at once, and its effects run at once",
-      "should allow multiple concurrent actions in same transition",
-      async () => {
-        const [$x, setX] = signal(0);
-        const steps: string[] = [];
-        const action1 = action(function* () {
-          steps.push("a1-start");
-          setX((v) => v + 1);
-          yield Promise.resolve();
-          steps.push("a1-end");
-        });
-        const action2 = action(function* () {
-          steps.push("a2-start");
-          setX((v) => v + 10);
-          yield Promise.resolve();
-          steps.push("a2-end");
-        });
-        void action1();
-        void action2();
-        flush();
-        expect(steps).toEqual(["a1-start", "a2-start"]);
-        expect($x()).toBe(0);
-        await micro();
-        expect(steps).toEqual(["a1-start", "a2-start", "a1-end", "a2-end"]);
-        expect($x()).toBe(11);
-      },
-    );
+    test("should allow multiple concurrent actions in same transition", async () => {
+      const [$x, setX] = signal(0);
+      const steps: string[] = [];
+      const action1 = action(function* () {
+        steps.push("a1-start");
+        setX((v) => v + 1);
+        yield Promise.resolve();
+        steps.push("a1-end");
+      });
+      const action2 = action(function* () {
+        steps.push("a2-start");
+        setX((v) => v + 10);
+        yield Promise.resolve();
+        steps.push("a2-end");
+      });
+      void action1();
+      void action2();
+      flush();
+      expect(steps).toEqual(["a1-start", "a2-start"]);
+      expect($x()).toBe(0);
+      await micro();
+      expect(steps).toEqual(["a1-start", "a2-start", "a1-end", "a2-end"]);
+      expect($x()).toBe(11);
+    });
 
-    gap(
-      "action-writes",
-      "a plain write in an action is not held: it reads at once, and its effects run at once",
-      "should only complete transition when ALL actions finish",
-      async () => {
-        const [$x, setX] = signal(0);
-        const shortAction = action(function* () {
-          setX(1);
-          yield Promise.resolve();
-        });
-        const longAction = action(function* () {
-          setX(2);
-          yield Promise.resolve();
-          yield Promise.resolve();
-          yield Promise.resolve();
-          setX(3);
-        });
-        void shortAction();
-        void longAction();
-        flush();
-        expect($x()).toBe(0);
-        await micro();
-        expect($x()).toBe(0);
-        await micro();
-        expect($x()).toBe(0);
-        await micro();
-        expect($x()).toBe(3);
-      },
-    );
+    test("should only complete transition when ALL actions finish", async () => {
+      const [$x, setX] = signal(0);
+      const shortAction = action(function* () {
+        setX(1);
+        yield Promise.resolve();
+      });
+      const longAction = action(function* () {
+        setX(2);
+        yield Promise.resolve();
+        yield Promise.resolve();
+        yield Promise.resolve();
+        setX(3);
+      });
+      void shortAction();
+      void longAction();
+      flush();
+      expect($x()).toBe(0);
+      await micro();
+      expect($x()).toBe(0);
+      await micro();
+      expect($x()).toBe(0);
+      await micro();
+      expect($x()).toBe(3);
+    });
 
-    gap(
-      "action-writes",
-      "a plain write in an action is not held: it reads at once, and its effects run at once",
-      "should merge actions when one action calls another",
-      async () => {
-        const [$x, setX] = signal(0);
-        const steps: string[] = [];
-        const innerAction = action(function* () {
-          steps.push("inner-start");
-          setX((v) => v + 100);
-          yield Promise.resolve();
-          steps.push("inner-end");
-        });
-        const outerAction = action(function* () {
-          steps.push("outer-start");
-          setX(1);
-          void innerAction();
-          yield Promise.resolve();
-          steps.push("outer-end");
-        });
-        void outerAction();
-        flush();
-        expect(steps).toEqual(["outer-start", "inner-start"]);
-        expect($x()).toBe(0);
-        await micro();
-        expect(steps).toEqual(["outer-start", "inner-start", "inner-end", "outer-end"]);
-        expect($x()).toBe(101);
-      },
-    );
+    test("should merge actions when one action calls another", async () => {
+      const [$x, setX] = signal(0);
+      const steps: string[] = [];
+      const innerAction = action(function* () {
+        steps.push("inner-start");
+        setX((v) => v + 100);
+        yield Promise.resolve();
+        steps.push("inner-end");
+      });
+      const outerAction = action(function* () {
+        steps.push("outer-start");
+        setX(1);
+        void innerAction();
+        yield Promise.resolve();
+        steps.push("outer-end");
+      });
+      void outerAction();
+      flush();
+      expect(steps).toEqual(["outer-start", "inner-start"]);
+      expect($x()).toBe(0);
+      await micro();
+      expect(steps).toEqual(["outer-start", "inner-start", "inner-end", "outer-end"]);
+      expect($x()).toBe(101);
+    });
 
     test("should isolate independent transitions that don't share signals", async () => {
       const [$a, setA] = signal(0);
@@ -474,54 +439,44 @@ describe("signals/tests/action.test.ts", () => {
   });
 
   describe("signal integration", () => {
-    gap(
-      "action-writes",
-      "a plain write in an action is not held: it reads at once, and its effects run at once",
-      "should hold regular signal updates during action",
-      async () => {
-        const [$x, setX] = signal(0);
-        const myAction = action(function* () {
-          setX(1);
-          yield Promise.resolve();
-          setX(2);
-          yield Promise.resolve();
-        });
-        void myAction();
-        flush();
-        expect($x()).toBe(0);
-        await micro();
-        expect($x()).toBe(0);
-        await micro();
-        expect($x()).toBe(2);
-      },
-    );
+    test("should hold regular signal updates during action", async () => {
+      const [$x, setX] = signal(0);
+      const myAction = action(function* () {
+        setX(1);
+        yield Promise.resolve();
+        setX(2);
+        yield Promise.resolve();
+      });
+      void myAction();
+      flush();
+      expect($x()).toBe(0);
+      await micro();
+      expect($x()).toBe(0);
+      await micro();
+      expect($x()).toBe(2);
+    });
 
-    gap(
-      "action-writes",
-      "a plain write in an action is not held: its effect runs at once",
-      "should flush held signals when action completes",
-      async () => {
-        const [$x, setX] = signal(0);
-        const effectRuns = mock((_v: number) => {});
-        watch(
-          () => $x(),
-          (v) => effectRuns(v),
-        );
-        flush();
-        expect(effectRuns).toHaveBeenCalledTimes(1);
-        expect(effectRuns).toHaveBeenLastCalledWith(0);
-        const myAction = action(function* () {
-          setX(5);
-          yield Promise.resolve();
-        });
-        void myAction();
-        flush();
-        expect(effectRuns).toHaveBeenCalledTimes(1);
-        await micro();
-        expect(effectRuns).toHaveBeenCalledTimes(2);
-        expect(effectRuns).toHaveBeenLastCalledWith(5);
-      },
-    );
+    test("should flush held signals when action completes", async () => {
+      const [$x, setX] = signal(0);
+      const effectRuns = mock((_v: number) => {});
+      watch(
+        () => $x(),
+        (v) => effectRuns(v),
+      );
+      flush();
+      expect(effectRuns).toHaveBeenCalledTimes(1);
+      expect(effectRuns).toHaveBeenLastCalledWith(0);
+      const myAction = action(function* () {
+        setX(5);
+        yield Promise.resolve();
+      });
+      void myAction();
+      flush();
+      expect(effectRuns).toHaveBeenCalledTimes(1);
+      await micro();
+      expect(effectRuns).toHaveBeenCalledTimes(2);
+      expect(effectRuns).toHaveBeenLastCalledWith(5);
+    });
 
     test("should commit final signal values when action completes", async () => {
       const [$a, setA] = signal(1);
@@ -547,7 +502,7 @@ describe("signals/tests/action.test.ts", () => {
 
     gap(
       "action-writes",
-      "a plain write in an action is not held: it reads at once, and its effects run at once",
+      "a write outside an action's code applies at once, even in the tick the action started in",
       "latest() shows an entangled write at once, and a later rewrite during the hold wins at settle",
       async () => {
         const committed: string[] = [];
@@ -632,28 +587,23 @@ describe("signals/tests/action.test.ts", () => {
       expect(steps).toContain("end");
     });
 
-    gap(
-      "action-writes",
-      "a plain write in an action is not held: it reads at once, and its effects run at once",
-      "should handle action called multiple times",
-      async () => {
-        const [$x, setX] = signal(0);
-        let callCount = 0;
-        const myAction = action(function* (increment: number) {
-          callCount++;
-          setX((v) => v + increment);
-          yield Promise.resolve();
-        });
-        void myAction(1);
-        void myAction(10);
-        void myAction(100);
-        flush();
-        expect(callCount).toBe(3);
-        expect($x()).toBe(0);
-        await micro();
-        expect($x()).toBe(111);
-      },
-    );
+    test("should handle action called multiple times", async () => {
+      const [$x, setX] = signal(0);
+      let callCount = 0;
+      const myAction = action(function* (increment: number) {
+        callCount++;
+        setX((v) => v + increment);
+        yield Promise.resolve();
+      });
+      void myAction(1);
+      void myAction(10);
+      void myAction(100);
+      flush();
+      expect(callCount).toBe(3);
+      expect($x()).toBe(0);
+      await micro();
+      expect($x()).toBe(111);
+    });
   });
 
   describe("yield* with helper generators", () => {
@@ -680,41 +630,36 @@ describe("signals/tests/action.test.ts", () => {
       },
     );
 
-    gap(
-      "action-writes",
-      "a plain write in an action is not held: it reads at once, and its effects run at once",
-      "should support yield* with async helper generator",
-      async () => {
-        const [$x, setX] = signal(0);
-        const steps: string[] = [];
-        function* helper(): Generator<Promise<void>, void, unknown> {
-          steps.push("helper-start");
-          setX(1);
-          yield Promise.resolve();
-          steps.push("helper-middle");
-          setX(2);
-          yield Promise.resolve();
-          steps.push("helper-end");
-        }
-        const myAction = action(function* () {
-          steps.push("action-start");
-          yield* helper();
-          steps.push("action-end");
-          setX(3);
-        });
-        void myAction();
-        flush();
-        expect(steps).toEqual(["action-start", "helper-start"]);
-        expect($x()).toBe(0);
-        await micro();
-        flush();
-        expect(steps).toEqual(["action-start", "helper-start", "helper-middle"]);
-        expect($x()).toBe(0);
-        await micro();
-        expect(steps).toEqual(["action-start", "helper-start", "helper-middle", "helper-end", "action-end"]);
-        expect($x()).toBe(3);
-      },
-    );
+    test("should support yield* with async helper generator", async () => {
+      const [$x, setX] = signal(0);
+      const steps: string[] = [];
+      function* helper(): Generator<Promise<void>, void, unknown> {
+        steps.push("helper-start");
+        setX(1);
+        yield Promise.resolve();
+        steps.push("helper-middle");
+        setX(2);
+        yield Promise.resolve();
+        steps.push("helper-end");
+      }
+      const myAction = action(function* () {
+        steps.push("action-start");
+        yield* helper();
+        steps.push("action-end");
+        setX(3);
+      });
+      void myAction();
+      flush();
+      expect(steps).toEqual(["action-start", "helper-start"]);
+      expect($x()).toBe(0);
+      await micro();
+      flush();
+      expect(steps).toEqual(["action-start", "helper-start", "helper-middle"]);
+      expect($x()).toBe(0);
+      await micro();
+      expect(steps).toEqual(["action-start", "helper-start", "helper-middle", "helper-end", "action-end"]);
+      expect($x()).toBe(3);
+    });
 
     test("should support nested yield* (helper uses yield* on another helper)", async () => {
       const steps: string[] = [];
@@ -739,42 +684,37 @@ describe("signals/tests/action.test.ts", () => {
       expect(steps).toEqual(["action-start", "outer-start", "inner-1", "inner-2", "outer-end", "action-end"]);
     });
 
-    gap(
-      "action-writes",
-      "a plain write in an action is not held: its effect runs at once",
-      "should maintain transition context across all delegated yields",
-      async () => {
-        const [$x, setX] = signal(0);
-        const effectRuns = mock((_v: number) => {});
-        watch(
-          () => $x(),
-          (v) => effectRuns(v),
-        );
-        flush();
-        expect(effectRuns).toHaveBeenCalledTimes(1);
-        expect(effectRuns).toHaveBeenLastCalledWith(0);
-        function* helper(): Generator<Promise<void>, void, unknown> {
-          setX(1);
-          yield Promise.resolve();
-          setX(2);
-          yield Promise.resolve();
-        }
-        const myAction = action(function* () {
-          yield* helper();
-          setX(3);
-        });
-        void myAction();
-        flush();
-        expect(effectRuns).toHaveBeenCalledTimes(1);
-        await micro();
-        flush();
-        expect(effectRuns).toHaveBeenCalledTimes(1);
-        await micro();
-        expect(effectRuns).toHaveBeenCalledTimes(2);
-        expect(effectRuns).toHaveBeenLastCalledWith(3);
-        expect($x()).toBe(3);
-      },
-    );
+    test("should maintain transition context across all delegated yields", async () => {
+      const [$x, setX] = signal(0);
+      const effectRuns = mock((_v: number) => {});
+      watch(
+        () => $x(),
+        (v) => effectRuns(v),
+      );
+      flush();
+      expect(effectRuns).toHaveBeenCalledTimes(1);
+      expect(effectRuns).toHaveBeenLastCalledWith(0);
+      function* helper(): Generator<Promise<void>, void, unknown> {
+        setX(1);
+        yield Promise.resolve();
+        setX(2);
+        yield Promise.resolve();
+      }
+      const myAction = action(function* () {
+        yield* helper();
+        setX(3);
+      });
+      void myAction();
+      flush();
+      expect(effectRuns).toHaveBeenCalledTimes(1);
+      await micro();
+      flush();
+      expect(effectRuns).toHaveBeenCalledTimes(1);
+      await micro();
+      expect(effectRuns).toHaveBeenCalledTimes(2);
+      expect(effectRuns).toHaveBeenLastCalledWith(3);
+      expect($x()).toBe(3);
+    });
 
     test("should support multiple yield* in sequence", async () => {
       const steps: string[] = [];
@@ -901,63 +841,53 @@ describe("signals/tests/action.test.ts", () => {
       expect(steps).toEqual(["start", "caught: test error", "end"]);
     });
 
-    gap(
-      "action-writes",
-      "a plain write in an action is not held: it reads at once, and its effects run at once",
-      "should complete the transition when an async generator throws",
-      async () => {
-        const [$x, setX] = signal(0);
-        const errorAction = action(async function* () {
-          setX(1);
-          yield undefined;
-          throw new Error("async boom");
-        });
-        const successAction = action(function* () {
-          setX((v) => v + 10);
-          yield Promise.resolve();
-          yield Promise.resolve();
-          setX((v) => v + 100);
-        });
-        const errorPromise = errorAction();
-        // Handled, should an assertion fail before the one that awaits it.
-        errorPromise.catch(() => {});
-        void successAction();
-        flush();
-        expect($x()).toBe(0);
-        await expect(errorPromise).rejects.toThrow("async boom");
-        await new Promise<void>((r) => setTimeout(r, 0));
-        expect($x()).toBe(111);
-      },
-    );
+    test("should complete the transition when an async generator throws", async () => {
+      const [$x, setX] = signal(0);
+      const errorAction = action(async function* () {
+        setX(1);
+        yield undefined;
+        throw new Error("async boom");
+      });
+      const successAction = action(function* () {
+        setX((v) => v + 10);
+        yield Promise.resolve();
+        yield Promise.resolve();
+        setX((v) => v + 100);
+      });
+      const errorPromise = errorAction();
+      // Handled, should an assertion fail before the one that awaits it.
+      errorPromise.catch(() => {});
+      void successAction();
+      flush();
+      expect($x()).toBe(0);
+      await expect(errorPromise).rejects.toThrow("async boom");
+      await new Promise<void>((r) => setTimeout(r, 0));
+      expect($x()).toBe(111);
+    });
 
-    gap(
-      "action-writes",
-      "a plain write in an action is not held: it reads at once, and its effects run at once",
-      "should remove action from transition on error but let transition continue",
-      async () => {
-        const [$x, setX] = signal(0);
-        const errorAction = action(function* () {
-          setX(1);
-          yield Promise.reject(new Error("error"));
-        });
-        const successAction = action(function* () {
-          setX((v) => v + 10);
-          yield Promise.resolve();
-          yield Promise.resolve();
-          setX((v) => v + 100);
-        });
-        const errorPromise = errorAction();
-        // Handled, should an assertion fail before the one that awaits it.
-        errorPromise.catch(() => {});
-        void successAction();
-        flush();
-        expect($x()).toBe(0);
-        await micro();
-        await expect(errorPromise).rejects.toThrow("error");
-        await micro();
-        expect($x()).toBe(111);
-      },
-    );
+    test("should remove action from transition on error but let transition continue", async () => {
+      const [$x, setX] = signal(0);
+      const errorAction = action(function* () {
+        setX(1);
+        yield Promise.reject(new Error("error"));
+      });
+      const successAction = action(function* () {
+        setX((v) => v + 10);
+        yield Promise.resolve();
+        yield Promise.resolve();
+        setX((v) => v + 100);
+      });
+      const errorPromise = errorAction();
+      // Handled, should an assertion fail before the one that awaits it.
+      errorPromise.catch(() => {});
+      void successAction();
+      flush();
+      expect($x()).toBe(0);
+      await micro();
+      await expect(errorPromise).rejects.toThrow("error");
+      await micro();
+      expect($x()).toBe(111);
+    });
 
     test("should allow recovery and continuation after caught error", async () => {
       const [$x, setX] = signal(0);
@@ -1205,90 +1135,80 @@ describe("signals/tests/createOptimistic.test.ts", () => {
       expect(effectRuns).toHaveBeenCalledTimes(1);
     });
 
-    gap(
-      "action-writes",
-      "a plain write in an action is not held: its effect runs at once",
-      "should hold regular signal value during transition while showing optimistic",
-      async () => {
-        const [$regular, setRegular] = signal(10);
-        const [$optimistic, setOptimistic] = createOptimistic(1);
-        const values: { r: number; o: number }[] = [];
-        createRoot(() =>
-          reaction(
-            () => ({ r: $regular(), o: $optimistic() }),
-            (v) => void values.push(v),
-          ),
-        );
-        flush();
-        expect(values).toEqual([{ r: 10, o: 1 }]);
-        const doAsync = action(function* () {
-          setOptimistic(100);
-          setRegular(20);
-          yield Promise.resolve();
-        });
-        void doAsync();
-        flush();
-        expect(values).toEqual([
-          { r: 10, o: 1 },
-          { r: 10, o: 100 },
-        ]);
-        await micro();
-        expect($regular()).toBe(20);
-        expect($optimistic()).toBe(1);
-        expect(values).toEqual([
-          { r: 10, o: 1 },
-          { r: 10, o: 100 },
-          { r: 20, o: 1 },
-        ]);
-      },
-    );
+    test("should hold regular signal value during transition while showing optimistic", async () => {
+      const [$regular, setRegular] = signal(10);
+      const [$optimistic, setOptimistic] = createOptimistic(1);
+      const values: { r: number; o: number }[] = [];
+      createRoot(() =>
+        reaction(
+          () => ({ r: $regular(), o: $optimistic() }),
+          (v) => void values.push(v),
+        ),
+      );
+      flush();
+      expect(values).toEqual([{ r: 10, o: 1 }]);
+      const doAsync = action(function* () {
+        setOptimistic(100);
+        setRegular(20);
+        yield Promise.resolve();
+      });
+      void doAsync();
+      flush();
+      expect(values).toEqual([
+        { r: 10, o: 1 },
+        { r: 10, o: 100 },
+      ]);
+      await micro();
+      expect($regular()).toBe(20);
+      expect($optimistic()).toBe(1);
+      expect(values).toEqual([
+        { r: 10, o: 1 },
+        { r: 10, o: 100 },
+        { r: 20, o: 1 },
+      ]);
+    });
 
-    gap(
-      "action-writes",
-      "an action's writes are not batched: each optimistic write runs the effect",
-      "should revert multiple optimistic signals together when transition completes",
-      async () => {
-        const [$a, setA] = createOptimistic(1);
-        const [$b, setB] = createOptimistic(10);
-        const values: { a: number; b: number }[] = [];
-        createRoot(() =>
-          reaction(
-            () => ({ a: $a(), b: $b() }),
-            (v) => void values.push(v),
-          ),
-        );
-        flush();
-        expect(values).toEqual([{ a: 1, b: 10 }]);
-        const doAsync = action(function* () {
-          setA(2);
-          setB(20);
-          yield Promise.resolve();
-          setA(3);
-          yield Promise.resolve();
-        });
-        void doAsync();
-        flush();
-        expect(values).toEqual([
-          { a: 1, b: 10 },
-          { a: 2, b: 20 },
-        ]);
-        await micro();
-        expect(values).toEqual([
-          { a: 1, b: 10 },
-          { a: 2, b: 20 },
-          { a: 3, b: 20 },
-        ]);
-        await micro();
-        expect($a()).toBe(1);
-        expect($b()).toBe(10);
-        expect(values).toEqual([
-          { a: 1, b: 10 },
-          { a: 2, b: 20 },
-          { a: 3, b: 20 },
-          { a: 1, b: 10 },
-        ]);
-      },
-    );
+    test("should revert multiple optimistic signals together when transition completes", async () => {
+      const [$a, setA] = createOptimistic(1);
+      const [$b, setB] = createOptimistic(10);
+      const values: { a: number; b: number }[] = [];
+      createRoot(() =>
+        reaction(
+          () => ({ a: $a(), b: $b() }),
+          (v) => void values.push(v),
+        ),
+      );
+      flush();
+      expect(values).toEqual([{ a: 1, b: 10 }]);
+      const doAsync = action(function* () {
+        setA(2);
+        setB(20);
+        yield Promise.resolve();
+        setA(3);
+        yield Promise.resolve();
+      });
+      void doAsync();
+      flush();
+      expect(values).toEqual([
+        { a: 1, b: 10 },
+        { a: 2, b: 20 },
+      ]);
+      await micro();
+      expect(values).toEqual([
+        { a: 1, b: 10 },
+        { a: 2, b: 20 },
+        { a: 3, b: 20 },
+      ]);
+      await micro();
+      expect($a()).toBe(1);
+      expect($b()).toBe(10);
+      expect(values).toEqual([
+        { a: 1, b: 10 },
+        { a: 2, b: 20 },
+        { a: 3, b: 20 },
+        { a: 1, b: 10 },
+      ]);
+    });
   });
 
   describe("computed optimistic", () => {
@@ -1313,37 +1233,32 @@ describe("signals/tests/createOptimistic.test.ts", () => {
       },
     );
 
-    gap(
-      "action-writes",
-      "a plain write in an action is not held: it reads at once, and its effects run at once",
-      "should allow optimistic override during transition with held source",
-      async () => {
-        const [$x, setX] = signal(1);
-        const [$y, setY] = createOptimistic(() => $x() * 2);
-        const values: number[] = [];
-        watch(
-          () => $y(),
-          (v) => values.push(v),
-        );
-        flush();
-        expect(values).toEqual([2]);
-        const doAsync = action(function* () {
-          setY(100);
-          yield Promise.resolve();
-          setX(10);
-          yield Promise.resolve();
-        });
-        void doAsync();
-        flush();
-        expect($y()).toBe(100);
-        await micro();
-        expect($y()).toBe(100);
-        expect($x()).toBe(1);
-        await micro();
-        expect($y()).toBe(20);
-        expect($x()).toBe(10);
-      },
-    );
+    test("should allow optimistic override during transition with held source", async () => {
+      const [$x, setX] = signal(1);
+      const [$y, setY] = createOptimistic(() => $x() * 2);
+      const values: number[] = [];
+      watch(
+        () => $y(),
+        (v) => values.push(v),
+      );
+      flush();
+      expect(values).toEqual([2]);
+      const doAsync = action(function* () {
+        setY(100);
+        yield Promise.resolve();
+        setX(10);
+        yield Promise.resolve();
+      });
+      void doAsync();
+      flush();
+      expect($y()).toBe(100);
+      await micro();
+      expect($y()).toBe(100);
+      expect($x()).toBe(1);
+      await micro();
+      expect($y()).toBe(20);
+      expect($x()).toBe(10);
+    });
   });
 });
 
@@ -1426,7 +1341,7 @@ describe("signals/tests/store/createOptimisticStore.test.ts", () => {
 
     gap(
       "action-writes",
-      "a plain store write in an action is not held: its effect runs at once",
+      "a store write in an action changes the store at once: an effect run for another change reads it",
       "should hold regular store value during transition while showing optimistic",
       async () => {
         const [regular, setRegular] = createStore({ value: 10 });
