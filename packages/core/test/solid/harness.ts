@@ -77,7 +77,6 @@ export const GAPS = {
   "misuse-errors": "errors for misuse: an invalid cleanup value, flush() or onCleanup where Solid forbids them",
   "owner-ids": "owner ids: createRoot's id option and getNextChildId, under createUniqueId",
   "create-reaction": "createReaction(fn), a one-shot tracker that track(source) arms",
-  "cleanup-throw": "a throwing cleanup does not stop the teardown; the first error is rethrown after",
   "settled-async": "onSettled waits for async reads under way before it runs",
   "effect-errors": "an effect's unhandled compute error is logged and the app keeps going",
   "no-owner": "NoOwnerError, for a context read or provided outside any owner",

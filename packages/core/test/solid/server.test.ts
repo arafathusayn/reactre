@@ -640,8 +640,8 @@ describe("packages/solid/test/server/signals.spec.ts", () => {
     );
 
     gap(
-      "cleanup-throw",
-      "a throwing cleanup stops the teardown",
+      "dispose-order",
+      "every cleanup runs and the first error is rethrown, but in creation order",
       "a throwing cleanup does not stop the walk; the first error is rethrown after (#4193)",
       () => {
         const order: string[] = [];

@@ -1,17 +1,17 @@
 # Solid 2.0 parity, measured
 
-836 of Solid 2.0's own tests (solid-js 2.0.0-rc.20, [solidjs/solid@5e68925](https://github.com/solidjs/solid/tree/5e68925cc2fd216a9fb06345019e66d5da5c523c)), ported to reactre's API in [`packages/core/test/solid/`](../packages/core/test/solid): **669 pass** (80%), and 167 fail because reactre lacks the capability or behaves differently.
+836 of Solid 2.0's own tests (solid-js 2.0.0-rc.20, [solidjs/solid@5e68925](https://github.com/solidjs/solid/tree/5e68925cc2fd216a9fb06345019e66d5da5c523c)), ported to reactre's API in [`packages/core/test/solid/`](../packages/core/test/solid): **670 pass** (80%), and 166 fail because reactre lacks the capability or behaves differently.
 
 | Area                                                      | Files                        |  Ported |    Pass |     Gap |  Todo |
 | --------------------------------------------------------- | ---------------------------- | ------: | ------: | ------: | ----: |
 | Signals and memos                                         | signals, memo                |      72 |      63 |       9 |     0 |
-| Effects, ownership, timing                                | effects, owner, timing       |      90 |      66 |      24 |     0 |
+| Effects, ownership, timing                                | effects, owner, timing       |      90 |      67 |      23 |     0 |
 | Stores                                                    | store, reconcile, projection |     172 |     140 |      32 |     0 |
 | Control flow (Show, Switch, For, Repeat, Portal, Dynamic) | show, for, portal            |     172 |     156 |      16 |     0 |
 | Context, errors, components                               | context, errors, component   |      77 |      53 |      24 |     0 |
 | Async, Loading, actions                                   | loading, actions             |     122 |      74 |      48 |     0 |
 | Server rendering, hydration                               | server, hydration            |     131 |     117 |      14 |     0 |
-| **Total**                                                 | 18 files                     | **836** | **669** | **167** | **0** |
+| **Total**                                                 | 18 files                     | **836** | **670** | **166** | **0** |
 
 The top gaps, by the ports they block:
 
@@ -21,7 +21,8 @@ The top gaps, by the ports they block:
 4. **`dev-checks`, 7**: Solid's strict-read warnings in a component body, and its message for a component that is not a function: both need a component's body told apart from an app's `untrack`.
 5. **`match-placement`, 6**: a `<For>` or `<Show>` of `<Match>`es in a `<Switch>`.
 6. **`action-sync-yield`, 6**: a sync `yield` resuming at once.
-7. **`create-reaction`, `dispose-order`, `owner-ids`, `portal-events`, `pull-memos`, `reconcile-identity`, `store-in-place`, `symbol-keys`, 5 each**.
+7. **`dispose-order`, 7**: teardown in creation order; Solid unwinds, children newest first, then an owner's cleanups last-registered first.
+8. **`create-reaction`, `owner-ids`, `portal-events`, `pull-memos`, `reconcile-identity`, `store-in-place`, `symbol-keys`, 5 each**.
 
 `bug` is 0: the nine bugs the ports found, [below](#bugs-found), are fixed.
 
@@ -184,10 +185,12 @@ Each gap test names a target: what reactre would need for it to pass. The first 
 | `misuse-errors`                                                                                                                                                                                       |      0 | done: errors for an invalid cleanup value, `flush()` or `onCleanup` where Solid forbids them, in the development build                                                           |
 | `action-sync-yield`                                                                                                                                                                                   |      6 | a sync `yield` resuming at once                                                                                                                                                  |
 | `match-placement`                                                                                                                                                                                     |      6 | a `<For>` or `<Show>` of `<Match>`es in a `<Switch>`                                                                                                                             |
-| `create-reaction`, `dispose-order`, `owner-ids`, `pull-memos`, `portal-events`, `reconcile-identity`, `store-in-place`, `symbol-keys`                                                                 | 5 each |                                                                                                                                                                                  |
+| `dispose-order`                                                                                                                                                                                       |      7 | teardown that unwinds: children newest first, then an owner's cleanups last-registered first                                                                                     |
+| `create-reaction`, `owner-ids`, `pull-memos`, `portal-events`, `reconcile-identity`, `store-in-place`, `symbol-keys`                                                                                  | 5 each |                                                                                                                                                                                  |
 | `bug`                                                                                                                                                                                                 |      0 | done: the bugs below are fixed                                                                                                                                                   |
 | `async-store`, `class-instances`, `merge-views`, `optimistic-outside`, `projection-chain`, `refresh-promise`, `transition-scope`                                                                      | 4 each |                                                                                                                                                                                  |
-| `cleanup-throw`, `error-accessor`, `store-direct-write`                                                                                                                                               | 3 each |                                                                                                                                                                                  |
+| `cleanup-throw`                                                                                                                                                                                       |      0 | done: a throwing cleanup stops no other; the first error is thrown after                                                                                                         |
+| `error-accessor`, `store-direct-write`                                                                                                                                                                | 3 each |                                                                                                                                                                                  |
 | `array-text`, `class-values`, `effect-errors`, `lazy-retry`, `no-owner`, `pending-signal`, `settled-async`, `unobserved-timing`                                                                       | 2 each |                                                                                                                                                                                  |
 | `async-signal`, `children-helper`, `draft-define`, `dynamic-svg`, `effect-bundle`, `effect-equals`, `fallback-tracking`, `memo-errors`, `root-hold`, `stale-accessor`, `store-spread`, `switch-reads` | 1 each |                                                                                                                                                                                  |
 
@@ -284,7 +287,10 @@ Landed: `httpStatus` and `httpHeader` in @reactre/core/server, writing to the re
 - effects.test.ts, reactre has no createReaction: "Create and trigger a Reaction"; "fires and disposes cleanly when the rerun tracks zero dependencies"; "re-arming before a fire replaces tracked sources (#2861)"; "re-arm inside the reaction callback arms the next cycle (#2861)".
 - server.test.ts, createReaction is missing: "calls tracking function once".
 
-#### `dispose-order` (5)
+#### `dispose-order` (7)
+
+- owner.test.ts, every cleanup runs and the first error is rethrown, but in creation order (and there is no isDisposed): "runs every cleanup in the tree and rethrows the first error after".
+- server.test.ts, every cleanup runs and the first error is rethrown, but in creation order: "a throwing cleanup does not stop the walk; the first error is rethrown after (#4193)".
 
 - owner.test.ts, reactre disposes an owner's children in creation order: "should clean up in reverse order".
 - owner.test.ts, reactre runs an owner's children and cleanups in creation order: "cleanup order is unwind: children before owner, later registrations before earlier".
@@ -378,10 +384,9 @@ Landed in features/hydrate (the server's in @reactre/core/server). Its 4 ports p
 - loading.test.ts, a write whose new reader waits on a flight already out is not held with it: "a conditional reveal waits for an async flight from an earlier flush".
 - loading.test.ts, a branch change whose new content waits on fresh async reads is not held: "implicit route transition stays held after lazy component is cached".
 
-#### `cleanup-throw` (3)
+#### `cleanup-throw` (0)
 
-- owner.test.ts, a throwing cleanup stops the teardown: "runs every cleanup in the tree and rethrows the first error after"; "a throwing effect cleanup does not stop the owner's own cleanups".
-- server.test.ts, the same: "a throwing cleanup does not stop the walk; the first error is rethrown after (#4193)".
+Landed in the core: a cleanup that throws stops no other, and the first error is thrown once all have run. owner.test.ts "a throwing effect cleanup does not stop the owner's own cleanups" is a plain test now; the other two ports wait only on the unwind order, under `dispose-order`.
 
 #### `error-accessor` (3)
 
@@ -479,7 +484,7 @@ Where reactre claims a capability and the port shows it wrong. Each has `gap("bu
 
 Found on the way, filed as gaps rather than bugs since reactre claims nothing about them, but worth a look:
 
-- A cleanup that throws stops the teardown (`cleanup-throw`): the owner's later cleanups never run and its later children are never disposed, so they stay subscribed. `createRoot((d) => { onCleanup(() => log.push("owner")); reaction(() => 1, () => () => { throw e; }); return d; })()` throws and `log` stays empty.
+- Fixed: a cleanup that threw stopped the teardown (`cleanup-throw`): the owner's later cleanups never ran and its later children were never disposed, so they stayed subscribed. Now each cleanup and child runs, and the first error is thrown after (owners.test.ts "a cleanup that throws stops no other").
 - Fixed: a draft write of `__proto__`, or a `reconcile` of JSON with an own `__proto__` key, set that store object's prototype (`proto-guard`). It was worse than first filed: `reconcile(JSON.parse('{"__proto__": {"x": 1}}'))` merged into `Object.prototype` itself (the inherited `__proto__` read as the object to merge into), and so did a draft write through an inherited `__proto__` or `constructor` (`d.__proto__.x = 1`). Now, as in Solid 2.0, a draft write of `__proto__` is dropped; an inherited `__proto__` or `constructor` reads as undefined through a store or a draft; and an own `__proto__` (JSON's), from `reconcile`, a returned object or `snapshot`, is kept as own data (store.test.ts "\_\_proto\_\_ and constructor").
 - Fixed: `packages/core/package.json`'s `sideEffects` listed `./src/features/*.ts` and not `./src/server/*.ts`, so in a server build a bare `import "@reactre/core/features/async"` (rewritten to `server/async`) could be dropped by the bundler, and an async memo then read as a Promise. It lists `./src/server/*.ts` and `./dist/server/*.js` now.
 

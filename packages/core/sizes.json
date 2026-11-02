@@ -8,56 +8,56 @@
     "gzip": 5900
   },
   "slot": {
-    "min": 6763,
-    "gzip": 3015
+    "min": 6823,
+    "gzip": 3037
   },
   "attach": {
-    "min": 6447,
-    "gzip": 2889
+    "min": 6507,
+    "gzip": 2908
   },
   "imported": {
     "min": 14098,
     "gzip": 6009
   },
   "root": {
-    "min": 6752,
-    "gzip": 3000
+    "min": 6812,
+    "gzip": 3023
   },
   "settled": {
-    "min": 7183,
-    "gzip": 3161
+    "min": 7243,
+    "gzip": 3184
   },
   "reaction": {
-    "min": 7303,
-    "gzip": 3224
+    "min": 7363,
+    "gzip": 3245
   },
   "show": {
-    "min": 14886,
-    "gzip": 6274
+    "min": 14946,
+    "gzip": 6295
   },
   "store": {
-    "min": 16639,
-    "gzip": 6920
+    "min": 16699,
+    "gzip": 6934
   },
   "storeEach": {
-    "min": 16639,
-    "gzip": 6922
+    "min": 16699,
+    "gzip": 6936
   },
   "memo": {
-    "min": 6765,
-    "gzip": 3067
+    "min": 6825,
+    "gzip": 3088
   },
   "lazyMemo": {
-    "min": 7926,
-    "gzip": 3503
+    "min": 7986,
+    "gzip": 3526
   },
   "context": {
-    "min": 8029,
-    "gzip": 3476
+    "min": 8089,
+    "gzip": 3500
   },
   "errors": {
-    "min": 8250,
-    "gzip": 3565
+    "min": 8310,
+    "gzip": 3587
   },
   "props": {
     "min": 5983,
@@ -65,30 +65,30 @@
   },
   "index": {
     "min": 12943,
-    "gzip": 5563
+    "gzip": 5562
   },
   "effects": {
-    "min": 7608,
-    "gzip": 3383
+    "min": 7668,
+    "gzip": 3408
   },
   "lists": {
-    "min": 9539,
-    "gzip": 4155
+    "min": 9599,
+    "gzip": 4179
   },
   "async": {
-    "min": 13645,
-    "gzip": 5571
+    "min": 13705,
+    "gzip": 5596
   },
   "actions": {
-    "min": 11301,
-    "gzip": 4757
+    "min": 11361,
+    "gzip": 4778
   },
   "dev": {
     "min": 19470,
     "gzip": 8245
   },
   "hydrate": {
-    "min": 19201,
-    "gzip": 7798
+    "min": 19261,
+    "gzip": 7816
   }
 }

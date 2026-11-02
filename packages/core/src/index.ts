@@ -537,14 +537,31 @@ interface Owner {
 /** The owner that effects and cleanups made now belong to; null outside any (nothing disposes them). */
 let owner: Owner | null = null;
 
-/** Dispose what `o` owns and run its cleanups, then forget both. */
+/**
+ * Dispose what `o` owns and run its cleanups, then forget both. One that throws stops none of
+ * the others: the first error is thrown once all have run.
+ */
 function clean(o: Owner): void {
   const owned = o.owned,
     c = o.cleanups;
+  let err: [unknown] | undefined;
   o.owned = null;
   o.cleanups = null;
-  if (owned !== null) for (let i = 0; i < owned.length; i++) owned[i]!.dispose();
-  if (c !== null) for (let i = 0; i < c.length; i++) c[i]!();
+  if (owned !== null)
+    for (let i = 0; i < owned.length; i++)
+      try {
+        owned[i]!.dispose();
+      } catch (e) {
+        err ??= [e];
+      }
+  if (c !== null)
+    for (let i = 0; i < c.length; i++)
+      try {
+        c[i]!();
+      } catch (e) {
+        err ??= [e];
+      }
+  if (err) throw err[0];
 }
 
 /** An owner that is not an effect: an `attach` root, or a row with mounts. */

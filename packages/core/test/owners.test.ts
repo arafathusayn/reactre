@@ -99,6 +99,38 @@ describe("createRoot", () => {
     setN(2);
     expect(seen).toEqual([0, 1]);
   });
+
+  test("a cleanup that throws stops no other: every one runs, and the first error is thrown after", () => {
+    const log: string[] = [];
+    const [n, setN] = signal(0);
+    const stop = createRoot((stop) => {
+      createRoot(() => {
+        onCleanup(() => {
+          throw new Error("child");
+        });
+        onCleanup(() => log.push("child after"));
+      });
+      effect(() => {
+        n();
+        onCleanup(() => {
+          throw new Error("effect");
+        });
+        onCleanup(() => log.push("effect after"));
+      });
+      onCleanup(() => {
+        throw new Error("root");
+      });
+      onCleanup(() => log.push("root after"));
+      return stop;
+    });
+    // An effect's re-run cleans what its last run made first: all of it, then the error, which
+    // stops the run (so it has no cleanups left).
+    expect(() => setN(1)).toThrow("effect");
+    expect(log).toEqual(["effect after"]);
+    log.length = 0;
+    expect(stop).toThrow("child");
+    expect(log).toEqual(["child after", "root after"]);
+  });
 });
 
 describe("getOwner and runWithOwner", () => {

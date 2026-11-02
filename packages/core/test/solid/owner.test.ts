@@ -434,8 +434,8 @@ describe("runWithOwner.test.ts", () => {
 
 describe("cleanup-throw-continues.test.ts", () => {
   gap(
-    "cleanup-throw",
-    "a throwing cleanup stops reactre's teardown",
+    "dispose-order",
+    "every cleanup runs and the first error is rethrown, but in creation order (and there is no isDisposed)",
     "runs every cleanup in the tree and rethrows the first error after",
     () => {
       const log: string[] = [];
@@ -487,25 +487,20 @@ describe("cleanup-throw-continues.test.ts", () => {
     expect(() => flush()).not.toThrow();
   });
 
-  gap(
-    "cleanup-throw",
-    "a throwing effect cleanup stops reactre's teardown before the owner's cleanups",
-    "a throwing effect cleanup does not stop the owner's own cleanups",
-    () => {
-      const log: string[] = [];
-      const dispose = createRoot((dispose) => {
-        onCleanup(() => log.push("owner"));
-        reaction(
-          () => 1,
-          () => () => {
-            throw new Error("boom");
-          },
-        );
-        return dispose;
-      });
-      flush();
-      expect(dispose).toThrow("boom");
-      expect(log).toEqual(["owner"]);
-    },
-  );
+  test("a throwing effect cleanup does not stop the owner's own cleanups", () => {
+    const log: string[] = [];
+    const dispose = createRoot((dispose) => {
+      onCleanup(() => log.push("owner"));
+      reaction(
+        () => 1,
+        () => () => {
+          throw new Error("boom");
+        },
+      );
+      return dispose;
+    });
+    flush();
+    expect(dispose).toThrow("boom");
+    expect(log).toEqual(["owner"]);
+  });
 });
