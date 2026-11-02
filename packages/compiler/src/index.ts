@@ -1797,8 +1797,15 @@ export class Compiler {
       const v = `__rrV${n}`;
       return `(() => { const ${v} = __rrMemo(() => (${w})); return () => ((${x}) => (${x} ? ${kids(() => x)} : ${fb}))(${v}()); })()`;
     }
-    const cond = `__rrC${n}`;
-    return `(() => { const ${cond} = __rrMemo(() => !!(${w})); return () => (${cond}() ? ${kids(() => accessor(w))} : ${fb}); })()`;
+    const cond = `__rrC${n}`,
+      v = `__rrV${n}`;
+    // A function child reads the value: `when` runs once per change, in a memo of the value that
+    // both the condition and the accessor read. Other children need only the condition.
+    let value = false;
+    const body = kids(() => ((value = true), accessor(`${v}()`)));
+    if (!value)
+      return `(() => { const ${cond} = __rrMemo(() => !!(${w})); return () => (${cond}() ? ${body} : ${fb}); })()`;
+    return `(() => { const ${v} = __rrMemo(() => (${w})), ${cond} = __rrMemo(() => !!${v}()); return () => (${cond}() ? ${body} : ${fb}); })()`;
   }
 
   /**

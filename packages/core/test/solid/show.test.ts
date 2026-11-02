@@ -235,7 +235,7 @@ describe("Testing nonkeyed function show control flow", () => {
     expect(t.childrenExecuted()).toBe(0);
   });
 
-  gap("bug", "with a function child, `when` runs twice per change", "Toggle show control flow", () => {
+  test("Toggle show control flow", () => {
     t.setCount(7);
     flush();
     expect(t.whenExecuted()).toBe(2);

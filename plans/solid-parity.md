@@ -1,17 +1,17 @@
 # Solid 2.0 parity, measured
 
-836 of Solid 2.0's own tests (solid-js 2.0.0-rc.20, [solidjs/solid@5e68925](https://github.com/solidjs/solid/tree/5e68925cc2fd216a9fb06345019e66d5da5c523c)), ported to reactre's API in [`packages/core/test/solid/`](../packages/core/test/solid): **668 pass** (80%), and 168 fail because reactre lacks the capability or behaves differently.
+836 of Solid 2.0's own tests (solid-js 2.0.0-rc.20, [solidjs/solid@5e68925](https://github.com/solidjs/solid/tree/5e68925cc2fd216a9fb06345019e66d5da5c523c)), ported to reactre's API in [`packages/core/test/solid/`](../packages/core/test/solid): **669 pass** (80%), and 167 fail because reactre lacks the capability or behaves differently.
 
 | Area                                                      | Files                        |  Ported |    Pass |     Gap |  Todo |
 | --------------------------------------------------------- | ---------------------------- | ------: | ------: | ------: | ----: |
 | Signals and memos                                         | signals, memo                |      72 |      63 |       9 |     0 |
 | Effects, ownership, timing                                | effects, owner, timing       |      90 |      66 |      24 |     0 |
 | Stores                                                    | store, reconcile, projection |     172 |     140 |      32 |     0 |
-| Control flow (Show, Switch, For, Repeat, Portal, Dynamic) | show, for, portal            |     172 |     155 |      17 |     0 |
+| Control flow (Show, Switch, For, Repeat, Portal, Dynamic) | show, for, portal            |     172 |     156 |      16 |     0 |
 | Context, errors, components                               | context, errors, component   |      77 |      53 |      24 |     0 |
 | Async, Loading, actions                                   | loading, actions             |     122 |      74 |      48 |     0 |
 | Server rendering, hydration                               | server, hydration            |     131 |     117 |      14 |     0 |
-| **Total**                                                 | 18 files                     | **836** | **668** | **168** | **0** |
+| **Total**                                                 | 18 files                     | **836** | **669** | **167** | **0** |
 
 The top gaps, by the ports they block:
 
@@ -22,7 +22,8 @@ The top gaps, by the ports they block:
 5. **`match-placement`, 6**: a `<For>` or `<Show>` of `<Match>`es in a `<Switch>`.
 6. **`action-sync-yield`, 6**: a sync `yield` resuming at once.
 7. **`create-reaction`, `dispose-order`, `owner-ids`, `portal-events`, `pull-memos`, `reconcile-identity`, `store-in-place`, `symbol-keys`, 5 each**.
-8. **`bug`, 1**: one bug still open, [below](#bugs-found); eight more are fixed.
+
+`bug` is 0: the nine bugs the ports found, [below](#bugs-found), are fixed.
 
 `glitch-free` (9) landed in the core: a write marks the memos it may change, then recomputes each once, after what it reads, so a diamond's join runs once per write, in Solid's order. Writes still apply at once (`held-writes`).
 
@@ -184,7 +185,7 @@ Each gap test names a target: what reactre would need for it to pass. The first 
 | `action-sync-yield`                                                                                                                                                                                   |      6 | a sync `yield` resuming at once                                                                                                                                                  |
 | `match-placement`                                                                                                                                                                                     |      6 | a `<For>` or `<Show>` of `<Match>`es in a `<Switch>`                                                                                                                             |
 | `create-reaction`, `dispose-order`, `owner-ids`, `pull-memos`, `portal-events`, `reconcile-identity`, `store-in-place`, `symbol-keys`                                                                 | 5 each |                                                                                                                                                                                  |
-| `bug`                                                                                                                                                                                                 |      1 | the bug below                                                                                                                                                                    |
+| `bug`                                                                                                                                                                                                 |      0 | done: the bugs below are fixed                                                                                                                                                   |
 | `async-store`, `class-instances`, `merge-views`, `optimistic-outside`, `projection-chain`, `refresh-promise`, `transition-scope`                                                                      | 4 each |                                                                                                                                                                                  |
 | `cleanup-throw`, `error-accessor`, `store-direct-write`                                                                                                                                               | 3 each |                                                                                                                                                                                  |
 | `array-text`, `class-values`, `effect-errors`, `lazy-retry`, `no-owner`, `pending-signal`, `settled-async`, `unobserved-timing`                                                                       | 2 each |                                                                                                                                                                                  |
@@ -331,9 +332,9 @@ Landed: `httpStatus` and `httpHeader` in @reactre/core/server, writing to the re
 - store.test.ts, deep and snapshot copy string keys only: "tracks updates in a symbol-keyed subtree".
 - reconcile.test.ts, reconcile compares and copies string keys only: "notifies an effect tracking a symbol-keyed property"; "a symbol `in` check updates when reconcile adds the key".
 
-#### `bug` (1)
+#### `bug` (0)
 
-- show.test.ts, with a function child, `when` runs twice per change: "Toggle show control flow".
+None open: the ports of the bugs [below](#bugs-found) are plain tests.
 
 #### `async-store` (4)
 
@@ -426,7 +427,7 @@ features/async's `memo` takes the options, and its 4 ports pass: loading.test.ts
 
 ## Bugs found
 
-Where reactre claims a capability and the port shows it wrong. Each has `gap("bug", ...)` tests, which fail until it is fixed. Bugs 1, 2, 3, 5, 6, 7, 8 and 9 are fixed: their ports are plain tests now, and each has regression tests in the module's own test file.
+Where reactre claims a capability and the port shows it wrong. Each has `gap("bug", ...)` tests, which fail until it is fixed. All nine are fixed: their ports are plain tests now, and each has regression tests in the module's own test file.
 
 1. **Fixed.** Core `memo` stores what its `fn` returns, a function too: a memo is no longer a signal written through its setter (glitch.test.ts "a memo stores what its function returns, a function too"). Was: **Core `memo` treats a function its `fn` returns as a setter's updater** (3 ports: signals "updates downstream pending computations", reconcile's two "replaces a TRACKED function-valued ... without invoking it"). `memo` stores `fn()` through `signal`'s setter, which calls any function it is given. The async build (`computed`) does not, so the two builds disagree. `reaction`, built on `memo`, has it too. features/memo's `memo` does not.
    ```ts
@@ -451,7 +452,7 @@ Where reactre claims a capability and the port shows it wrong. Each has `gap("bu
    const inner = action(function* () { yield Promise.resolve(); return 1; });
    await action(function* () { yield inner(); })(); // never resolves
    ```
-4. **`<Show>` with a function child evaluates `when` twice per change** (show "Testing nonkeyed function show control flow > Toggle"). The compiler emits one memo for `!!when` and another for the accessor's value, and both run the expression; with plain children it runs once.
+4. **Fixed.** With a function child, the compiler emits a memo of `when`'s value that the condition and the accessor both read, so `when` runs once per change (flow.test.ts "with a function child, `when` runs once per change"). A non-keyed `<Match>`'s function child still reads its `when` in the accessor too; no port counts it. Was: **`<Show>` with a function child evaluates `when` twice per change** (show "Testing nonkeyed function show control flow > Toggle"). The compiler emits one memo for `!!when` and another for the accessor's value, and both run the expression; with plain children it runs once.
    ```tsx
    let n = 0; const [c, setC] = signal(0);
    attach(() => <div><Show when={(n++, c())}>{(v) => <span>{v()}</span>}</Show></div>, root);

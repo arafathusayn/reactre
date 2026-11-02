@@ -168,6 +168,30 @@ describe("<Show>", () => {
     expect(api.seen).not.toContain("FALSY");
   });
 
+  test("with a function child, `when` runs once per change; with other children too", () => {
+    const root = box();
+    const api = run<{ setN: (n: number) => void; runs: () => number[] }>(
+      `
+      import { render, signal, Show } from "@reactre/core";
+      const [n, setN] = signal(1);
+      let fn = 0, plain = 0;
+      render(() => (
+        <p>
+          <Show when={(fn++, n())}>{(v) => <b>{v()}</b>}</Show>
+          <Show when={(plain++, n())}><i>on</i></Show>
+        </p>
+      ), root);
+      return { setN, runs: () => [fn, plain] };
+    `,
+      root,
+    );
+    expect([html(root), api.runs()]).toEqual(["<p><b>1</b><i>on</i></p>", [1, 1]]);
+    api.setN(2);
+    expect([html(root), api.runs()]).toEqual(["<p><b>2</b><i>on</i></p>", [2, 2]]);
+    api.setN(0);
+    expect([html(root), api.runs()]).toEqual(["<p></p>", [3, 3]]);
+  });
+
   test("keyed: a new value rebuilds the content, and a function child gets the value itself", () => {
     const root = box();
     const api = run<{ set: (u: { name: string } | null) => void; builds: () => number }>(
