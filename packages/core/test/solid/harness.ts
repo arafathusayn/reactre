@@ -110,7 +110,8 @@ export const GAPS = {
   "root-hold": "a read not ready outside any <Loading> holds the whole render, not one empty hole",
   "lazy-retry": "lazy() retries an import that failed, on reset() or preload()",
   "refresh-promise": "refresh()'s Promise: the new value, no unhandled rejection, a no-op for a signal",
-  "action-writes": "an action holds and batches its plain writes: reads and effects see them when it ends",
+  "action-writes":
+    "an action holds the writes made in its tick, and a store write: reads and effects see them when it ends",
   "action-sync-yield": "an action's sync yield (not a Promise) resumes at once, not in a microtask",
   "optimistic-outside": "an optimistic write outside an action never shows; reactre sets the base",
   // New targets go above this line.

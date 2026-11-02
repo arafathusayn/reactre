@@ -4,14 +4,19 @@
 // `affects` marks what the transition will change as pending; `until` waits for a condition.
 //
 // How it works:
-//   - An action holds the core's transition open (`holds`) while its generator runs, from its
-//     first step to its return. Each step (the code up to a `yield`) runs as the action's code
-//     (`__act`): an optimistic write made there is the transition's, and a `refresh` made there
-//     joins it. A yielded value is awaited, and what it resolves to (or throws) goes back in.
+//   - An action holds a transition of the core's open (`__begin`, `__end`) while its generator
+//     runs, from its first step to its return: its own, or that of the actions called in the same
+//     tick, or of the action whose code called it. Each step (the code up to a `yield`) runs as
+//     the action's code, in a batch (`__act`): a write made there is held by the transition (the
+//     page sees it when the transition ends; memos, async ones included, compute with it), an
+//     optimistic write is the transition's, and a `refresh` made there joins it. A yielded value
+//     is awaited, and what it resolves to (or throws) goes back in. Loading this module turns
+//     held writes on (`__installHolds`).
 //   - The transition ends once no action runs in it and no async memo it waits for is pending:
-//     the optimistic writes revert, what it held runs, and the actions' Promises settle (but
-//     those of actions called in another action's code, which settle as they return, for it to
-//     yield). One transition is open at a time, so actions that overlap end together.
+//     the page sees its writes, the optimistic writes revert, what read them runs, and the
+//     actions' Promises settle (but those of actions called in another action's code, which
+//     settle as they return, for it to yield). Transitions that one write or one memo touches
+//     become one, and end together; others end on their own.
 //   - An optimistic value is a base value with an override per transition: reads see the
 //     override; a write in an action sets it, a write elsewhere sets the base.
 //
@@ -63,16 +68,20 @@ function counter(): [() => number, () => void] {
 /**
  * An action: a mutation written as a generator (or an async generator), run in a transition.
  * Calling it starts the generator and returns a Promise of what it returns, settled when the
- * transition ends; called in another action's code, it joins that action's transition, and its
- * Promise settles when it returns, so that the other may yield it. Each value it yields is
- * awaited, and goes back in (a rejection is thrown in).
+ * transition ends. Actions called in one tick share a transition; called in another action's
+ * code, it joins that action's transition, and its Promise settles when it returns, so that the
+ * other may yield it. Each value it yields is awaited, and goes back in (a rejection is thrown
+ * in).
  *
- * In the code of an action, a write to an optimistic value (`createOptimistic`,
- * `createOptimisticStore`) shows at once and reverts when the transition ends, and a `refresh` is
- * waited for by the transition. When the transition ends (no action runs in it, no async memo it
- * waits for is pending), the optimistic writes revert, and the effects it held (see
- * @reactre/core/features/async) run with the new values: the page goes from the optimistic state
- * to the confirmed one at once.
+ * In the code of an action, a write to a signal is held by the transition: effects, the page and
+ * reads (the action's own included) see the old value until it ends, while memos compute with the
+ * new one, so an async memo that reads it fetches at once and the transition waits for it
+ * (`latest` reads the new value). A write to an optimistic value (`createOptimistic`,
+ * `createOptimisticStore`) shows at once and reverts when the transition ends, and a `refresh`
+ * is waited for by the transition. When the transition ends (no action runs in it, no async memo
+ * it waits for is pending), the page sees the writes and what was fetched for them, the
+ * optimistic writes revert, and the effects run with the new values: the page goes from the
+ * optimistic state to the confirmed one at once.
  *
  * @example
  *   import { action, createOptimisticStore } from "@reactre/core/features/actions";
