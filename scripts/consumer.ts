@@ -48,7 +48,15 @@ try {
   const app = join(dir, "app");
   cpSync(join(import.meta.dir, "consumer"), app, { recursive: true });
   cpSync(join(root, "packages/core/test/jsx-types.tsx"), join(app, "src/app.tsx"));
-  const manifest = { name: "consumer", private: true, type: "module", dependencies: { ...deps, ...TOOLS } };
+  // The packages depend on each other by version, which npm may not have yet (a release's own CI
+  // runs before it publishes): overrides point those dependencies at the packs too.
+  const manifest = {
+    name: "consumer",
+    private: true,
+    type: "module",
+    dependencies: { ...deps, ...TOOLS },
+    overrides: deps,
+  };
   writeFileSync(join(app, "package.json"), JSON.stringify(manifest, null, 2));
   const configs: string[] = [];
   for (const resolution of ["bundler", "node16"]) {
