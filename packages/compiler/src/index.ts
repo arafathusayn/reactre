@@ -2065,7 +2065,7 @@ function accessor(w: string): string {
 
 /**
  * Whether an expression may change: it calls something (a signal read). A `(` counts as a call
- * after a name, a literal, `)` or `]`; anywhere else it only groups.
+ * after a name, a literal, `)`, `]` or `?.` (`count?.()`); anywhere else it only groups.
  */
 function reactive(expr: string): boolean {
   return callAt(expr, 0) >= 0;
@@ -2088,7 +2088,10 @@ function callsWithArguments(expr: string): number {
 
 /** Where the next call's `(` is in `expr`, from `from`, as `reactive` finds calls; -1 for none. */
 function callAt(expr: string, from: number): number {
+  // `before` is what `prev` was when punctuation last took its place: a `?` there and a `.` in
+  // `prev` are `?.`, and the `(` after them calls (`count?.()`).
   let prev = "",
+    before = "",
     word = "";
   for (let i = from; i < expr.length;) {
     const j = skipToken(expr, i, prev, word);
@@ -2109,7 +2112,8 @@ function callAt(expr: string, from: number): number {
       continue;
     }
     const c = expr[i]!;
-    if (c === "(" && (isIdent(prev) || prev === ")" || prev === "]" || prev === "a")) return i;
+    const optional = prev === "." && before === "?";
+    if (c === "(" && (isIdent(prev) || prev === ")" || prev === "]" || prev === "a" || optional)) return i;
     if (isIdent(c)) {
       let e = i;
       while (isIdent(expr[e])) e++;
@@ -2119,6 +2123,7 @@ function callAt(expr: string, from: number): number {
       continue;
     }
     if (!/\s/.test(c)) {
+      before = prev;
       prev = c;
       word = "";
     }

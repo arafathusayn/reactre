@@ -213,9 +213,9 @@ function matches(tokens: readonly Token[]): Int32Array {
 // #region Expressions
 
 /**
- * Whether `expr` calls something when it is evaluated: a `(` after a name, a literal, `)` or `]`,
- * or `new`. A jsx call (one of `helpers`) is skipped whole, arguments included, and so is a
- * function literal's body, which runs only when the function is called.
+ * Whether `expr` calls something when it is evaluated: a `(` after a name, a literal, `)`, `]` or
+ * `?.` (`count?.()`), or `new`. A jsx call (one of `helpers`) is skipped whole, arguments
+ * included, and so is a function literal's body, which runs only when the function is called.
  */
 export function callsOutsideJsx(expr: string, helpers: ReadonlySet<string>): boolean {
   const tokens = tokenize(expr),
@@ -231,6 +231,7 @@ export function callsOutsideJsx(expr: string, helpers: ReadonlySet<string>): boo
     if (tok.t !== "(" || i === 0) continue;
     const p = tokens[i - 1]!.t;
     if ((p === LIT || isName(p) || p === ")" || p === "]") && !KEYWORDS.has(p)) return true;
+    if (p === "." && tokens[i - 2]?.t === "?") return true;
   }
   return false;
 }
