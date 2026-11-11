@@ -15,11 +15,10 @@
 import { describe, expect, test } from "bun:test";
 import { gzipSync } from "node:zlib";
 
-import { createActor } from "@reactre/state";
 import esbuildPlugin from "@reactre/state/plugin/esbuild";
 import { build, type Plugin } from "esbuild";
 
-import type { DoorMachine } from "./fixtures/dev-react/app.tsx";
+import { runEmittedInteractive } from "../run-emitted-interactive.ts";
 
 const FIXTURE = `${import.meta.dir}/fixtures/dev-react/app.tsx`;
 
@@ -99,20 +98,36 @@ describe("a production bundle of the React adapter", () => {
     ["development", true],
   ] as const)("the %s bundle runs: the machine moves closed -> open -> closed", async (_, dev) => {
     const { code } = await bundle(dev);
-    const mod = (await import(`data:text/javascript;base64,${Buffer.from(code).toString("base64")}`)) as {
-      // The emitted module erased the source's public generics, not its runtime table.
-      readonly doorMachine: DoorMachine;
-      readonly View: unknown;
-    };
+    // The emitted module is imported and driven in a separate Bun process: the bytes that ran are
+    // the ones the build produced, and they stay out of this process's coverage report.
+    const result = await runEmittedInteractive<{
+      readonly view: string;
+      readonly start: readonly string[];
+      readonly pushed: boolean;
+      readonly open: { readonly state: string; readonly data: unknown };
+      readonly closed: boolean;
+      readonly end: string;
+      readonly diagnosticHook: boolean;
+    }>(
+      code,
+      `
+const actor = createActor(exports.doorMachine);
+const start = [actor.snapshot().state, actor.snapshot().state];
+const pushed = actor.send({ type: "push", by: "ann" }).ok;
+const open = { state: actor.snapshot().state, data: actor.snapshot().data };
+const closed = actor.send({ type: "close" }).ok;
+const end = actor.snapshot().state;
+actor.stop();
+return { view: typeof exports.View, start, pushed, open, closed, end, diagnosticHook: exports.doorMachine.d != null };
+`,
+    );
     // The adapter is in the bundle (its hooks compiled), not tree-shaken away.
-    expect(typeof mod.View).toBe("function");
-    const actor = createActor(mod.doorMachine);
-    expect(actor.snapshot().state).toBe("closed");
-    expect(actor.snapshot().state).toBe("closed");
-    expect(actor.send({ type: "push", by: "ann" }).ok).toBe(true);
-    expect(actor.snapshot()).toMatchObject({ state: "open", data: { by: "ann" } });
-    expect(actor.send({ type: "close" }).ok).toBe(true);
-    expect(actor.snapshot().state).toBe("closed");
-    actor.stop();
+    expect(result.view).toBe("function");
+    expect(result.start).toEqual(["closed", "closed"]);
+    expect(result.pushed).toBe(true);
+    expect(result.open).toMatchObject({ state: "open", data: { by: "ann" } });
+    expect(result.closed).toBe(true);
+    expect(result.diagnosticHook).toBe(dev);
+    expect(result.end).toBe("closed");
   });
 });

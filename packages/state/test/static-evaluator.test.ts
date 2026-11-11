@@ -169,6 +169,33 @@ describe("a value the compiler reads at build time", () => {
     expect(start("(true ? ['closed'] : [])[5]")).toBeNull();
   });
 
+  test("member reads through a retained literal: arrays and objects", () => {
+    // Every statically known object or array retains its defining literal, through a const,
+    // conditional or another member read: a later member is selected from that expression.
+    expect(start("X['a'].b[0]", 'const X = { a: { b: ["closed"] } };')).toBe("closed");
+    expect(start("X['a'].b['x']", 'const X = { a: { b: ["closed"] } };')).toBeNull();
+    expect(start("X['a'].b[5]", 'const X = { a: { b: ["closed"] } };')).toBeNull();
+    expect(start("X['a'].b.c", 'const X = { a: { b: { c: "closed" } } };')).toBe("closed");
+    expect(start("X['a'].b.d", 'const X = { a: { b: { c: "closed" } } };')).toBeNull();
+    expect(start("X['a'].b.c", "const X = { a: { b: { c: undefined } } };")).toBeNull();
+    // A private identifier is not a noncomputed property name the evaluator executes.
+    expect(start("X.#a", 'const X = { a: "closed" };')).toBeNull();
+    // A computed private property has an expression, not a statically known string key.
+    expect(start("({ [X.#a]: 'closed' })", 'const X = { a: "a" };')).toBeNull();
+    // An uncomputed template literal is not a static property-name form either.
+    expect(start("({ `a`: 'closed' })")).toBeNull();
+    expect(start("X.a.b[0]", 'const X = { a: { b: ["closed"] } };')).toBe("closed");
+    // A non-index key and an element past the end are not known.
+    expect(start("X.a.b['x']", 'const X = { a: { b: ["closed"] } };')).toBeNull();
+    expect(start("X.a.b[5]", 'const X = { a: { b: ["closed"] } };')).toBeNull();
+    expect(start("X.a.b.c", 'const X = { a: { b: { c: "closed" } } };')).toBe("closed");
+    // A key the value doesn't have, and a value that is `undefined`, are not known.
+    expect(start("X.a.b.d", 'const X = { a: { b: { c: "closed" } } };')).toBeNull();
+    expect(start("X.a.b.c", "const X = { a: { b: { c: undefined } } };")).toBeNull();
+    // An owner that is `null` is not an object to read from.
+    expect(start("(true ? null : { a: 'closed' }).a")).toBeNull();
+  });
+
   test("a member that isn't there, or isn't a value, is not known", () => {
     expect(start("({ a: 'closed' }).b")).toBeNull();
     expect(start("['closed'][5]")).toBeNull();
@@ -203,6 +230,9 @@ describe("a value the compiler reads at build time", () => {
     expect(start("({ [undefined]: 'closed' })")).toBeNull();
   });
 
+  // An open limit, not a regression: a member read through a spread literal doesn't resolve, because
+  // the evaluator keeps the literal's own shape rather than the merged value. Pinned so a change to
+  // it is deliberate.
   test("a spread of a known object or array is merged; anything else is not known", () => {
     expect(start("({ ...{ a: 'closed' } }).a")).toBeNull();
     expect(start("[...['closed']][0]")).toBeNull();
@@ -289,11 +319,10 @@ describe("a value from another module", () => {
           return null;
         }
       };
-      // A renamed export resolves; a same-name `export { X }` does not (the evaluator's `seen` set
-      // keys on the module and the name, so the re-export collides with the import that asked for
-      // it). That is a real limit, pinned here so a change to it is deliberate.
+      // A renamed export and a same-name export both resolve: the export and its local const are
+      // different bindings, so a shared name isn't a circular definition.
       expect(state('import { OPENED } from "./names.ts";', "OPENED")).toBe("open");
-      expect(state('import { CLOSED } from "./names.ts";', "CLOSED")).toBeNull();
+      expect(state('import { CLOSED } from "./names.ts";', "CLOSED")).toBe("closed");
       expect(state('import D from "./names.ts";', "D")).toBe("closed");
       expect(state('import { LOCKED } from "./from.ts";', "LOCKED")).toBe("locked");
       // `export * from "./more.ts"` is followed too.
@@ -324,10 +353,11 @@ describe("a value from another module", () => {
       expect(state('import { NOPE } from "./names.ts";', "NOPE")).toBeNull();
       expect(state('import { X } from "./none.ts";', "X")).toBeNull();
       expect(state('import { X } from "@reactre/state";', "X")).toBeNull();
-      // A namespace import's member is read through the module too.
-      expect(state('import * as N from "./names.ts";', "N.CLOSED")).toBeNull();
+      // A namespace import's immutable exported value resolves like a named import.
+      expect(state('import * as N from "./names.ts";', "N.CLOSED")).toBe("closed");
       // A string-named import is read (the specifier's name is the string), but a string-named
-      // export isn't registered, so it doesn't resolve: a limit, pinned so a change is deliberate.
+      // export isn't registered, so it doesn't resolve: a limit (not a regression), pinned so a
+      // change is deliberate.
       write("strname.ts", 'const C = "closed";\nexport { C as "closed" };\n');
       expect(state('import { "closed" as C } from "./strname.ts";', "C")).toBeNull();
     } finally {

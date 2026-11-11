@@ -34,8 +34,6 @@ export interface ShapeContext {
   readonly src: (node: Node) => string;
   /** The value is `types<T>()` (not a schema). */
   readonly isTypes: (value: Expression) => boolean;
-  /** A string value from a literal or an immutable const/import, else null. */
-  readonly string: (value: Expression) => string | null;
   /** One of setup's maps (like `states`), which must be an object literal written in place. */
   readonly map: (value: Expression | undefined, what: string) => Map<string, ObjectProperty>;
 }

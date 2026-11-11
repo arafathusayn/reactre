@@ -93,7 +93,7 @@ describe("persist", () => {
   test("a machine without persist in its use throws S11, naming the import", () => {
     const lean: __Compiled = { v: 0, e: { go: 1 }, i: () => to("a"), o: { a: {} }, r: __run([__tasks]) };
     expect(() => save(createActor(lean))).toThrow(
-      /S11\].*persist\(actor\) needs persist: add persist to setup's use \(import \{ persist \} from "@reactre\/state\/persist"\)/,
+      /S11\].*persist\(actor\) needs persist in setup's use \(import \{ persist \} from "@reactre\/state\/persist"\)/,
     );
   });
 

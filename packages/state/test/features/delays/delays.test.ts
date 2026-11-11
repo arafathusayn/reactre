@@ -16,6 +16,7 @@ import state from "../../../plugin/esbuild.ts";
 
 import "../../compiled.ts";
 import { duration } from "../../../compiler/features/delays.ts";
+import { emittedExports } from "../../run-emitted.ts";
 import { change, JOB, withUse } from "../../sources.ts";
 import { to } from "../../to.ts";
 import { optIn } from "../opt-in.ts";
@@ -34,7 +35,7 @@ describe("delays", () => {
     );
     // The small general lifecycle: this machine has no children, effects, persist, reenter or
     // parallel node, so it needs none of `__run`'s other paths (see src/run-nested.ts).
-    expect(code).toContain("r: __reactreStateRunNested([__reactreStateTasks, delays.r])");
+    expect(code).toContain("r: __reactreStateRunNested([__reactreStateTasksQuick, delays.r])");
   });
 
   test("a named delay compiles to its name in l, and its value in w", () => {
@@ -180,10 +181,8 @@ export function run(): string {
           });
           const code = out.outputFiles[0]?.text ?? "";
           expect(/w: \{[^}]*\}/.exec(code)?.[0]).toBe('w: { "patience": 20 }');
-          const { run } = (await import(`data:text/javascript;base64,${Buffer.from(code).toString("base64")}`)) as {
-            run(): string;
-          };
-          expect(run()).toBe("b");
+          const { run } = await emittedExports(code, "run");
+          expect(run).toBe("b");
         }
       }
     } finally {

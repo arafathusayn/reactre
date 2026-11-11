@@ -22,6 +22,21 @@ import { __snap, __step } from "./index.ts";
 import type { __Compiled, __Event, __Leaf, __Lifecycle, __Result, __Runner, __Step } from "./internal.ts";
 import { __wait } from "./wait.ts";
 
+/** A single timer: calls `fire` after `ms`, and the returned cancel clears it. */
+type Timer = (ms: number, fire: () => void) => () => void;
+
+/**
+ * Internal: the plain timer, for a machine whose every ordinary `after` the compiler read as a
+ * literal millisecond count within `setTimeout`'s range. It is `setTimeout` itself, so such a
+ * machine ships none of `__wait`'s split. The compiler picks it only from the emitted `a` table's
+ * own numbers (compiler/index.ts): a delay it can't read (persist's restored deadlines, delays's
+ * and timeout's computed ones) keeps `__wait`, whose parts are what makes those safe.
+ */
+const quick: Timer = (ms, fire) => {
+  const t = setTimeout(fire, ms);
+  return () => clearTimeout(t);
+};
+
 /**
  * Starts the task and timers of node `node` (entered at leaf `state` with `data`), or returns
  * undefined when it has none. Its result and its failure reach `deliver` and `go` only until the
@@ -36,6 +51,7 @@ function begin(
   deliver: (event: __Event) => __Result | null,
   go: (step: __Step) => unknown,
   now: () => __Leaf,
+  wait: Timer,
 ): (() => void) | undefined {
   const task = m.t?.[node];
   const after = m.a?.[node];
@@ -52,10 +68,11 @@ function begin(
       if (r?.ok === false && r.error) fail(r.error);
     }, fail);
   }
-  // `__wait`, not setTimeout: a delay past 2^31 − 1 ms (about 24.8 days) fires at once with
-  // setTimeout, and a NaN one fires at once too (an accidental retry).
+  // `wait`, not setTimeout: a delay past 2^31 − 1 ms (about 24.8 days) fires at once with
+  // setTimeout, and a NaN one fires at once too (an accidental retry). `quick` when the compiler
+  // read every ordinary `after` as a literal within range, so the split has nothing to do.
   const timers = after?.map(([ms, handler]) =>
-    __wait(ms, () => {
+    wait(ms, () => {
       const at = now();
       go(handler(at.data, at.state));
     }),
@@ -70,43 +87,88 @@ function begin(
 export const __tasks: __Runner = {
   id: "t",
   start(m, { node, state, data }, ctx) {
-    const stop = begin(m, node, state, data, ctx.deliver, ctx.go, ctx.current);
+    const stop = begin(m, node, state, data, ctx.deliver, ctx.go, ctx.current, __wait);
+    return stop ? { stop } : null;
+  },
+};
+
+/** Internal: `__tasks` with the plain timer, for a machine whose ordinary delays are short. */
+export const __tasksQuick: __Runner = {
+  id: "t",
+  start(m, { node, state, data }, ctx) {
+    const stop = begin(m, node, state, data, ctx.deliver, ctx.go, ctx.current, quick);
     return stop ? { stop } : null;
   },
 };
 
 /**
- * Internal: the lifecycle of a flat machine whose only runners are tasks and timers (`r: __lean`).
- * Its own code, not `begin`'s: in a flat machine the node is the leaf, whose name a stay keeps, so a
- * handler's state is the node's; and it is the smallest code that runs a task and timers.
+ * The lean lifecycle over a timer. Its own code, not `begin`'s: in a flat machine the node is the
+ * leaf, whose name a stay keeps, so a handler's state is the node's; and it is the smallest code
+ * that runs a task and timers.
  */
-export const __lean: __Lifecycle = (m, move, current) => {
+const lean =
+  (wait: Timer): __Lifecycle =>
+  (m, move, current) => {
+    let at: string | undefined;
+    let stop: (() => void) | undefined;
+    return {
+      enter({ state, data }, active) {
+        // The same leaf stays. Otherwise the last leaf's work stops (idempotent: a later entry with no
+        // work runs it again), and an active actor starts this one's.
+        if (state !== at && ((at = state), stop?.(), active)) {
+          const task = m.t?.[state];
+          const controller = new AbortController();
+          const signal = controller.signal;
+          // A step from a handler, while the node is active: a result after it exited is dropped.
+          const go = (step: __Step): unknown => signal.aborted || move({ ok: true, snapshot: __snap(m, step) });
+          const fail = (error: unknown): unknown => go(task![1](current().data, error, state));
+          task?.[0](data, signal, state).then((event) => {
+            if (!signal.aborted) {
+              // A result's error: an event its schema refused (validate in use), for the task's handler.
+              // fixups: a block, not a conditional expression: fewer bytes.
+              const r: { readonly ok: boolean; readonly error?: unknown } = move(__step(m, current(), event, true));
+              if (r.error) fail(r.error);
+            }
+          }, fail);
+          // `wait`, not setTimeout: a delay past 2^31 − 1 ms fires at once with setTimeout.
+          const timers = m.a?.[state]?.map(([ms, handler]) => wait(ms, () => go(handler(current().data, state))));
+          stop = () => {
+            controller.abort();
+            timers?.forEach((cancel) => cancel());
+          };
+        }
+      },
+      stop: () => stop?.(),
+    };
+  };
+
+/**
+ * Internal: the lifecycle of a flat machine whose only runners are tasks and timers (`r: __lean`).
+ */
+export const __lean: __Lifecycle = /* @__PURE__ */ lean(__wait);
+
+/** Internal: `__lean` with the plain timer, for a machine whose ordinary delays the compiler read. */
+export const __leanQuick: __Lifecycle = (m, move, current) => {
   let at: string | undefined;
   let stop: (() => void) | undefined;
   return {
     enter({ state, data }, active) {
-      // The same leaf stays. Otherwise the last leaf's work stops (idempotent: a later entry with no
-      // work runs it again), and an active actor starts this one's.
       if (state !== at && ((at = state), stop?.(), active)) {
         const task = m.t?.[state];
         const controller = new AbortController();
         const signal = controller.signal;
-        // A step from a handler, while the node is active: a result after it exited is dropped.
         const go = (step: __Step): unknown => signal.aborted || move({ ok: true, snapshot: __snap(m, step) });
         const fail = (error: unknown): unknown => go(task![1](current().data, error, state));
         task?.[0](data, signal, state).then((event) => {
           if (!signal.aborted) {
-            // A result's error: an event its schema refused (validate in use), for the task's handler.
-            // fixups: a block, not a conditional expression: fewer bytes.
             const r: { readonly ok: boolean; readonly error?: unknown } = move(__step(m, current(), event, true));
-            if (r.error) fail(r.error);
+            r.error && fail(r.error);
           }
         }, fail);
-        // `__wait`, not setTimeout: a delay past 2^31 − 1 ms fires at once with setTimeout.
-        const timers = m.a?.[state]?.map(([ms, handler]) => __wait(ms, () => go(handler(current().data, state))));
+        const timers = m.a?.[state]?.map(([ms, handler]) => setTimeout(() => go(handler(current().data, state)), ms));
         stop = () => {
           controller.abort();
-          timers?.forEach((cancel) => cancel());
+          timers?.forEach(clearTimeout);
         };
       }
     },

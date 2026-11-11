@@ -1412,10 +1412,6 @@ export function compile(file: string, source: string, options: CompileOptions = 
             report,
             src,
             isTypes,
-            string: (expression) => {
-              const resolved = staticValue(file, program, expression);
-              return typeof resolved === "string" ? resolved : null;
-            },
             map: mapOf,
           }) ?? {};
         return { name: feature, local, shape };
@@ -1794,7 +1790,7 @@ export function compile(file: string, source: string, options: CompileOptions = 
   /** The version of the machine being compiled: each `to` puts it in the snapshot it makes. */
   let version = 0;
   // What the file's machines use, for the imports.
-  const runtime = new Set<"tasks" | "lean" | "run" | "nested-run" | "none">();
+  const runtime = new Set<"tasks" | "tasks-quick" | "lean" | "lean-quick" | "run" | "nested-run" | "none">();
   // The features' imports for code only some machines need (`Emitted.imports`), each once.
   const featureImports = new Set<string>();
   let usesShape = false;
@@ -1921,6 +1917,11 @@ export function compile(file: string, source: string, options: CompileOptions = 
     const finals: string[] = [];
     const tasks: string[] = [];
     const timers: string[] = [];
+    // Whether every ordinary `after` this machine emits is a literal millisecond count within
+    // setTimeout's range (2^31 − 1). Then the plain timer is exact, and the machine ships none of
+    // `__wait`'s split. A delay the compiler can't read (persist's restored deadlines, delays's and
+    // timeout's computed ones) is never in `a`, so it keeps `__wait` by not being counted here.
+    let short = true;
     // Each state's handlers, by event, as written: for the duplication lint.
     const written = new Map<string, ReadonlyMap<string, ObjectProperty>>();
     // Each state's config but the final ones', for the mirrored-states lint (./mirror.ts).
@@ -2004,7 +2005,12 @@ export function compile(file: string, source: string, options: CompileOptions = 
             );
           times.set(ms, same ?? duration);
           const code = at(h.value, "after", name, null, here);
-          if (code !== null) list.push(`[${ms}, ${code}]`);
+          if (code !== null) {
+            list.push(`[${ms}, ${code}]`);
+            // A literal past the limit needs `__wait`'s parts; the grammar is digits and an optional
+            // fraction, so no negative, NaN or Infinity can reach here.
+            if (ms > 2147483647) short = false;
+          }
         }
         // A state whose `after` keys are all delays's or timeout's (they compile to `l`) has no
         // ordinary timer: an empty `a` entry would make the machine look timed and ship `__tasks`
@@ -2091,8 +2097,11 @@ export function compile(file: string, source: string, options: CompileOptions = 
       !used.has("persist") &&
       emitted.every(({ e }) => e.lifecycle !== "always" && e.wrap === undefined && e.effects === undefined);
     const taskRunner = emitted.find(({ e }) => e.tasks !== undefined)?.e.tasks;
+    // The ordinary timers are every one a literal within the limit, and no feature replaced the
+    // task runner: the plain timer is exact, so `__leanQuick`/`__tasksQuick` ship none of the split.
+    const quick = short && taskRunner === undefined;
     const runners = [
-      ...(timed ? [taskRunner ?? "__reactreStateTasks"] : []),
+      ...(timed ? [taskRunner ?? (quick ? "__reactreStateTasksQuick" : "__reactreStateTasks")] : []),
       ...emitted.flatMap(({ e }) => e.runners ?? []),
     ];
     const maps = emitted.flatMap(({ e }) => e.effects ?? []);
@@ -2104,13 +2113,14 @@ export function compile(file: string, source: string, options: CompileOptions = 
       runners.length > (timed ? 1 : 0) ||
       taskRunner !== undefined ||
       emitted.some(({ e }) => e.lifecycle === "general");
-    if (timed && taskRunner === undefined) runtime.add(general ? "tasks" : "lean");
+    if (timed && taskRunner === undefined)
+      runtime.add(general ? (quick ? "tasks-quick" : "tasks") : quick ? "lean-quick" : "lean");
     let lifecycle: string | null = null;
     if (general && (runners.length > 0 || always || maps.length > 0)) {
       runtime.add(nestedOnly ? "nested-run" : "run");
       const effects = maps.length > 0 && dispatch !== undefined ? `, ${dispatch(maps)}` : "";
       lifecycle = `__reactreState${nestedOnly ? "RunNested" : "Run"}([${runners.join(", ")}]${effects})`;
-    } else if (timed) lifecycle = "__reactreStateLean";
+    } else if (timed) lifecycle = quick ? "__reactreStateLeanQuick" : "__reactreStateLean";
     // wave1-actors: the features' wraps of the lifecycle (inspect's), in table order.
     lifecycle = emitted.reduce<string | null>((inner, { e }) => e.wrap?.(inner) ?? inner, lifecycle);
     if (lifecycle !== null) out.push(`r: ${lifecycle}`);
@@ -2843,7 +2853,11 @@ export function compile(file: string, source: string, options: CompileOptions = 
   if (runtime.has("nested-run"))
     helpers.push(`import { __runNested as __reactreStateRunNested } from "@reactre/state/run-nested";`);
   if (runtime.has("tasks")) helpers.push(`import { __tasks as __reactreStateTasks } from "@reactre/state/tasks";`);
+  if (runtime.has("tasks-quick"))
+    helpers.push(`import { __tasksQuick as __reactreStateTasksQuick } from "@reactre/state/tasks";`);
   if (runtime.has("lean")) helpers.push(`import { __lean as __reactreStateLean } from "@reactre/state/tasks";`);
+  if (runtime.has("lean-quick"))
+    helpers.push(`import { __leanQuick as __reactreStateLeanQuick } from "@reactre/state/tasks";`);
   // The features' hooks come from the app's own imports of them (`nested.g`); code only some
   // machines need comes from the imports they emit.
   helpers.push(...featureImports);

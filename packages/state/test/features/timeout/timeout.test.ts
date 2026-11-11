@@ -11,6 +11,7 @@ import { build } from "esbuild";
 import state from "../../../plugin/esbuild.ts";
 
 import "../../compiled.ts";
+import { emittedExports } from "../../run-emitted.ts";
 import { change, JOB, withUse } from "../../sources.ts";
 import { optIn } from "../opt-in.ts";
 
@@ -150,10 +151,8 @@ export function run(): string {
           });
           const code = out.outputFiles[0]?.text ?? "";
           expect(/l: \{ "a": \[\[\d+/.exec(code)?.[0]).toBe('l: { "a": [[20');
-          const { run } = (await import(`data:text/javascript;base64,${Buffer.from(code).toString("base64")}`)) as {
-            run(): string;
-          };
-          expect(run()).toBe("b");
+          const { run } = await emittedExports(code, "run");
+          expect(run).toBe("b");
         }
       }
     } finally {

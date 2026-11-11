@@ -35,7 +35,7 @@ const editor = setup({ use: [nested, history], states: { idle: types<{}>(), "edi
 | `index.ts`                                      | The core: `setup`, `types`, `machine`'s types, `createActor`, `restoreActor`, `transition`, `initial`, `StateError`, the step (`__step`, `__flat`), `__snap`, the actor loop (`__run`), and the core's type-level checks. It composes the features' types through `features.ts`. |
 | `internal.ts`                                   | The compiled table's contract (`__Compiled`), the step and lifecycle contracts, runners, and the effect registry's types. Additive: a feature adds its fields here (or by module augmentation, below).                                                                           |
 | `features.ts`                                   | The type registry: every feature's type parts, composed (`FeatureState`, `FeatureKeys`, `FeatureArgs`, `FeatureProblems`, `FeatureShapeProblems`, `OffKeyProblem`, …), plus `Feature`, `Uses`, `OptIn`, `NeedsOptIn`. Its header lists the parts.                                |
-| `tasks.ts`                                      | Tasks and timers: `__lean` (the whole lifecycle of a flat machine with tasks or timers) and `__tasks` (the runner for the general lifecycle).                                                                                                                                    |
+| `tasks.ts`                                      | Tasks and timers: `__lean` / `__leanQuick` (the whole lifecycle of a flat machine with tasks or timers) and `__tasks` / `__tasksQuick` (the runner for the general lifecycle). Quick variants are for short ordinary literal delays.                                             |
 | `run.ts`                                        | The general lifecycle, `__run(runners, dispatch?)`: the active nodes a move exits, enters and keeps, runners started and stopped per node, and effects dispatched after a move.                                                                                                  |
 | `dev.ts`                                        | Development builds: frozen data.                                                                                                                                                                                                                                                 |
 | `signals.ts`                                    | `useActor` for `@reactre/core` (`@reactre/state/signals`). The only file that imports `@reactre/core`.                                                                                                                                                                           |
@@ -141,7 +141,7 @@ esbuild, minified, gzipped, the whole app (`test/sizes.test.ts`, `test/bundlers.
 | What                                                                    | Bar      | Now                                                          |
 | ----------------------------------------------------------------------- | -------- | ------------------------------------------------------------ |
 | door (a plain machine)                                                  | ≤ 1.5 KB | 728 (pinned at 728)                                          |
-| job (a flat machine with a task and a timer)                            | ≤ 1.5 KB | 1119 (above pin 1060; open work, not relaxed)                |
+| job (a flat machine with a task and a timer)                            | ≤ 1.5 KB | 1053 (pinned at 1060)                                        |
 | a feature listed but unused                                             | 0        | 0, except inspect 566, persist 467 and durable 10            |
 | actor send, the door (`bun packages/state/compare/bench.ts`, run alone) | fastest  | 120.9M ops/s (Bun; next @escapace/fsm 75.2M), about 60M (V8) |
 | pure transition, the door                                               | fastest  | 159.8M ops/s (next `xstate/fsm` 33.2M)                       |
@@ -149,7 +149,7 @@ esbuild, minified, gzipped, the whole app (`test/sizes.test.ts`, `test/bundlers.
 
 A new standalone speed benchmark has not been qualified after these reductions; the three speed rows above are historical, not evidence about the current tree.
 
-Each used-feature app has its budget pinned in `test/sizes.test.ts`; no new budget relaxation is permitted. Persist's validation is fully retained but currently measures 3304 gzip, above its 3275 pin; the durable pins now pass.
+Each used-feature app has its budget pinned in `test/sizes.test.ts`; no budget was relaxed. Persist retains its validation at 3273/3275, including own `__proto__` data. The durable pins pass. Ordinary short literal delays use plain timers; long, restored and computed delays retain the split scheduler.
 
 ## Ownership in wave 1
 

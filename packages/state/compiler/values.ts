@@ -2,7 +2,7 @@
 // A resolved expression keeps its AST and defining module: contract hashes still see `types<T>()`.
 // Anything unresolved, mutable or ambient fails closed rather than becoming an invented value.
 
-import type { Node, Program } from "oxc-parser";
+import type { Node, Program, StringLiteral } from "oxc-parser";
 
 import { importedModule, resolveImport } from "./modules.ts";
 
@@ -209,16 +209,9 @@ function value(node: Node | null | undefined, scope: Scope, seen: ReadonlySet<st
         if (selected === null) return FAIL;
         return value(selected, scope, seen);
       }
-      const object = owner.value;
-      if (object === null || typeof object !== "object") return FAIL;
-      if (Array.isArray(object)) {
-        if (!/^(0|[1-9]\d*)$/.test(String(property))) return FAIL;
-        const item = object[Number(property)];
-        return item === undefined ? FAIL : { known: true, value: item, node };
-      }
-      if (!Object.hasOwn(object, String(property))) return FAIL;
-      const item = (object as { readonly [key: string]: StaticValue })[String(property)];
-      return item === undefined ? FAIL : { known: true, value: item, node };
+      // Every known object/array retains its literal node: even a conditional or cast returns the
+      // chosen expression, not an inline-object result. Unsupported node kinds fail closed above.
+      return FAIL;
     }
     case "ObjectExpression": {
       const out: { [key: string]: StaticValue } = {};
@@ -231,13 +224,14 @@ function value(node: Node | null | undefined, scope: Scope, seen: ReadonlySet<st
           continue;
         }
         if (property.kind !== "init") return FAIL;
+        // An object literal's uncomputed ESTree key is an Identifier or Literal. A TemplateLiteral
+        // is computed (and evaluated), while class-only private names never reach this switch.
+        if (!property.computed && property.key.type !== "Identifier" && property.key.type !== "Literal") return FAIL;
         const key = property.computed
           ? value(property.key, scope, seen).value
           : property.key.type === "Identifier"
             ? property.key.name
-            : property.key.type === "Literal"
-              ? property.key.value
-              : undefined;
+            : (property.key as StringLiteral).value;
         if ((typeof key !== "string" && typeof key !== "number") || forbidden(String(key))) return FAIL;
         const result = value(property.value, scope, seen);
         // `types<T>()` is opaque metadata. Retain its expression in the AST; it has no JS value.
@@ -284,13 +278,13 @@ function select(object: Node, name: string, scope: Scope, seen: ReadonlySet<stri
   if (object.type === "ObjectExpression") {
     for (const property of object.properties) {
       if (property.type !== "Property" || property.kind !== "init") continue;
+      // Same invariant as ObjectExpression above; no parser-produced fallback to manufacture.
+      if (!property.computed && property.key.type !== "Identifier" && property.key.type !== "Literal") continue;
       const key = property.computed
         ? value(property.key, scope, seen).value
         : property.key.type === "Identifier"
           ? property.key.name
-          : property.key.type === "Literal"
-            ? property.key.value
-            : null;
+          : (property.key as StringLiteral).value;
       if (String(key) === name) return property.value;
     }
   }
@@ -313,8 +307,14 @@ function external(file: string, specifier: string, name: string, seen: ReadonlyS
     for (const statement of module.program.body)
       if (statement.type === "ExportDefaultDeclaration")
         return value(statement.declaration as unknown as Node, scope, next);
-  for (const [local, binding] of scope.bindings)
-    if (binding.exported === name) return value({ type: "Identifier", name: local } as unknown as Node, scope, next);
+  for (const [, binding] of scope.bindings)
+    if (binding.exported === name) {
+      // An export and its local const are different bindings. In particular, `const X` may share
+      // the export's name without being its own definition. A local import is still followed here:
+      // the entry carries the defining specifier, not its original export's name or file.
+      if (binding.init !== undefined) return binding.init === null ? FAIL : value(binding.init, scope, next);
+      if (binding.import !== undefined) return external(scope.file, binding.import.source, binding.import.name, next);
+    }
   for (const statement of module.program.body)
     if (statement.type === "ExportAllDeclaration" && statement.source !== null) {
       const found = external(path, statement.source.value, name, next);

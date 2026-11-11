@@ -13,6 +13,8 @@ import { gzipSync } from "node:zlib";
 import esbuildPlugin from "@reactre/state/plugin/esbuild";
 import { build } from "esbuild";
 
+import { runEmitted } from "../run-emitted.ts";
+
 const FIXTURES = join(import.meta.dir, "..", "fixtures");
 
 /** The gzipped size of `entry`'s bundle, as an app ships it. */
@@ -30,10 +32,8 @@ async function size(entry: string): Promise<number> {
   });
   const [file] = r.outputFiles;
   if (file === undefined) throw new Error(`no bundle for ${entry}`);
-  const { run } = (await import(`data:text/javascript;base64,${Buffer.from(file.contents).toString("base64")}`)) as {
-    run(): unknown;
-  };
-  await run();
+  // Execute exactly the emitted bytes in a plain Bun, outside this test process's coverage.
+  await runEmitted(file.contents);
   return gzipSync(file.contents).length;
 }
 

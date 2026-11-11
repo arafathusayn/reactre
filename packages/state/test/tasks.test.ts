@@ -7,7 +7,7 @@ import type { __Compiled, __Event, Shape } from "@reactre/state";
 import { createActor, restoreActor } from "@reactre/state";
 import { __saved, persist as persistTyped, type Persisted } from "@reactre/state/persist";
 import { __run } from "@reactre/state/run";
-import { __lean, __tasks } from "@reactre/state/tasks";
+import { __lean, __leanQuick, __tasks, __tasksQuick } from "@reactre/state/tasks";
 import { SimulatedClock } from "@reactre/state/utils/SimulatedClock";
 import { __validate, __validated } from "@reactre/state/validate";
 
@@ -235,6 +235,62 @@ describe("the lean lifecycle (a flat machine without persist)", () => {
     expect(actor.status()).toBe("done");
     expect(signals).toEqual([]);
     actor.stop();
+  });
+});
+
+describe("the quick lifecycles (every ordinary delay a short literal)", () => {
+  // What the compiler emits for `job` from source: its `a` delays are 20 and 60 ms, both within
+  // setTimeout's range, so the lifecycle skips `__wait`'s split. The behavior must be the plain
+  // lifecycle's: a timer fires at its delay, leaving cancels it, and a late result is dropped.
+  const leanQuick: __Compiled = { ...plain, r: __leanQuick };
+  const generalQuick: __Compiled = { ...plain, r: __run([__tasksQuick]) };
+
+  test.each([
+    ["lean", leanQuick],
+    ["general", generalQuick],
+  ] as const)("%s: a timer fires at its delay, and the staying one keeps the node", async (_, m) => {
+    const actor = createActor(m);
+    actor.send({ type: "go" });
+    await wait(30);
+    expect(actor.snapshot()).toEqual({ state: "waiting", data: { n: 10 }, version: 0 });
+    await wait(50);
+    expect(actor.snapshot().state).toBe("timedOut");
+  });
+
+  test.each([
+    ["lean", leanQuick],
+    ["general", generalQuick],
+  ] as const)("%s: leaving the node cancels its timers", async (_, m) => {
+    const actor = createActor(m);
+    actor.send({ type: "go" });
+    actor.send({ type: "cancel" });
+    await wait(30);
+    expect(actor.snapshot().state).toBe("idle");
+    await wait(50);
+    expect(actor.snapshot().state).toBe("idle");
+  });
+
+  test.each([
+    ["lean", leanQuick],
+    ["general", generalQuick],
+  ] as const)("%s: a task's result after leaving the node is dropped", async (_, m) => {
+    let finish!: (e: __Event) => void;
+    work = () => new Promise((r) => (finish = r));
+    const actor = createActor(m);
+    actor.send({ type: "go" });
+    actor.send({ type: "cancel" });
+    expect(signals[0]?.aborted).toBe(true);
+    finish({ type: "done", id: "late" } as __Event);
+    await tick();
+    expect(actor.snapshot().state).toBe("idle");
+  });
+
+  test("stop cancels the quick timers", async () => {
+    const actor = createActor(leanQuick);
+    actor.send({ type: "go" });
+    actor.stop();
+    await wait(30);
+    expect(actor.snapshot()).toEqual({ state: "waiting", data: { n: 0 }, version: 0 });
   });
 });
 

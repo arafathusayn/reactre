@@ -41,6 +41,7 @@ describe("the stored JSON", () => {
 
   test.each([
     ["a string", "x", /snapshot isn't an object with state and data/],
+    ["null", JSON.parse("null") as unknown, /snapshot isn't an object with state and data/],
     ["no state", { data: {}, version: 2 }, /snapshot\.state isn't a state's name \(a string\)/],
     ["data that isn't an object", { state: "open", data: 1, version: 2 }, /snapshot\.data isn't an object/],
     ["no version", { state: "open", data: {} }, /snapshot\.version isn't setup's version \(a whole number/],
@@ -53,6 +54,14 @@ describe("the stored JSON", () => {
     expect(() => read(stored)).toThrow(StateError);
     expect(() => read(stored)).toThrow(message);
     expect(() => read(stored)).toThrow(/S20\].*Save it with JSON\.stringify and read it with JSON\.parse/);
+  });
+
+  // JSON.parse keeps "__proto__" as an own data property, so a stored history's "__proto__" is a
+  // parent like any other: it must be validated (and refused here), not set as a prototype.
+  test("a history's own __proto__ is a parent, checked like any other", () => {
+    const stored: unknown = JSON.parse('{"state":"open","data":{},"version":2,"history":{"__proto__":1}}');
+    expect(Object.hasOwn(stored as object, "history")).toBe(true);
+    expect(() => read(stored)).toThrow(/S20\].*snapshot\.history\.__proto__ isn't an object with state and data/);
   });
 
   test("a snapshot from a later build is refused as S22", () => {
@@ -69,7 +78,7 @@ describe("the stored JSON", () => {
 
   test("an actor without persist in its use is refused as S11, naming the import", () => {
     const unmarked = { ...orderMachine, u: {} };
-    expect(() => migrations(unmarked)).toThrow(/S11\] migrations\(machine\) needs persist: add persist to setup's use/);
+    expect(() => migrations(unmarked)).toThrow(/S11\] migrations\(machine\) needs persist in setup's use/);
     expect(() => processEvent(unmarked, undefined, { type: "add" }, { input: { id: "x" } })).toThrow(
       /S11\] processEvent\(machine, stored, event\) needs persist/,
     );

@@ -17,8 +17,10 @@ import { build as esbuild } from "esbuild";
 import { build as rolldown } from "rolldown";
 import { build as vite, defaultClientConditions } from "vite";
 
+import { emittedFileExports } from "./run-emitted.ts";
+
 // Each bundler resolves @reactre/state to its sources, as the repository's own builds do: dist may
-// not be built (CI runs the tests before the build).
+// not be built for local runs (CI builds and packs before tests).
 const SOURCE = "reactre-source";
 
 // The coverage settings skip folders named reactre-plugin-*: these bundles are not sources.
@@ -92,8 +94,8 @@ describe.each(Object.keys(bundlers))("%s", (name) => {
     const code = await Bun.file(file).text();
     // No setup or types (their S0 message), no restore (S1, S2), no dev freezing, no tasks module.
     expect(code).not.toMatch(/wasn't compiled|Migrate|isFrozen|oxc|AbortController|setTimeout/);
-    const app: { run(): string[] } = await import(file);
-    expect(app.run()).toEqual(["open", "closed", "locked", "closed"]);
+    const app = await emittedFileExports<string[]>(file);
+    expect(app).toEqual(["open", "closed", "locked", "closed"]);
     sizes[name] = { door: gzipSync(code).length, job: sizes[name]?.job ?? 0 };
   });
 
@@ -103,8 +105,8 @@ describe.each(Object.keys(bundlers))("%s", (name) => {
     const code = await Bun.file(file).text();
     expect(code).toContain("AbortController");
     expect(code).not.toMatch(/wasn't compiled|Migrate|isFrozen|oxc/);
-    const app: { run(): Promise<string[]> } = await import(file);
-    expect(await app.run()).toEqual(["saving", "saved"]);
+    const app = await emittedFileExports<string[]>(file);
+    expect(app).toEqual(["saving", "saved"]);
     sizes[name] = { door: sizes[name]?.door ?? 0, job: gzipSync(code).length };
   });
 

@@ -841,6 +841,10 @@ export const libraries26To50: Record<string, (t: T) => Promise<void>> = {
     await frames(3);
     await t.step("menu chose");
     t.$("#switch").click();
+    // Headless UI clears `changing` through its nested-rAF nextFrame helper. Two explicit frames
+    // give that clearing state a chance to render before the transcript's own settling: a
+    // predicate on the old unchecked DOM can already be satisfied before a runtime's first update.
+    await frames(2);
     await t.step("switched");
     t.$("#dialog").click();
     await frames(4);

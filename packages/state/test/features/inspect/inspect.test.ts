@@ -17,7 +17,7 @@ describe("inspect", () => {
   // Listed, it is used: it wraps the step and the lifecycle (the lean one, for the job).
   optIn("inspect", {
     door: ["y: inspect.y()", "r: inspect.w()"],
-    job: ["y: inspect.y()", "r: inspect.w(__reactreStateLean)"],
+    job: ["y: inspect.y()", "r: inspect.w(__reactreStateLeanQuick)"],
   });
 
   test("an inspector sees the start, each event with what it did, each move, and the stop", () => {

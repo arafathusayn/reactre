@@ -86,10 +86,46 @@ describe("output", () => {
 
   test("a task or timer brings the tasks module's lean lifecycle, and durations become milliseconds", () => {
     const code = compile("job.ts", JOB)?.code ?? "";
-    expect(code).toContain('import { __lean as __reactreStateLean } from "@reactre/state/tasks";');
+    // Every ordinary delay is a literal within setTimeout's range, so the plain timer is exact and
+    // the machine ships none of `__wait`'s split.
+    expect(code).toContain('import { __leanQuick as __reactreStateLeanQuick } from "@reactre/state/tasks";');
+    expect(code).not.toContain("__reactreStateLean ");
     expect(code).toContain("[1500, () => ({ state: ");
-    expect(code).toContain("r: __reactreStateLean");
+    expect(code).toContain("r: __reactreStateLeanQuick");
     expect(code).not.toContain("@reactre/state/run");
+  });
+
+  test("a delay past 2^31 − 1 ms keeps the split: the lean lifecycle over __wait", () => {
+    // 600h = 2,160,000,000 ms, past the limit; the grammar has no unit longer than hours.
+    const code = compile("job.ts", change(JOB, '"1.5s"', '"600h"'))?.code ?? "";
+    expect(code).toContain('import { __lean as __reactreStateLean } from "@reactre/state/tasks";');
+    expect(code).not.toContain("Quick");
+    expect(code).toContain("[2160000000, () => ({ state: ");
+    expect(code).toContain("r: __reactreStateLean");
+  });
+
+  test("the limit itself is short: 2147483647 ms keeps the plain timer", () => {
+    const code = compile("job.ts", change(JOB, '"1.5s"', '"2147483647ms"'))?.code ?? "";
+    expect(code).toContain("r: __reactreStateLeanQuick");
+    expect(code).toContain("[2147483647, () => ({ state: ");
+  });
+
+  test("a general machine's task runner is the quick one when every ordinary delay is short", () => {
+    // A named delay in `after` gives delays its own runner (`l`), so the lifecycle is general and
+    // the task runner is `__tasks`; the ordinary timers are still all short.
+    const source = change(
+      change(
+        change(JOB, "const job = setup({", "const job = setup({\n  use: [delays],\n  delays: { patience: 2000 },"),
+        '"1.5s"',
+        "patience",
+      ),
+      'import { createActor, setup, types } from "@reactre/state";',
+      'import { createActor, setup, types } from "@reactre/state";\nimport { delays } from "@reactre/state/delays";',
+    );
+    const code = compile("job.ts", source)?.code ?? "";
+    expect(code).toContain('import { __tasksQuick as __reactreStateTasksQuick } from "@reactre/state/tasks";');
+    expect(code).toContain("r: __reactreStateRunNested([__reactreStateTasksQuick, delays.r])");
+    expect(code).not.toContain("__reactreStateTasks ");
   });
 
   test("a feature in use keeps its import, and the table reads its hooks from it", () => {

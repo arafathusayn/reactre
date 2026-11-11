@@ -3,7 +3,7 @@
 // behaviour is unchanged. The renderer is the minimal one actors.test.ts uses: state slots, effects
 // after the render (cleanups on unmount), and an external store that re-renders on change.
 
-import { beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 
 import type { Machine, Type } from "../src/index.ts";
 import { to } from "./to.ts";
@@ -76,10 +76,14 @@ describe("react/dev", () => {
   });
 
   let warnings: string[] = [];
+  let warn: ReturnType<typeof spyOn<Console, "warn">>;
   beforeEach(() => {
     warnings = [];
-    spyOn(console, "warn").mockImplementation((...args: unknown[]) => void warnings.push(args.join(" ")));
+    warn = spyOn(console, "warn").mockImplementation((...args: unknown[]) => void warnings.push(args.join(" ")));
   });
+  // Bun's spyOn on a property already spied returns that same spy, calls and all: left installed, it
+  // hands its calls to the next file's spy. Restored here, each test's spy is its own.
+  afterEach(() => warn.mockRestore());
 
   test("M314: a different machine on a later render warns, and the first is kept", async () => {
     const { useActorRef } = await import("../src/entries/react-dev.ts");

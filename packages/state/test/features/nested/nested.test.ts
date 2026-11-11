@@ -26,7 +26,7 @@ describe("nested", () => {
       ),
     )?.code;
     // A parent's timer runs through its leaves' moves: hierarchy, not lean; no other lifecycle needs.
-    expect(timed).toContain("r: __reactreStateRunNested([__reactreStateTasks])");
+    expect(timed).toContain("r: __reactreStateRunNested([__reactreStateTasksQuick])");
     expect(timed).toContain('from "@reactre/state/run-nested"');
   });
 });

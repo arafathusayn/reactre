@@ -24,6 +24,7 @@ import "../compiled.ts";
 
 import state from "../../plugin/esbuild.ts";
 import type { __Compiled, __Event } from "../../src/internal.ts";
+import { runEmittedInteractive } from "../run-emitted-interactive.ts";
 import { to } from "../to.ts";
 
 const { createActor } = await import("@reactre/state");
@@ -131,19 +132,28 @@ test("the production compiler selects and executes the nested-only lifecycle", a
   const code = output.outputFiles[0]?.text ?? "";
   expect(code).toContain("__runNested");
   expect(code).not.toContain("__run(");
-  const { editorMachine: machine, log: productionLog } = (await import(
-    `data:text/javascript;base64,${Buffer.from(code).toString("base64")}`
-  )) as {
-    editorMachine: typeof editorMachine;
-    log: typeof log;
-  };
-  const actor = createActor(machine);
-  actor.send({ type: "open" });
-  actor.send({ type: "submit", by: "ann" });
-  await tick();
-  expect(actor.snapshot()).toMatchObject({ state: "sent", data: { text: "" } });
-  expect(productionLog).toEqual(["run "]);
-  actor.stop();
+  // The emitted table is driven in a separate Bun process: the production bytes are the ones that
+  // ran, and they stay out of this process's coverage report.
+  const result = await runEmittedInteractive<{
+    readonly state: string;
+    readonly data: unknown;
+    readonly log: string[];
+    readonly diagnosticHook: boolean;
+  }>(
+    code,
+    `
+const actor = createActor(exports.editorMachine);
+actor.send({ type: "open" });
+actor.send({ type: "submit", by: "ann" });
+await new Promise((r) => setTimeout(r, 0));
+const snapshot = actor.snapshot();
+actor.stop();
+return { state: snapshot.state, data: snapshot.data, log: exports.log, diagnosticHook: exports.editorMachine.d != null };
+`,
+  );
+  expect({ state: result.state, data: result.data }).toMatchObject({ state: "sent", data: { text: "" } });
+  expect(result.diagnosticHook).toBe(false);
+  expect(result.log).toEqual(["run "]);
 });
 
 /**

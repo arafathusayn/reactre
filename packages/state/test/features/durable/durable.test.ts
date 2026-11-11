@@ -13,7 +13,7 @@ const KIDS = 'import { __kids as __reactreStateDurableKids } from "@reactre/stat
 describe("durable", () => {
   optIn("durable", {
     door: ['u: { "durable": 1 }'],
-    job: ['u: { "durable": 1 }', "r: __reactreStateLean"],
+    job: ['u: { "durable": 1 }', "r: __reactreStateLeanQuick"],
   });
 
   test("with children, the machine gets the hooks that journal them, from an import of their own", () => {

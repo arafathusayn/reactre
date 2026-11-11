@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import { compile } from "@reactre/state/compiler";
 
-import { DOOR, JOB } from "./sources.ts";
+import { DOOR, EDITOR, JOB } from "./sources.ts";
 
 function ns(source: string): string {
   return source
@@ -36,6 +36,18 @@ describe("immutable metadata", () => {
     expect(code).toContain('state: "open"');
     expect(code).not.toMatch(/\.setup\(|\.types</);
     expect(code).not.toContain("export const door =");
+  });
+  test("a feature listed through a namespace import compiles, and its hooks are read from it", () => {
+    // `import * as nested from "@reactre/state/nested"` then `use: [nested.nested]`: the member is
+    // the feature, and the table reads its hooks from the namespace's local name.
+    const source = EDITOR.replace(
+      'import { nested } from "@reactre/state/nested";',
+      'import * as nested from "@reactre/state/nested";',
+    ).replace("use: [nested, history]", "use: [nested.nested, history]");
+    const code = compile("editor.ts", source)?.code ?? "";
+    // The feature is on: the table carries its hooks, and setup's `use` is gone.
+    expect(code).toContain("y: __reactreStateFlatNested");
+    expect(code).not.toContain("use: [");
   });
   test("an unknown dynamic state name remains a diagnostic", () => {
     const source = DOOR.replaceAll('to("closed")', "to(CLOSED)").replace(

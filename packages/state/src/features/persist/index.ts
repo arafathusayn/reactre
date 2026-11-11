@@ -166,7 +166,7 @@ function optIn(m: __Compiled | undefined, what: string): void {
   if (m?.u?.["persist"] !== 1)
     throw new StateError(
       "S11",
-      `${what} needs persist: add persist to setup's use (import { persist } from "@reactre/state/persist").`,
+      `${what} needs persist in setup's use (import { persist } from "@reactre/state/persist").`,
     );
 }
 
@@ -210,7 +210,7 @@ export const persist: Persist = /* @__PURE__ */ Object.assign(save, { t: __saved
 function malformed(path: string, problem: string): StateError {
   return new StateError(
     "S20",
-    `the stored snapshot isn't one: ${path} ${problem}. Save it with JSON.stringify and read it with JSON.parse.`,
+    `not a stored snapshot: ${path} ${problem}. Save it with JSON.stringify and read it with JSON.parse.`,
   );
 }
 
@@ -265,20 +265,24 @@ function leaf(value: unknown, path: string): __Leaf {
  */
 export function __parse(stored: unknown): __Persisted {
   json(stored, "snapshot");
-  const { state, data } = leaf(stored, "snapshot");
-  const s = stored as { readonly [key: string]: unknown }; // leaf() checked it is an object
-  const version = s["version"];
-  if (typeof version !== "number" || !Number.isInteger(version) || version < 0)
+  // leaf() first: a non-object (null, a string) is refused as that, not as a version.
+  const out: { -readonly [K in keyof __Persisted]: __Persisted[K] } = {
+    ...leaf(stored, "snapshot"),
+    version: (stored as { readonly version: number }).version,
+  };
+  // Number.isInteger is false for anything that isn't a number, so it is the type check too.
+  if (!Number.isInteger(out.version) || out.version < 0)
     throw malformed("snapshot.version", "isn't setup's version (a whole number, 0 when setup has none)");
-  const out: { -readonly [K in keyof __Persisted]: __Persisted[K] } = { state, data, version };
-  const history = s["history"];
+  const history = (stored as { readonly [key: string]: unknown })["history"];
   if (history !== undefined) {
     if (!isObject(history)) throw malformed("snapshot.history", "isn't an object of parents");
+    // fromEntries, not `kept[parent] = ...`: a "__proto__" key (JSON.parse keeps it as own data) must
+    // stay an own property, not set the prototype of a plain {}.
     out.history = Object.fromEntries(
       Object.entries(history).map(([parent, at]) => [parent, leaf(at, `snapshot.history.${parent}`)]),
     );
   }
-  const run = s["run"];
+  const run = (stored as { readonly [key: string]: unknown })["run"];
   if (run !== undefined) {
     if (!isObject(run) || !Object.entries(run).every(([, parts]) => isObject(parts)))
       throw malformed("snapshot.run", "isn't an object of nodes, each an object of runners' parts");

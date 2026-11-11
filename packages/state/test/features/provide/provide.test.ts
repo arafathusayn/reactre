@@ -67,6 +67,10 @@ describe("provide's delays", () => {
     const actor = createActor(quick);
     actor.send({ type: "start", ms: 1000 });
     await tick(5);
+    // These are two timer callbacks, not one settling event: waiting's sla enters late, then
+    // late's zero timeout enters done. A second turn keeps an independently pending 5ms timer
+    // from observing the intermediate state when other suite work delayed both callbacks.
+    await tick(0);
     // sla (0) fired before the timeout (1000ms), and late's timeout ("soon", 0) after it.
     expect(actor.snapshot().state).toBe("done");
     actor.stop();

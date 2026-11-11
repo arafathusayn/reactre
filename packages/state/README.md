@@ -106,18 +106,18 @@ The cost columns are measured gzipped bytes with esbuild, from the latest full s
 
 - **Listed, unused:** what listing the feature on the door app costs.
 - **App that uses it:** a whole app with that feature in use, table and app code included (the door app alone is 728).
-- **Open budget work:** job is 1119 above its pin of 1060, and persist's 3304 is above its pin of 3275. These are current red gates, not an agreed budget increase; behavior and fixture weakening are not ways to close them.
+- Short, statically known ordinary timers use `setTimeout` without the long-delay splitting machinery. Long, restored and feature-computed delays retain the safe scheduler; cancellation and stale-result behavior are unchanged. All existing size pins pass.
 
 | Opt-in (`@reactre/state/<name>`)  | What it adds                                                                            | XState v6 counterpart          | Listed, unused | App that uses it          |
 | --------------------------------- | --------------------------------------------------------------------------------------- | ------------------------------ | -------------- | ------------------------- |
-| `nested`                          | dotted state names, parents with handlers, tasks, timers and children, and bubbling     | compound states                | 0              | 1855 (with history)       |
+| `nested`                          | dotted state names, parents with handlers, tasks, timers and children, and bubbling     | compound states                | 0              | 1811 (with history)       |
 | `parallel` (needs nested)         | parallel nodes with a step per region, a node's done, and parallel nodes inside regions | parallel states                | 0              | 1876                      |
 | `history` (needs nested)          | `back(parent, fallback)` (deep or with a child step)                                    | history states                 | 0              | with nested               |
 | `output`                          | `Output<typeof machine>` and a parent's done                                            | output, onDone                 | 0              | 1479                      |
 | `choice`                          | `choice: ({ data, to }) => to(...)` on a leaf                                           | choice states                  | 0              | 1110                      |
 | `route`                           | typed routes reached from anywhere                                                      | route states, xstate.route     | 0              | 822                       |
 | `always`                          | eventless transitions with the S50 loop guard                                           | always                         | 0              | 1041                      |
-| `reenter`                         | `reenter(state, data)`, restarting its work                                             | reenter: true                  | 0              | 1462                      |
+| `reenter`                         | `reenter(state, data)`, restarting its work                                             | reenter: true                  | 0              | 1420                      |
 | `wildcards`                       | `"*"` and `"pointer.*"`, typed as the events each matches                               | wildcard transitions           | 0              | 960                       |
 | `tags`                            | tags, meta and description; hasTag, getMeta, getStateNodes                              | tags, meta, description        | 0              | 1246                      |
 | `effects`                         | entry, exit and enq handlers, recorded for after the move                               | entry, exit, enqueueActions    | 0              | 3133                      |
@@ -131,8 +131,8 @@ The cost columns are measured gzipped bytes with esbuild, from the latest full s
 | `system`                          | `createSystem` and `system.get`                                                         | systems                        | 0              | 2350                      |
 | `inspect`                         | `createActor(machine, { inspect, logger })`                                             | inspect, logger                | 566            | 1214                      |
 | `validate`                        | Standard Schemas checked at every boundary                                              | Standard Schema, validation    | 0              | 2231                      |
-| `persist`                         | snapshots, timer deadlines, migrations and processEvent                                 | persisted snapshots, migration | 467            | 3304 (pin 3275)           |
-| `durable`                         | tasks, timers and children journaled by a host                                          | durable execution              | 10             | 2862 (6037 with children) |
+| `persist`                         | snapshots, timer deadlines, migrations and processEvent                                 | persisted snapshots, migration | 467            | 3273 (pin 3275)           |
+| `durable`                         | tasks, timers and children journaled by a host                                          | durable execution              | 10             | 2795 (6001 with children) |
 
 Three cost bytes when listed and unused:
 
@@ -389,7 +389,7 @@ The core's and the first features' cases:
 | 60    | `back(…)` without `history`; `history` without `nested`                 | `"edit"` is not assignable to `"back needs history: add history to setup's use (import { history } from \"@reactre/state/history\")"`; `history needs nested: …`                                                                                         |
 | 61    | setup's `children` without `children` in `use`                          | `setup has "children": add children to setup's use (import { children } from "@reactre/state/children")`                                                                                                                                                 |
 | 62    | a Standard Schema without `validate` in `use`                           | `state "editing" is a Standard Schema: add validate to setup's use (import { validate } from "@reactre/state/validate")`                                                                                                                                 |
-| 63–64 | `persist(actor)`, `durable(machine, host)` without their opt-in         | Property `"persist(actor) needs persist: add persist to setup's use (import { persist } from \"@reactre/state/persist\")"` is missing; the same for durable                                                                                              |
+| 63–64 | `persist(actor)`, `durable(machine, host)` without their opt-in         | Property `"persist(actor) needs persist in setup's use (import { persist } from \"@reactre/state/persist\")"` is missing; the same for durable                                                                                                           |
 | 65    | `use: ["nested"]`, a name                                               | `use lists "nested", a name: list the feature itself, import { nested } from "@reactre/state/nested", then use: [nested]`                                                                                                                                |
 | 66    | `to("loading", { q })` from `loading`, which has a task or timer        | `state "loading" goes to itself with to(...), and its task keeps running with the data it started with: write reenter("loading", ...) to restart it with the new data (…), or keep("loading", data), with the data it started with, to leave it running` |
 | 67    | `createActor(machine as any)`; `restoreActor(m, JSON.parse(text))`      | `The 'this' context of type 'void' is not assignable to method's 'this' of type '"the machine is typed any, …"'`; `'"the snapshot is typed any (JSON.parse returns any), …: read it with migrations(machine) …"'`                                        |
@@ -397,7 +397,7 @@ The core's and the first features' cases:
 | 69    | `import { assign } from "@reactre/state"`, then `assign({ n: 1 })`      | `… parameter of type '"assign is XState's: there is no context to assign to. Return the next state with its data, to(state, { ...data, field })"'` (and `and`, `raise`, `createMachine`, `interpret`, `invoke`, …)                                       |
 | 70    | `after: { 5000: … }`; a DOM node in data                                | `state "saving" has a timer 5000, a bare number: write it with its unit, "5000ms"`; `not JSON: state "idle".el (an object with methods: …)`                                                                                                              |
 
-The whole suite is 1,166 tests (the latest run: 1,164 pass and the two size-pin failures documented above), covering every line and function of the package's sources (CI's `bun test --coverage` fails below 100%): the runtime, each feature (on and off), the compiler, the bundlers, the sizes and the codemod. [`test/actor.test.ts`](test/actor.test.ts) covers the core's runtime on machines compiled the way a build compiles them: 16 tests. They cover the pure walk, refusal reasons, frozen data in development, task results, abort on exit with the late result dropped, task errors, timers firing and being cancelled, stop, listeners that send, internal events refused at runtime, restoring a snapshot (and its task running again), version and state refusals, `setup` and `types` throwing when the plugin is missing, and `useActor` stopping with its owner.
+Root CI is 4,065 tests, all passing in the latest run, covering every line and function of the package's sources (CI's `bun test --coverage` fails below 100%): the runtime, each feature (on and off), the compiler, the bundlers, the sizes and the codemod. [`test/actor.test.ts`](test/actor.test.ts) covers the core's runtime on machines compiled the way a build compiles them: 16 tests. They cover the pure walk, refusal reasons, frozen data in development, task results, abort on exit with the late result dropped, task errors, timers firing and being cancelled, stop, listeners that send, internal events refused at runtime, restoring a snapshot (and its task running again), version and state refusals, `setup` and `types` throwing when the plugin is missing, and `useActor` stopping with its owner.
 
 ## The compiler: only what types can't check, and a table at runtime
 
@@ -474,14 +474,14 @@ The same plugin is at `@reactre/state/plugin/{rollup,rolldown,esbuild,webpack,rs
 
 | Bundler  | Door app (plain machine) | Job app (task, timer, internal event) |
 | -------- | ------------------------ | ------------------------------------- |
-| esbuild  | 728                      | 1119                                  |
-| Rolldown | 746                      | 1125                                  |
-| Bun      | 740                      | 1130                                  |
-| Vite     | 956 (lib mode)           | 1420 (lib mode)                       |
+| esbuild  | 728                      | 1053                                  |
+| Rolldown | 746                      | 1059                                  |
+| Bun      | 740                      | 1065                                  |
+| Vite     | 956 (lib mode)           | 1327 (lib mode)                       |
 
-For comparison, the type-layer-only runtime was 1.4 KB gzipped before any app code. The job is under the 1.5 KB app goal but above its current regression pin; see the open budget work above. `restoreActor` (with the S1 and S2 messages) is its own export and costs nothing unless imported.
+For comparison, the type-layer-only runtime was 1.4 KB gzipped before any app code. The job is within the 1.5 KB app goal and its existing regression pin. `restoreActor` (with the S1 and S2 messages) is its own export and costs nothing unless imported.
 
-A flat machine with tasks or timers gets the lean lifecycle (`__lean` in `@reactre/state/tasks`): one active leaf, relative timers, nothing saved.
+A flat machine with tasks or timers gets a lean lifecycle (`__lean` or the short-literal `__leanQuick` in `@reactre/state/tasks`): one active leaf, relative timers, nothing saved.
 
 - The runners' general lifecycle (`@reactre/state/run`, which tracks the nodes a move exits, enters and keeps) ships only when a machine needs it: with `nested`, `children`, `persist`, effects, or a timer resolved at entry.
 - Code a feature needs only beside another ships only then: durable's children hooks (with children), spawn's restore and the delays' saved deadlines (with persist), and validate's check of a transition decided outside a step (with a schema and such a handler).

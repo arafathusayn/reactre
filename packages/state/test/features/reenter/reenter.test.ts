@@ -33,7 +33,7 @@ describe("reenter", () => {
     expect(code).toContain("re: reenter.re");
     // The small general lifecycle: it keeps the `m.re` check reenter needs, and this machine has
     // no children, effects, persist or parallel node.
-    expect(code).toContain("r: __reactreStateRunNested([__reactreStateTasks])");
+    expect(code).toContain("r: __reactreStateRunNested([__reactreStateTasksQuick])");
   });
 
   test("the snapshot is what to would give", () => {

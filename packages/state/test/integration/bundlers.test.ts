@@ -14,6 +14,7 @@ import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } 
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
+import { emittedFileExports } from "../run-emitted.ts";
 import type {
   NodeResolveModule,
   RollupModule,
@@ -98,8 +99,8 @@ describe("every supported bundler's plugin path, from the installed package", ()
     await build(file);
     const code = await Bun.file(file).text();
     expect(code).not.toMatch(NOT_SHIPPED);
-    const mod = (await import(file)) as { run(): Promise<{ state: string; status: string }> };
-    expect(await mod.run()).toEqual({ state: "sent", status: "done" });
+    const result = await emittedFileExports<{ state: string; status: string }>(file);
+    expect(result).toEqual({ state: "sent", status: "done" });
   }
   test("vite", async () => {
     const { build } = (await import(Bun.resolveSync("vite", pkg))) as typeof import("vite");
@@ -121,8 +122,8 @@ describe("every supported bundler's plugin path, from the installed package", ()
     });
     const code = await Bun.file(file).text();
     expect(code).not.toMatch(NOT_SHIPPED);
-    const mod = (await import(file)) as { run(): string[] };
-    expect(mod.run()).toEqual(EXPECTED);
+    const result = await emittedFileExports<string[]>(file);
+    expect(result).toEqual(EXPECTED);
     await verifyNested("vite", (file) =>
       build({
         configFile: false,
@@ -156,8 +157,8 @@ describe("every supported bundler's plugin path, from the installed package", ()
     });
     const code = await Bun.file(file).text();
     expect(code).not.toMatch(NOT_SHIPPED);
-    const mod = (await import(file)) as { run(): string[] };
-    expect(mod.run()).toEqual(EXPECTED);
+    const result = await emittedFileExports<string[]>(file);
+    expect(result).toEqual(EXPECTED);
     // The installed runtime, too: no reactre-source condition. The compiler selects the nested
     // lifecycle and the emitted production application really executes its work.
     await verifyNested("esbuild", (file) =>
@@ -182,8 +183,8 @@ describe("every supported bundler's plugin path, from the installed package", ()
       logLevel: "silent",
       plugins: [state({ dev: false })],
     });
-    const job = (await import(jobFile)) as { run(): Promise<Record<string, unknown>> };
-    expect(await job.run()).toEqual({
+    const job = await emittedFileExports<Record<string, unknown>>(jobFile);
+    expect(job).toEqual({
       done: { state: "done", data: { id: "job-1" }, version: 0 },
       stale: { ok: false, reason: "inactive", snapshot: { state: "done", data: { id: "job-1" }, version: 0 } },
       after: ["working", "done"],
@@ -205,8 +206,8 @@ describe("every supported bundler's plugin path, from the installed package", ()
     });
     const code = await Bun.file(file).text();
     expect(code).not.toMatch(NOT_SHIPPED);
-    const mod = (await import(file)) as { run(): string[] };
-    expect(mod.run()).toEqual(EXPECTED);
+    const result = await emittedFileExports<string[]>(file);
+    expect(result).toEqual(EXPECTED);
     await verifyNested("rolldown", (file) =>
       build({
         input: join(app, "run-nested.ts"),
@@ -236,8 +237,8 @@ describe("every supported bundler's plugin path, from the installed package", ()
     await Bun.write(file, output);
     const code = await Bun.file(file).text();
     expect(code).not.toMatch(NOT_SHIPPED);
-    const mod = (await import(file)) as { run(): string[] };
-    expect(mod.run()).toEqual(EXPECTED);
+    const result = await emittedFileExports<string[]>(file);
+    expect(result).toEqual(EXPECTED);
     await verifyNested("bun", async (file) => {
       const nested = await Bun.build({
         entrypoints: [join(app, "run-nested.ts")],
@@ -277,8 +278,8 @@ describe("every supported bundler's plugin path, from the installed package", ()
     const file = join(out, "rollup.mjs");
     await Bun.write(file, chunk.code);
     expect(chunk.code).not.toMatch(NOT_SHIPPED);
-    const mod = (await import(file)) as { run(): string[] };
-    expect(mod.run()).toEqual(EXPECTED);
+    const result = await emittedFileExports<string[]>(file);
+    expect(result).toEqual(EXPECTED);
     await verifyNested("rollup", async (file) => {
       const bundle = await rollup({
         input: join(app, "run-nested.ts"),
@@ -331,8 +332,8 @@ describe("every supported bundler's plugin path, from the installed package", ()
     });
     const code = await Bun.file(file).text();
     expect(code).not.toMatch(NOT_SHIPPED);
-    const mod = (await import(file)) as { run(): string[] };
-    expect(mod.run()).toEqual(EXPECTED);
+    const result = await emittedFileExports<string[]>(file);
+    expect(result).toEqual(EXPECTED);
     await verifyNested(
       "webpack",
       (file) =>
@@ -400,8 +401,8 @@ describe("every supported bundler's plugin path, from the installed package", ()
     });
     const code = await Bun.file(file).text();
     expect(code).not.toMatch(NOT_SHIPPED);
-    const mod = (await import(file)) as { run(): string[] };
-    expect(mod.run()).toEqual(EXPECTED);
+    const result = await emittedFileExports<string[]>(file);
+    expect(result).toEqual(EXPECTED);
     await verifyNested(
       "rspack",
       (file) =>
