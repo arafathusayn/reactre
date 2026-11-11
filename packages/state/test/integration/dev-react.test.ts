@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { findChrome } from "../../../../apps/react-compat/chrome.ts";
+import { installApp } from "./install.ts";
 
 const root = join(import.meta.dir, "..", "..", "..", "..");
 const pkg = join(root, "packages", "state");
@@ -63,7 +64,7 @@ describe.skipIf(browser === undefined)("the installed package's dev React entry,
         2,
       ),
     );
-    run(["bun", "install", "--offline", "--no-summary", "--no-progress"], app);
+    installApp(app);
 
     const { default: state } = (await import(Bun.resolveSync("@reactre/state/plugin/bun", app))) as {
       default: (options?: { dev?: boolean }) => import("bun").BunPlugin;

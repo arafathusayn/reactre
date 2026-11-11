@@ -25,6 +25,7 @@ import type {
   WebpackModule,
   WebpackPluginInstance,
 } from "./bundlers.d.ts";
+import { installApp } from "./install.ts";
 
 const root = join(import.meta.dir, "..", "..", "..", "..");
 const pkg = join(root, "packages", "state");
@@ -64,7 +65,7 @@ function install(): string {
       2,
     ),
   );
-  run(["bun", "install", "--offline", "--no-summary", "--no-progress"], app);
+  installApp(app);
   return app;
 }
 

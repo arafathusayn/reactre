@@ -19,6 +19,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { readJournal, writeJournal } from "./fixtures/durable-process/journal.ts";
+import { installApp } from "./install.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "reactre-state-durable-process-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -278,7 +279,7 @@ describe("durable across a real process boundary", () => {
         2,
       ),
     );
-    run(["bun", "install", "--offline", "--no-summary", "--no-progress"], app);
+    installApp(app);
 
     // The installed worker, built by the installed plugin: `conditions: ["module"]` makes the
     // bundle resolve `@reactre/state` to the package's `dist/` (its built files), not its `src/`

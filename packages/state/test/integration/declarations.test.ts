@@ -12,6 +12,8 @@ import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { installApp } from "./install.ts";
+
 const root = join(import.meta.dir, "..", "..", "..", "..");
 const pkg = join(root, "packages", "state");
 const fixtures = join(import.meta.dir, "fixtures", "declarations");
@@ -50,7 +52,7 @@ describe("the packed declarations, as a user's project reads them", () => {
         2,
       ),
     );
-    run(["bun", "install", "--offline", "--no-summary", "--no-progress"], app);
+    installApp(app);
 
     // The declarations are the ones the package ships, not the sources: the project's tsconfig
     // has no `reactre-source` condition, so `types` resolves to dist/*.d.ts. `bun check` writes

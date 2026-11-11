@@ -4,8 +4,8 @@
 // react-dom/client in headless Chrome under StrictMode, where React mounts, unmounts and mounts
 // again. The click after hydration must move the machine, so the second mount's actor works.
 //
-// The package is installed as a user installs it: `bun pm pack` from dist/, then `bun install
-// --offline` (the tarball is local; React comes from the install cache). The app's files are
+// The package is installed as a user installs it: `bun pm pack` from dist/, then `bun install`
+// (./install.ts: the tarball is local; React comes from the cache or the registry). The app's files are
 // compiled by the installed plugin, through `bun --preload @reactre/state/plugin/preload`, so the
 // test also proves the packed plugin entry works from node_modules.
 //
@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { findChrome } from "../../../../apps/react-compat/chrome.ts";
+import { installApp } from "./install.ts";
 import type { PuppeteerModule } from "./puppeteer.d.ts";
 
 const root = join(import.meta.dir, "..", "..", "..", "..");
@@ -73,7 +74,7 @@ describe.skipIf(browser === undefined)("the installed package, server-rendered a
         2,
       ),
     );
-    run(["bun", "install", "--offline", "--no-summary", "--no-progress"], app);
+    installApp(app);
 
     // The server render, by the installed plugin: no effect runs, so the actor never starts, and
     // the start state's task (which records each run) never runs.
