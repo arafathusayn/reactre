@@ -35,20 +35,20 @@ The detailed historical ledger below remains the record of what was attempted an
 
 ## Owners
 
-| Lane | Owner | Scope |
-| --- | --- | --- |
-| Actor/task/persistence diagnostics | hc `t1t`, `morph-state-agent`, display `reactre-state-impl` | M35, M36, M51, M149, M187, M264; actor/task/persistence/dev files and focused tests. Shared files require lead coordination. |
-| React diagnostics | hc `t1v`, `state-react` | M313–M316; `packages/state/src/entries/react.ts`, new React tests. Must coordinate before shared source rewrites. |
-| Shared compiler repair (completed blocker) | `t1v` | Generated runtime/feature/dev imports and same-position edit ordering; parent feature suites show no missing-import errors. |
-| Compiler migration (current) | hc `t1w`, `state-fuzz` | `compiler/index.ts`, `compiler/values.ts` explicit current ownership; migrate eight expectations deliberately, dev import rewrite interface for React, then M77. |
-| React (current) | hc `t1v`, `state-react` | Only React adapters/tests, package dev export and bundler wiring; no shared compiler edits during `t1w` ownership. |
-| Durable integration defect (current) | hc `t1x`, `state-integration` | Trace retry-task settlement and durable child/parent lifecycle; source change only after focused root cause and coordination. |
-| Installed hydration and size proof | hc `t1x`, `state-integration` | Installed SSR/StrictMode passed independently; current editor <2KB gate fails, not an accepted result. |
-| Actor runtime diagnostics | hc `t1t`, `morph-state-agent` | M35/M36 tested; M187/M264 now runtime trust-boundary validation with focused tests. M51/M149 still open, as is durable defect handoff and production-size cost. |
-| Integration (additional) | hc `t1x`, `state-integration` | Installed SSR/StrictMode package fixture is in progress; no inspect source fix needed, bad size was compiler-load artifact. |
-| Compiler equivalence | hc `t1w`, `state-fuzz` | Deterministically generated valid TypeScript, independent reference evaluator, source/dev/prod differential checks, new `test/fuzz/` files. Compiler bugs reported before cross-scope fixes. |
-| Integration and release evidence | hc `t1x`, `state-integration` | New installed-package integration fixtures/tests, persistence, durable execution, systems, SSR/Strict Mode, plugins, packed declarations. Existing scripts/CI coordinated by lead. |
-| Lead | parent hc `t18` | Restrictions review/implementation, agent-authoring eval, independent safety review, shared wiring, review and qualification. |
+| Lane                                       | Owner                                                       | Scope                                                                                                                                                                                        |
+| ------------------------------------------ | ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Actor/task/persistence diagnostics         | hc `t1t`, `morph-state-agent`, display `reactre-state-impl` | M35, M36, M51, M149, M187, M264; actor/task/persistence/dev files and focused tests. Shared files require lead coordination.                                                                 |
+| React diagnostics                          | hc `t1v`, `state-react`                                     | M313–M316; `packages/state/src/entries/react.ts`, new React tests. Must coordinate before shared source rewrites.                                                                            |
+| Shared compiler repair (completed blocker) | `t1v`                                                       | Generated runtime/feature/dev imports and same-position edit ordering; parent feature suites show no missing-import errors.                                                                  |
+| Compiler migration (current)               | hc `t1w`, `state-fuzz`                                      | `compiler/index.ts`, `compiler/values.ts` explicit current ownership; migrate eight expectations deliberately, dev import rewrite interface for React, then M77.                             |
+| React (current)                            | hc `t1v`, `state-react`                                     | Only React adapters/tests, package dev export and bundler wiring; no shared compiler edits during `t1w` ownership.                                                                           |
+| Durable integration defect (current)       | hc `t1x`, `state-integration`                               | Trace retry-task settlement and durable child/parent lifecycle; source change only after focused root cause and coordination.                                                                |
+| Installed hydration and size proof         | hc `t1x`, `state-integration`                               | Installed SSR/StrictMode passed independently; current editor <2KB gate fails, not an accepted result.                                                                                       |
+| Actor runtime diagnostics                  | hc `t1t`, `morph-state-agent`                               | M35/M36 tested; M187/M264 now runtime trust-boundary validation with focused tests. M51/M149 still open, as is durable defect handoff and production-size cost.                              |
+| Integration (additional)                   | hc `t1x`, `state-integration`                               | Installed SSR/StrictMode package fixture is in progress; no inspect source fix needed, bad size was compiler-load artifact.                                                                  |
+| Compiler equivalence                       | hc `t1w`, `state-fuzz`                                      | Deterministically generated valid TypeScript, independent reference evaluator, source/dev/prod differential checks, new `test/fuzz/` files. Compiler bugs reported before cross-scope fixes. |
+| Integration and release evidence           | hc `t1x`, `state-integration`                               | New installed-package integration fixtures/tests, persistence, durable execution, systems, SSR/Strict Mode, plugins, packed declarations. Existing scripts/CI coordinated by lead.           |
+| Lead                                       | parent hc `t18`                                             | Restrictions review/implementation, agent-authoring eval, independent safety review, shared wiring, review and qualification.                                                                |
 
 All workers: Bun and TypeScript only; no JS/JSX files, Node/npm/tsc; Write/Edit for content; no commits/push/publishing/subagents; development-only diagnostics with zero production bytes. No benchmarks while work is concurrent. Long tests through background `hc` terminals, then `hc wait`, not shell sleeps/polling.
 
@@ -76,11 +76,10 @@ The original state worktree was still uncommitted at this checkpoint. Existing m
 - t1t reports 100% function/line in the runtime/diagnostics files from `bun test --coverage packages/state`, including dev/core/tasks/wait/effects/persist/delays. Its full state run was **1008 pass,28 fail**: **26 size budgets**, one t1v M316 React test, one t1w async fuzz. Only these exact failing lanes continue; do not report a full green test or root coverage run. Other package source coverage when running state alone is not a coverage regression in those packages; root CI runs the package suites together.
 - t1v: React **41 pass** at its focused checkpoint. It owns the current M316 failure and React coverage/strict evidence. No core/shared listener edits.
 - t1x: independently installed/current integration **32 pass,1 fail**: long timers 5, durable 6, durable nested 2, parallel children 2, effects 4, children 3, seven installed bundlers, packed declarations (150 files status 0), installed Chrome SSR/StrictMode zero-server-task click proof. Moderate editor alone fails. Declarations status—not stdout—is the assertion.
-- Current moderate editor is **2558 gzip >2000**. One preserved semantics `unitOf` dedup saved -6; chain/collect/finished/regionOf micro-rewrites all increased bytes and were discarded. t1x has go-ahead for a coherent build-time chain/region table, coordinating compiler ownership with t1w, rather than more allocation tweaks. It must genuinely reduce runtime graph work *and* total shipped app—not move most runtime bytes into a per-machine table. No budget relaxation, test deletion, altered bundling semantics, new fixture trick or 2KB pass claim until independently measured.
+- Current moderate editor is **2558 gzip >2000**. One preserved semantics `unitOf` dedup saved -6; chain/collect/finished/regionOf micro-rewrites all increased bytes and were discarded. t1x has go-ahead for a coherent build-time chain/region table, coordinating compiler ownership with t1w, rather than more allocation tweaks. It must genuinely reduce runtime graph work _and_ total shipped app—not move most runtime bytes into a per-machine table. No budget relaxation, test deletion, altered bundling semantics, new fixture trick or 2KB pass claim until independently measured.
 - Full current feature sizes remain unfixed beyond the editor. Full 100% source function+line coverage under repository root `bun test --coverage` remains a required gate, not proven by focused file traces. No suppression or omitting existing sources. Root fresh-clone CI parity and all packed declarations/consumers remain open.
 - Comparison audit: catalog has **615 rows**, **516 pre-execution pinned**, **12 pinned (runtime)**, **25 restrictions**, **18 impossible**, **39 not caught**, four still-open React rows. Corrected stale count row and runtime total (was six), stale harness summary (145→256). Saved results are **256 cases/11 libraries, ours 136 type+118 build /254 expressible**, **84 common**, best next25; the actual ours harness is being reran before those numbers are called current. M313–M316 remain marked open until React's corrected tests are verified.
 - No authoring model run/API call is authorized or made; no model eval claimed from handwritten ports. No publishing or push; no commit until qualification. No isolated performance benchmarking while implementation workers are live. No fresh CI parity yet.
-
 
 ### 2026-11-11 05:26 +06: generated outputs execute; sizes and boundaries open
 
@@ -95,7 +94,6 @@ The original state worktree was still uncommitted at this checkpoint. Existing m
 - M51 zero-production-byte boundary needs a coordinated compiler/actor design. t1v retained shared compiler ownership pending a separate planned React dev source-rewrite handoff; t1t has been told not to add unconditional per-send development counters to runtime.
 
 ## Cross-worker hazards
-
 
 ### 2026-11-11 05:15 +06 orchestration checkpoint
 

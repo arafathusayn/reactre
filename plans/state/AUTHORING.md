@@ -23,7 +23,7 @@ Each flow is written to the same bar:
 1. **Exact per-state data types.** Every state's data is declared in `setup`'s `states` with
    `types<{...}>()`, and every move carries exactly that state's data. A move to a state with no
    data takes none; a move to a state with data takes all of it.
-2. **`to` vs `keep` vs `reenter`.** A move to a *different* leaf is `to`. A move to the *same* leaf
+2. **`to` vs `keep` vs `reenter`.** A move to a _different_ leaf is `to`. A move to the _same_ leaf
    that must leave its task or timer running is `keep`; one that must restart them is `reenter`
    (the `reenter` opt-in). A plain `to` to the current leaf of a state with a task or timer is a type
    error that names the fix.
@@ -122,12 +122,12 @@ must add it.
 
 ## The rubric, honestly
 
-| Flow | Compiles | Typechecks | Runs as required | Opt-in needed | Friction |
-| --- | --- | --- | --- | --- | --- |
-| 1. Typeahead | yes | yes | yes | `reenter` | stale-result guard is hand-written |
-| 2. Fetch + retry | yes | yes | yes | none | none beyond the README's |
-| 3. Polling | yes | yes | yes | `reenter` | re-arm needs `reenter` |
-| 4. Debounced submit | yes | yes | yes | `reenter` | re-arm needs `reenter`; a task state needs a public exit event |
+| Flow                | Compiles | Typechecks | Runs as required | Opt-in needed | Friction                                                       |
+| ------------------- | -------- | ---------- | ---------------- | ------------- | -------------------------------------------------------------- |
+| 1. Typeahead        | yes      | yes        | yes              | `reenter`     | stale-result guard is hand-written                             |
+| 2. Fetch + retry    | yes      | yes        | yes              | none          | none beyond the README's                                       |
+| 3. Polling          | yes      | yes        | yes              | `reenter`     | re-arm needs `reenter`                                         |
+| 4. Debounced submit | yes      | yes        | yes              | `reenter`     | re-arm needs `reenter`; a task state needs a public exit event |
 
 **What this evidence supports.** The four flows are expressible with the current API, the type
 checker and compiler accept them, and they behave as the requirements say when run on a deterministic

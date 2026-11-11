@@ -51,8 +51,9 @@ afterAll(() => console.log("gzipped bytes (esbuild):", JSON.stringify(sizes)));
 
 describe("the core", () => {
   // door: a plain machine. job: a flat machine with a task and a timer (the lean lifecycle). The
-  // job's target is 940 (ARCHITECTURE.md, "Size and speed"); 1002 is where it stands (1009 before
-  // the step's one call, `(m.y ?? __flat)(...)`, the listener round and the lean task's block): the
+  // job's goal is 940 (ARCHITECTURE.md, "Size and speed"), and its unchanged regression pin is
+  // 1060. It currently measures 1119: an open failing gate, not an accepted new pin. Size history
+  // before the listener round and the lean task's block: 1002 (1009 before those changes). The
   // lean lifecycle is about 220 of it (a task with its signal, timers, S6 to the task's error), the
   // job's table about 165, and the core's actor and step the rest. What is left of the gap is
   // behaviour: the listeners' re-told rounds (with try/finally, so a throwing listener doesn't stop

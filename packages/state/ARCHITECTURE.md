@@ -140,14 +140,16 @@ esbuild, minified, gzipped, the whole app (`test/sizes.test.ts`, `test/bundlers.
 
 | What                                                                    | Bar      | Now                                                          |
 | ----------------------------------------------------------------------- | -------- | ------------------------------------------------------------ |
-| door (a plain machine)                                                  | ≤ 1.5 KB | 726 (pinned at 728)                                          |
-| job (a flat machine with a task and a timer)                            | ≤ 1.5 KB | 1058 (pinned at 1060)                                        |
-| a feature listed but unused                                             | 0        | 0, except inspect 559, persist 466 and durable 10            |
+| door (a plain machine)                                                  | ≤ 1.5 KB | 728 (pinned at 728)                                          |
+| job (a flat machine with a task and a timer)                            | ≤ 1.5 KB | 1119 (above pin 1060; open work, not relaxed)                |
+| a feature listed but unused                                             | 0        | 0, except inspect 566, persist 467 and durable 10            |
 | actor send, the door (`bun packages/state/compare/bench.ts`, run alone) | fastest  | 120.9M ops/s (Bun; next @escapace/fsm 75.2M), about 60M (V8) |
 | pure transition, the door                                               | fastest  | 159.8M ops/s (next `xstate/fsm` 33.2M)                       |
 | create, subscribe, stop                                                 | fastest  | 35.5M ops/s (next @doeixd/machine 19.8M)                     |
 
-Each used-feature app is pinned at its measured size in `test/sizes.test.ts`; a change that grows one updates the budget with the reason.
+A new standalone speed benchmark has not been qualified after these reductions; the three speed rows above are historical, not evidence about the current tree.
+
+Each used-feature app has its budget pinned in `test/sizes.test.ts`; no new budget relaxation is permitted. Persist's validation is fully retained but currently measures 3304 gzip, above its 3275 pin; the durable pins now pass.
 
 ## Ownership in wave 1
 
