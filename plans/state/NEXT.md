@@ -1,5 +1,11 @@
 # @reactre/state: remaining campaign
 
+## 2026-11-11 17:40 +06: full fresh committed-archive CI green
+
+- `git archive 2c5fc89` extracted into `/tmp/reactre-state-archive-2c5fc89-20261111`, and its literal CI sequence exited 0 (`/tmp/reactre-state-archive-2c5fc89-ci.log`): frozen install, all formatted, root types 645 / strict 248, every package build/pack before tests, ordinary **4066 pass / 0 fail at 100% functions / lines**, plugin dist, four packed declaration variants, and Chrome **131/131 compat / 131/131 compiler**. The deliberate core subset reports 100/131 with its documented exclusions and no new differ.
+- Browser repair follows the library's own two-rAF `nextFrame` clearing: the scenario explicitly awaits two frames. The earlier predicate wait was disproved in full runs: it could be true on the old unchecked DOM before either runtime's initial render, so it was removed, not excused. The local full compat/compat+compiler **131/131** run proved the corrected synchronization before the fresh archive chain.
+- Implementation checkpoint `2c5fc89` is local, clean and archive-qualified; no push/publication/readiness claim, performance benchmark or M329 API decision. `192c110` and `a3623a3` were local amended attempts whose Chrome archive runs remained red, not accepted CI. A follow-up documentation-only checkpoint will preserve the archive-evidence correction.
+
 ## 2026-11-11 17:30 +06: browser transient synchronization; amended archive checkpoint next
 
 - First fresh `192c110` archive (archive path `/tmp/reactre-state-archive-192c110-20261111`) passed frozen install, format, types 645 / strict 248, every package build/pack, ordinary **4066/0 at 100% functions and lines**, plugin dist and all four packed declaration checks. Full Chrome compatibility failed at Headless UI switch's transient `data-changing` state, after the completed `checked` flag agreed. First run retained it on React, second on compat: the six-macrotask settling window can straddle Headless UI's two-frame removal differently. A bounded existing `until()` helper now awaits removal before the unchanged DOM assertion; focused parent run **4/4 all modes** and static checks clean. This extends test synchronization, not a tolerance or a production-core fix.
