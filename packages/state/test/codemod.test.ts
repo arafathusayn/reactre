@@ -8,7 +8,9 @@
 // the type checker's graph checks on them.
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import "./compiled.ts";
 
@@ -457,6 +459,27 @@ describe("the CLI", () => {
         `${source}:5: doorMachine: 3 states, 4 events; the context is narrowed to each state's data\n0 TODOs\n`,
     );
     expect(await Bun.file(`${out}cli-door.state.ts`).text()).toBe(await Bun.file(`${here}door.expected.ts`).text());
+  });
+});
+
+describe("the formatting", () => {
+  // `bun fmt` skips a path its ignore files match and prints the code unchanged. A target in an
+  // ignored folder (as ./codemod/out/ is) is still formatted. The folder is outside the home
+  // folder, so no Prettier config above it changes how `bun fmt` reads ignore files.
+  test("formats a target in a folder .gitignore ignores", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "reactre-state-codemod-fmt-"));
+    try {
+      // A repository root (`.git`) whose .gitignore ignores a folder: `bun fmt` reads it there.
+      mkdirSync(join(dir, ".git"));
+      writeFileSync(join(dir, ".gitignore"), "ignored/\n");
+      mkdirSync(join(dir, "ignored"));
+      const source = await Bun.file(`${here}door.xstate.ts`).text();
+      const plain = convert(join(dir, "door.ts"), source).code;
+      expect(convert(join(dir, "ignored", "door.ts"), source).code).toBe(plain);
+      expect(plain).not.toBe(convert(join(dir, "door.ts"), source, { format: false }).code);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

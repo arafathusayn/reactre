@@ -312,10 +312,14 @@ function dedupe(todos: readonly Todo[]): Todo[] {
   });
 }
 
-/** The code as `bun fmt` writes it, with the repository's settings; unchanged if that fails. */
+/**
+ * The code as `bun fmt` writes it, with the repository's settings; unchanged if that fails. No
+ * ignore file applies (`--ignore-path /dev/null`): `bun fmt` prints an ignored path's code
+ * unchanged, and a target in a folder .gitignore ignores is still the converter's output.
+ */
 function format(file: string, code: string): string {
   const path = resolve(file);
-  const result = Bun.spawnSync([process.execPath, "fmt", "--stdin-filepath", path], {
+  const result = Bun.spawnSync([process.execPath, "fmt", "--ignore-path", "/dev/null", "--stdin-filepath", path], {
     stdin: new TextEncoder().encode(code),
     cwd: dirname(path),
     stderr: "pipe",
