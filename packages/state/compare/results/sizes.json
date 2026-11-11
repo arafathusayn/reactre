@@ -1,0 +1,338 @@
+[
+  {
+    "app": "door: an actor, plain transitions",
+    "lib": "ours",
+    "sizes": {
+      "esbuild": {
+        "min": 1635,
+        "gzip": 759,
+        "brotli": 696
+      },
+      "rolldown": {
+        "min": 1654,
+        "gzip": 772,
+        "brotli": 712
+      }
+    }
+  },
+  {
+    "app": "door: an actor, plain transitions",
+    "lib": "xstate",
+    "sizes": {
+      "esbuild": {
+        "min": 89545,
+        "gzip": 29101,
+        "brotli": 25632
+      },
+      "rolldown": {
+        "min": 89865,
+        "gzip": 28047,
+        "brotli": 24625
+      }
+    }
+  },
+  {
+    "app": "door: an actor, plain transitions",
+    "lib": "xstate5",
+    "sizes": {
+      "esbuild": {
+        "min": 39343,
+        "gzip": 13072,
+        "brotli": 11735
+      },
+      "rolldown": {
+        "min": 39394,
+        "gzip": 12629,
+        "brotli": 11328
+      }
+    }
+  },
+  {
+    "app": "door: an actor, plain transitions",
+    "lib": "robot3",
+    "sizes": {
+      "esbuild": {
+        "min": 2570,
+        "gzip": 1163,
+        "brotli": 1068
+      },
+      "rolldown": {
+        "min": 2581,
+        "gzip": 1165,
+        "brotli": 1077
+      }
+    }
+  },
+  {
+    "app": "door: an actor, plain transitions",
+    "lib": "store",
+    "sizes": {
+      "esbuild": {
+        "min": 8102,
+        "gzip": 3154,
+        "brotli": 2909
+      },
+      "rolldown": {
+        "min": 8056,
+        "gzip": 3042,
+        "brotli": 2798
+      }
+    }
+  },
+  {
+    "app": "door: an actor, plain transitions",
+    "lib": "tsfsm",
+    "sizes": {
+      "esbuild": {
+        "min": 3679,
+        "gzip": 1460,
+        "brotli": 1320
+      },
+      "rolldown": {
+        "min": 3199,
+        "gzip": 1221,
+        "brotli": 1076
+      }
+    }
+  },
+  {
+    "app": "door: an actor, plain transitions",
+    "lib": "yay",
+    "sizes": {
+      "esbuild": {
+        "min": 3052,
+        "gzip": 1334,
+        "brotli": 1223
+      },
+      "rolldown": {
+        "min": 3018,
+        "gzip": 1297,
+        "brotli": 1181
+      }
+    }
+  },
+  {
+    "app": "door: an actor, plain transitions",
+    "lib": "doeixd",
+    "sizes": {
+      "esbuild": {
+        "min": 6764,
+        "gzip": 2541,
+        "brotli": 2323
+      },
+      "rolldown": {
+        "min": 6700,
+        "gzip": 2479,
+        "brotli": 2260
+      }
+    }
+  },
+  {
+    "app": "door: an actor, plain transitions",
+    "lib": "hsm",
+    "sizes": {
+      "esbuild": {
+        "min": 26856,
+        "gzip": 8156,
+        "brotli": 7353
+      },
+      "rolldown": {
+        "min": 26569,
+        "gzip": 7948,
+        "brotli": 7187
+      }
+    }
+  },
+  {
+    "app": "door: an actor, plain transitions",
+    "lib": "escapace",
+    "sizes": {
+      "esbuild": {
+        "min": 25824,
+        "gzip": 7743,
+        "brotli": 6931
+      },
+      "rolldown": {
+        "min": 25956,
+        "gzip": 7547,
+        "brotli": 6761
+      }
+    }
+  },
+  {
+    "app": "door: an actor, plain transitions",
+    "lib": "jssm",
+    "sizes": {
+      "esbuild": {
+        "min": 237852,
+        "gzip": 51030,
+        "brotli": 40850
+      },
+      "rolldown": {
+        "min": 232167,
+        "gzip": 49974,
+        "brotli": 39665
+      }
+    }
+  },
+  {
+    "app": "job: an actor, a task and a timer",
+    "lib": "ours",
+    "sizes": {
+      "esbuild": {
+        "min": 2366,
+        "gzip": 1165,
+        "brotli": 1071
+      },
+      "rolldown": {
+        "min": 2379,
+        "gzip": 1166,
+        "brotli": 1075
+      }
+    }
+  },
+  {
+    "app": "job: an actor, a task and a timer",
+    "lib": "xstate",
+    "sizes": {
+      "esbuild": {
+        "min": 89813,
+        "gzip": 29192,
+        "brotli": 25769
+      },
+      "rolldown": {
+        "min": 90133,
+        "gzip": 28136,
+        "brotli": 24718
+      }
+    }
+  },
+  {
+    "app": "job: an actor, a task and a timer",
+    "lib": "xstate5",
+    "sizes": {
+      "esbuild": {
+        "min": 40668,
+        "gzip": 13513,
+        "brotli": 12110
+      },
+      "rolldown": {
+        "min": 40468,
+        "gzip": 13015,
+        "brotli": 11654
+      }
+    }
+  },
+  {
+    "app": "job: an actor, a task and a timer",
+    "lib": "yay",
+    "sizes": {
+      "esbuild": {
+        "min": 3363,
+        "gzip": 1498,
+        "brotli": 1380
+      },
+      "rolldown": {
+        "min": 3329,
+        "gzip": 1449,
+        "brotli": 1325
+      }
+    }
+  },
+  {
+    "app": "job: an actor, a task and a timer",
+    "lib": "hsm",
+    "sizes": {
+      "esbuild": {
+        "min": 27496,
+        "gzip": 8350,
+        "brotli": 7520
+      },
+      "rolldown": {
+        "min": 27229,
+        "gzip": 8142,
+        "brotli": 7358
+      }
+    }
+  },
+  {
+    "app": "door: pure transitions, no actor",
+    "lib": "ours",
+    "sizes": {
+      "esbuild": {
+        "min": 1017,
+        "gzip": 483,
+        "brotli": 435
+      },
+      "rolldown": {
+        "min": 1036,
+        "gzip": 509,
+        "brotli": 456
+      }
+    }
+  },
+  {
+    "app": "door: pure transitions, no actor",
+    "lib": "xstate",
+    "sizes": {
+      "esbuild": {
+        "min": 1416,
+        "gzip": 692,
+        "brotli": 624
+      },
+      "rolldown": {
+        "min": 1417,
+        "gzip": 684,
+        "brotli": 616
+      }
+    }
+  },
+  {
+    "app": "door: pure transitions, no actor",
+    "lib": "xstate5",
+    "sizes": {
+      "esbuild": {
+        "min": 39762,
+        "gzip": 13236,
+        "brotli": 11873
+      },
+      "rolldown": {
+        "min": 39810,
+        "gzip": 12782,
+        "brotli": 11444
+      }
+    }
+  },
+  {
+    "app": "door: pure transitions, no actor",
+    "lib": "store",
+    "sizes": {
+      "esbuild": {
+        "min": 8125,
+        "gzip": 3178,
+        "brotli": 2936
+      },
+      "rolldown": {
+        "min": 8079,
+        "gzip": 3067,
+        "brotli": 2828
+      }
+    }
+  },
+  {
+    "app": "door: pure transitions, no actor",
+    "lib": "doeixd",
+    "sizes": {
+      "esbuild": {
+        "min": 6644,
+        "gzip": 2540,
+        "brotli": 2315
+      },
+      "rolldown": {
+        "min": 4439,
+        "gzip": 1839,
+        "brotli": 1680
+      }
+    }
+  }
+]

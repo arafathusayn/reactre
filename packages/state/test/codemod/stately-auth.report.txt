@@ -1,0 +1,24 @@
+1: // @ts-nocheck is removed: @reactre/state's compiler refuses a suppression in a file with machines, and the output type-checks
+8: machine: 11 states, 8 events, internal signInDone, loadProfileDone, watchSessionDone; each state keeps the whole context
+22: TODO action "track" is a stub in the export: write it in setup's actions (it gets its params; pass it the fields of data and the event it reads). Until then it does nothing, as in the export
+26: TODO action "clearSession" is a stub in the export: write it in setup's actions (it gets its params; pass it the fields of data and the event it reads). Until then it does nothing, as in the export
+32: TODO actor "signIn" is a stub in the export: write the task in signIn (it gets the invoke's input and an abort signal). Until then it finishes at once (its output is null), as in the export
+36: TODO actor "loadProfile" is a stub in the export: write the task in loadProfile (it gets the invoke's input and an abort signal). Until then it finishes at once (its output is null), as in the export
+40: TODO actor "watchSession" is a stub in the export: write the task in watchSession (it gets the invoke's input and an abort signal). Until then it never finishes, as in the export
+43: TODO guard "needsTwoFactor" is a stub in the export: write its condition in needsTwoFactor, and pass it the fields of data and the event it reads. Until then it is true, as in the export
+47: TODO guard "tooManyAttempts" is a stub in the export: write its condition in tooManyAttempts, and pass it the fields of data and the event it reads. Until then it is false, as in the export
+69: TODO narrow this state's data to the fields it uses: the stubs (needsTwoFactor, signIn, tooManyAttempts, loadProfile, watchSession) aren't written yet, so the fields each state reads aren't known
+76: TODO narrow this state's data to the fields it uses: the stubs (needsTwoFactor, signIn, tooManyAttempts, loadProfile, watchSession) aren't written yet, so the fields each state reads aren't known
+97: TODO narrow this state's data to the fields it uses: the stubs (needsTwoFactor, signIn, tooManyAttempts, loadProfile, watchSession) aren't written yet, so the fields each state reads aren't known
+115: TODO no transition leaves Signed out.Locked, so it is final here: XState's actor stayed in it without finishing. Add a transition if it should
+115: TODO narrow this state's data to the fields it uses: the stubs (needsTwoFactor, signIn, tooManyAttempts, loadProfile, watchSession) aren't written yet, so the fields each state reads aren't known
+124: TODO narrow this state's data to the fields it uses: the stubs (needsTwoFactor, signIn, tooManyAttempts, loadProfile, watchSession) aren't written yet, so the fields each state reads aren't known
+145: TODO narrow this state's data to the fields it uses: the stubs (needsTwoFactor, signIn, tooManyAttempts, loadProfile, watchSession) aren't written yet, so the fields each state reads aren't known
+159: TODO each region of Signed in keeps its own copy of the context: a change in one region isn't seen by the others, and leaving Signed in takes the first region's
+165: TODO narrow this state's data to the fields it uses: the stubs (needsTwoFactor, signIn, tooManyAttempts, loadProfile, watchSession) aren't written yet, so the fields each state reads aren't known
+178: TODO narrow this state's data to the fields it uses: the stubs (needsTwoFactor, signIn, tooManyAttempts, loadProfile, watchSession) aren't written yet, so the fields each state reads aren't known
+185: TODO narrow this state's data to the fields it uses: the stubs (needsTwoFactor, signIn, tooManyAttempts, loadProfile, watchSession) aren't written yet, so the fields each state reads aren't known
+197: TODO narrow this state's data to the fields it uses: the stubs (needsTwoFactor, signIn, tooManyAttempts, loadProfile, watchSession) aren't written yet, so the fields each state reads aren't known
+204: TODO narrow this state's data to the fields it uses: the stubs (needsTwoFactor, signIn, tooManyAttempts, loadProfile, watchSession) aren't written yet, so the fields each state reads aren't known
+205: TODO XState ignored watchSession's result: here the task's event must be handled, so the state stays
+205: TODO XState's actor errored when watchSession failed: say where to go

@@ -1,0 +1,4 @@
+{
+  // A strict config without noUncheckedIndexedAccess, for ../../../compiler.test.ts (M579).
+  "compilerOptions": { "strict": true, "noFallthroughCasesInSwitch": true }
+}

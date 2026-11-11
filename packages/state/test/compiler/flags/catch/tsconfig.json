@@ -1,0 +1,5 @@
+{
+  // The repository's config with useUnknownInCatchVariables turned off, for ../../../compiler.test.ts (M580).
+  "extends": "../../../../../../tsconfig.json",
+  "compilerOptions": { "useUnknownInCatchVariables": false }
+}

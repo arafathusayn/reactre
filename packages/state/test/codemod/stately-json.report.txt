@@ -1,0 +1,15 @@
+1: checkoutMachine: 5 states, 5 events, internal chargeCardDone; each state keeps the whole context
+1: events "checkout", "cancel", "next", "back", "pay" have no type: guessed no payload. Add the fields they carry to setup's events
+5: TODO context field items has no type, and its initial value doesn't say ([]): it is null[] until you write its type in setup's states
+6: context field total has no type: guessed number from its initial value
+7: TODO context field coupon has no type, and its initial value doesn't say (null): it is null until you write its type in setup's states
+8: context field express has no type: guessed boolean from its initial value
+11: TODO narrow this state's data to the fields it uses: the stubs (isEmpty, chargeCard) aren't written yet, so the fields each state reads aren't known
+16: TODO guard "isEmpty" isn't written in this file: write its condition in isEmpty, and pass it the fields of data and the event it reads. Until then it is false
+17: TODO action "showEmptyCart" isn't written in this file: write it in setup's actions (it gets its params; pass it the fields of data and the event it reads). Until then it does nothing
+29: TODO narrow this state's data to the fields it uses: the stubs (isEmpty, chargeCard) aren't written yet, so the fields each state reads aren't known
+36: TODO narrow this state's data to the fields it uses: the stubs (isEmpty, chargeCard) aren't written yet, so the fields each state reads aren't known
+45: TODO action "loadPaymentMethods" isn't written in this file: write it in setup's actions (it gets its params; pass it the fields of data and the event it reads). Until then it does nothing
+54: TODO narrow this state's data to the fields it uses: the stubs (isEmpty, chargeCard) aren't written yet, so the fields each state reads aren't known
+56: TODO actor "chargeCard" isn't written in this file: write the task in chargeCard (it gets the invoke's input and an abort signal). Until then it finishes at once (its output is null)
+75: TODO narrow this state's data to the fields it uses: the stubs (isEmpty, chargeCard) aren't written yet, so the fields each state reads aren't known

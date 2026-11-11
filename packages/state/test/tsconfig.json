@@ -1,0 +1,6 @@
+{
+  // Tests and examples are user code: the repository's settings, without the declaration rules
+  // (isolatedDeclarations) the published sources follow.
+  "extends": "../../../tsconfig.json",
+  "include": ["../src", "../compiler", "../plugin", "."]
+}

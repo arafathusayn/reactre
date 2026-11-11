@@ -1,0 +1,79 @@
+{
+  "id": "Checkout",
+  "initial": "Cart",
+  "context": {
+    "items": [],
+    "total": 0,
+    "coupon": null,
+    "express": false
+  },
+  "states": {
+    "Cart": {
+      "on": {
+        "checkout": [
+          {
+            "target": "Cart",
+            "guard": "isEmpty",
+            "actions": [{ "type": "showEmptyCart" }]
+          },
+          {
+            "target": "Details"
+          }
+        ]
+      },
+      "description": "The cart, before checking out."
+    },
+    "Details": {
+      "initial": "Address",
+      "states": {
+        "Address": {
+          "on": {
+            "next": {
+              "target": "Payment"
+            }
+          }
+        },
+        "Payment": {
+          "on": {
+            "back": {
+              "target": "Address"
+            },
+            "pay": {
+              "target": "#Checkout.Paying"
+            }
+          },
+          "entry": [{ "type": "loadPaymentMethods" }]
+        }
+      },
+      "on": {
+        "cancel": {
+          "target": "Cart"
+        }
+      }
+    },
+    "Paying": {
+      "invoke": {
+        "src": "chargeCard",
+        "id": "chargeCard",
+        "onDone": {
+          "target": "Paid"
+        },
+        "onError": {
+          "target": "Details.Payment"
+        }
+      },
+      "after": {
+        "50": {
+          "target": "Details.Payment",
+          "description": "The bank took too long."
+        }
+      },
+      "meta": {
+        "label": "Paying…"
+      }
+    },
+    "Paid": {
+      "type": "final"
+    }
+  }
+}

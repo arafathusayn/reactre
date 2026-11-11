@@ -1,0 +1,5 @@
+{
+  // The prototype, checked with the strictest settings the published packages use.
+  "extends": "../../tsconfig.strict.json",
+  "include": ["src", "compiler", "plugin"]
+}

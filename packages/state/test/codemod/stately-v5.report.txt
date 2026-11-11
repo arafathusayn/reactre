@@ -1,0 +1,12 @@
+1: // @ts-nocheck is removed: @reactre/state's compiler refuses a suppression in a file with machines, and the output type-checks
+8: machine: 5 states, 5 events, internal sendFeedbackDone; each state keeps the whole context
+10: the @xstate-layout comment is dropped: it is Stately's diagram layout, and @reactre/state has no visual editor
+18: TODO narrow this state's data to the fields it uses: the stubs (hasComment, sendFeedback) aren't written yet, so the fields each state reads aren't known
+33: TODO narrow this state's data to the fields it uses: the stubs (hasComment, sendFeedback) aren't written yet, so the fields each state reads aren't known
+41: TODO narrow this state's data to the fields it uses: the stubs (hasComment, sendFeedback) aren't written yet, so the fields each state reads aren't known
+68: TODO narrow this state's data to the fields it uses: the stubs (hasComment, sendFeedback) aren't written yet, so the fields each state reads aren't known
+86: TODO narrow this state's data to the fields it uses: the stubs (hasComment, sendFeedback) aren't written yet, so the fields each state reads aren't known
+98: TODO action "showError" is a stub in the export: write it in setup's actions (it gets its params; pass it the fields of data and the event it reads). Until then it does nothing, as in the export
+99: TODO action "focusComment" is a stub in the export: write it in setup's actions (it gets its params; pass it the fields of data and the event it reads). Until then it does nothing, as in the export
+102: TODO actor "sendFeedback" is a stub in the export: write the task in sendFeedback (it gets the invoke's input and an abort signal). Until then it never finishes, as in the export
+105: TODO guard "hasComment" is a stub in the export: write its condition in hasComment, and pass it the fields of data and the event it reads. Until then it is false, as in the export

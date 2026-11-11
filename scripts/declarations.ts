@@ -6,7 +6,9 @@
 //
 // The sources live in src/ and each export's "reactre-source" condition names one (the repository
 // type-checks the sources through that condition, tsconfig.json's customConditions). Its "types"
-// condition names the declaration this writes: src/a/b.ts becomes dist/a/b.d.ts.
+// condition names the declaration this writes: src/a/b.ts becomes dist/a/b.d.ts. A source outside
+// src/ (@reactre/state's compiler/, plugin/ and codemod/) keeps its folder: compiler/a.ts becomes
+// dist/compiler/a.d.ts.
 //
 // Design decisions:
 //   - oxc's isolated declarations, not tsc: the packages already compile under
@@ -59,7 +61,6 @@ export function writeDeclarations(dir: string): string[] {
   }
   const written: string[] = [];
   const seen = new Set<string>();
-  const src = join(dir, "src");
   while (queue.length > 0) {
     const file = queue.pop()!;
     if (seen.has(file)) continue;
@@ -73,7 +74,7 @@ export function writeDeclarations(dir: string): string[] {
       queue.push(resolve(dirname(file), path + ".ts"));
       return `${head}${path}.js${quote}`;
     });
-    const target = join(dir, "dist", relative(src, file).replace(/\.ts$/, ".d.ts"));
+    const target = join(dir, declarationOf(`./${relative(dir, file)}`));
     mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, code);
     written.push(relative(dir, target));
@@ -81,9 +82,12 @@ export function writeDeclarations(dir: string): string[] {
   return written.sort();
 }
 
-/** The declaration a source's "types" condition names: ./src/a.ts is ./dist/a.d.ts. */
+/**
+ * The declaration a source's "types" condition names: ./src/a.ts is ./dist/a.d.ts, and a source
+ * outside src/ keeps its folder under dist/: ./compiler/a.ts is ./dist/compiler/a.d.ts.
+ */
 function declarationOf(source: string): string {
-  return source.replace(/^\.\/src\//, "./dist/").replace(/\.ts$/, ".d.ts");
+  return source.replace(/^\.\/(?:src\/)?/, "./dist/").replace(/\.ts$/, ".d.ts");
 }
 
 if (import.meta.main) writeDeclarations(process.cwd());

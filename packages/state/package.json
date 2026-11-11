@@ -1,0 +1,406 @@
+{
+  "name": "@reactre/state",
+  "version": "0.0.4",
+  "private": true,
+  "description": "State machines that LLMs write correctly: contracts checked by the type checker and, at build time, by a compiler that leaves only the actor at runtime.",
+  "keywords": [
+    "reactre",
+    "state-machine",
+    "statecharts",
+    "fsm",
+    "actor",
+    "xstate",
+    "typescript",
+    "llm",
+    "compiler",
+    "unplugin",
+    "vite-plugin",
+    "rollup-plugin",
+    "rolldown-plugin",
+    "esbuild-plugin",
+    "webpack-plugin",
+    "rspack-plugin",
+    "bun-plugin",
+    "react"
+  ],
+  "homepage": "https://github.com/arafathusayn/reactre/tree/main/packages/state#readme",
+  "bugs": "https://github.com/arafathusayn/reactre/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/arafathusayn/reactre.git",
+    "directory": "packages/state"
+  },
+  "license": "Apache-2.0",
+  "author": "Arafat Husayn",
+  "type": "module",
+  "sideEffects": [
+    "./plugin/preload.ts",
+    "./dist/plugin/preload.js"
+  ],
+  "exports": {
+    ".": {
+      "reactre-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "bun": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./run": {
+      "reactre-source": "./src/run.ts",
+      "types": "./dist/run.d.ts",
+      "bun": "./src/run.ts",
+      "default": "./dist/run.js"
+    },
+    "./run-nested": {
+      "reactre-source": "./src/run-nested.ts",
+      "types": "./dist/run-nested.d.ts",
+      "bun": "./src/run-nested.ts",
+      "default": "./dist/run-nested.js"
+    },
+    "./tasks": {
+      "reactre-source": "./src/tasks.ts",
+      "types": "./dist/tasks.d.ts",
+      "bun": "./src/tasks.ts",
+      "default": "./dist/tasks.js"
+    },
+    "./dev": {
+      "reactre-source": "./src/dev.ts",
+      "types": "./dist/dev.d.ts",
+      "bun": "./src/dev.ts",
+      "default": "./dist/dev.js"
+    },
+    "./signals": {
+      "reactre-source": "./src/signals.ts",
+      "types": "./dist/signals.d.ts",
+      "bun": "./src/signals.ts",
+      "default": "./dist/signals.js"
+    },
+    "./always": {
+      "reactre-source": "./src/features/always/index.ts",
+      "types": "./dist/features/always/index.d.ts",
+      "bun": "./src/features/always/index.ts",
+      "default": "./dist/features/always/index.js"
+    },
+    "./children": {
+      "reactre-source": "./src/features/children/index.ts",
+      "types": "./dist/features/children/index.d.ts",
+      "bun": "./src/features/children/index.ts",
+      "default": "./dist/features/children/index.js"
+    },
+    "./children/saved": {
+      "reactre-source": "./src/features/children/saved.ts",
+      "types": "./dist/features/children/saved.d.ts",
+      "bun": "./src/features/children/saved.ts",
+      "default": "./dist/features/children/saved.js"
+    },
+    "./choice": {
+      "reactre-source": "./src/features/choice/index.ts",
+      "types": "./dist/features/choice/index.d.ts",
+      "bun": "./src/features/choice/index.ts",
+      "default": "./dist/features/choice/index.js"
+    },
+    "./delays": {
+      "reactre-source": "./src/features/delays/index.ts",
+      "types": "./dist/features/delays/index.d.ts",
+      "bun": "./src/features/delays/index.ts",
+      "default": "./dist/features/delays/index.js"
+    },
+    "./durable": {
+      "reactre-source": "./src/features/durable/index.ts",
+      "types": "./dist/features/durable/index.d.ts",
+      "bun": "./src/features/durable/index.ts",
+      "default": "./dist/features/durable/index.js"
+    },
+    "./effects": {
+      "reactre-source": "./src/features/effects/index.ts",
+      "types": "./dist/features/effects/index.d.ts",
+      "bun": "./src/features/effects/index.ts",
+      "default": "./dist/features/effects/index.js"
+    },
+    "./emit": {
+      "reactre-source": "./src/features/emit/index.ts",
+      "types": "./dist/features/emit/index.d.ts",
+      "bun": "./src/features/emit/index.ts",
+      "default": "./dist/features/emit/index.js"
+    },
+    "./history": {
+      "reactre-source": "./src/features/history/index.ts",
+      "types": "./dist/features/history/index.d.ts",
+      "bun": "./src/features/history/index.ts",
+      "default": "./dist/features/history/index.js"
+    },
+    "./inspect": {
+      "reactre-source": "./src/features/inspect/index.ts",
+      "types": "./dist/features/inspect/index.d.ts",
+      "bun": "./src/features/inspect/index.ts",
+      "default": "./dist/features/inspect/index.js"
+    },
+    "./logic": {
+      "reactre-source": "./src/features/logic/index.ts",
+      "types": "./dist/features/logic/index.d.ts",
+      "bun": "./src/features/logic/index.ts",
+      "default": "./dist/features/logic/index.js"
+    },
+    "./nested": {
+      "reactre-source": "./src/features/nested/index.ts",
+      "types": "./dist/features/nested/index.d.ts",
+      "bun": "./src/features/nested/index.ts",
+      "default": "./dist/features/nested/index.js"
+    },
+    "./output": {
+      "reactre-source": "./src/features/output/index.ts",
+      "types": "./dist/features/output/index.d.ts",
+      "bun": "./src/features/output/index.ts",
+      "default": "./dist/features/output/index.js"
+    },
+    "./parallel": {
+      "reactre-source": "./src/features/parallel/index.ts",
+      "types": "./dist/features/parallel/index.d.ts",
+      "bun": "./src/features/parallel/index.ts",
+      "default": "./dist/features/parallel/index.js"
+    },
+    "./persist": {
+      "reactre-source": "./src/features/persist/index.ts",
+      "types": "./dist/features/persist/index.d.ts",
+      "bun": "./src/features/persist/index.ts",
+      "default": "./dist/features/persist/index.js"
+    },
+    "./provide": {
+      "reactre-source": "./src/features/provide/index.ts",
+      "types": "./dist/features/provide/index.d.ts",
+      "bun": "./src/features/provide/index.ts",
+      "default": "./dist/features/provide/index.js"
+    },
+    "./reenter": {
+      "reactre-source": "./src/features/reenter/index.ts",
+      "types": "./dist/features/reenter/index.d.ts",
+      "bun": "./src/features/reenter/index.ts",
+      "default": "./dist/features/reenter/index.js"
+    },
+    "./route": {
+      "reactre-source": "./src/features/route/index.ts",
+      "types": "./dist/features/route/index.d.ts",
+      "bun": "./src/features/route/index.ts",
+      "default": "./dist/features/route/index.js"
+    },
+    "./spawn": {
+      "reactre-source": "./src/features/spawn/index.ts",
+      "types": "./dist/features/spawn/index.d.ts",
+      "bun": "./src/features/spawn/index.ts",
+      "default": "./dist/features/spawn/index.js"
+    },
+    "./system": {
+      "reactre-source": "./src/features/system/index.ts",
+      "types": "./dist/features/system/index.d.ts",
+      "bun": "./src/features/system/index.ts",
+      "default": "./dist/features/system/index.js"
+    },
+    "./tags": {
+      "reactre-source": "./src/features/tags/index.ts",
+      "types": "./dist/features/tags/index.d.ts",
+      "bun": "./src/features/tags/index.ts",
+      "default": "./dist/features/tags/index.js"
+    },
+    "./timeout": {
+      "reactre-source": "./src/features/timeout/index.ts",
+      "types": "./dist/features/timeout/index.d.ts",
+      "bun": "./src/features/timeout/index.ts",
+      "default": "./dist/features/timeout/index.js"
+    },
+    "./validate": {
+      "reactre-source": "./src/features/validate/index.ts",
+      "types": "./dist/features/validate/index.d.ts",
+      "bun": "./src/features/validate/index.ts",
+      "default": "./dist/features/validate/index.js"
+    },
+    "./wildcards": {
+      "reactre-source": "./src/features/wildcards/index.ts",
+      "types": "./dist/features/wildcards/index.d.ts",
+      "bun": "./src/features/wildcards/index.ts",
+      "default": "./dist/features/wildcards/index.js"
+    },
+    "./delays/saved": {
+      "reactre-source": "./src/features/delays/saved.ts",
+      "types": "./dist/features/delays/saved.d.ts",
+      "bun": "./src/features/delays/saved.ts",
+      "default": "./dist/features/delays/saved.js"
+    },
+    "./durable/children": {
+      "reactre-source": "./src/features/durable/children.ts",
+      "types": "./dist/features/durable/children.d.ts",
+      "bun": "./src/features/durable/children.ts",
+      "default": "./dist/features/durable/children.js"
+    },
+    "./spawn/restore": {
+      "reactre-source": "./src/features/spawn/restore.ts",
+      "types": "./dist/features/spawn/restore.d.ts",
+      "bun": "./src/features/spawn/restore.ts",
+      "default": "./dist/features/spawn/restore.js"
+    },
+    "./validate/decided": {
+      "reactre-source": "./src/features/validate/decided.ts",
+      "types": "./dist/features/validate/decided.d.ts",
+      "bun": "./src/features/validate/decided.ts",
+      "default": "./dist/features/validate/decided.js"
+    },
+    "./serialize": {
+      "reactre-source": "./src/entries/serialize.ts",
+      "types": "./dist/entries/serialize.d.ts",
+      "bun": "./src/entries/serialize.ts",
+      "default": "./dist/entries/serialize.js"
+    },
+    "./scxml": {
+      "reactre-source": "./src/entries/scxml.ts",
+      "types": "./dist/entries/scxml.d.ts",
+      "bun": "./src/entries/scxml.ts",
+      "default": "./dist/entries/scxml.js"
+    },
+    "./graph": {
+      "reactre-source": "./src/entries/graph.ts",
+      "types": "./dist/entries/graph.d.ts",
+      "bun": "./src/entries/graph.ts",
+      "default": "./dist/entries/graph.js"
+    },
+    "./test": {
+      "reactre-source": "./src/entries/test.ts",
+      "types": "./dist/entries/test.d.ts",
+      "bun": "./src/entries/test.ts",
+      "default": "./dist/entries/test.js"
+    },
+    "./react": {
+      "reactre-source": "./src/entries/react.ts",
+      "types": "./dist/entries/react.d.ts",
+      "bun": "./src/entries/react.ts",
+      "default": "./dist/entries/react.js"
+    },
+    "./react/dev": {
+      "reactre-source": "./src/entries/react-dev.ts",
+      "types": "./dist/entries/react-dev.d.ts",
+      "bun": "./src/entries/react-dev.ts",
+      "default": "./dist/entries/react-dev.js"
+    },
+    "./utils": {
+      "reactre-source": "./src/utils/index.ts",
+      "types": "./dist/utils/index.d.ts",
+      "bun": "./src/utils/index.ts",
+      "default": "./dist/utils/index.js"
+    },
+    "./utils/*": {
+      "reactre-source": "./src/utils/*.ts",
+      "types": "./dist/utils/*.d.ts",
+      "bun": "./src/utils/*.ts",
+      "default": "./dist/utils/*.js"
+    },
+    "./codemod": {
+      "reactre-source": "./codemod/index.ts",
+      "types": "./dist/codemod/index.d.ts",
+      "bun": "./codemod/index.ts",
+      "default": "./dist/codemod/index.js"
+    },
+    "./compiler": {
+      "reactre-source": "./compiler/index.ts",
+      "types": "./dist/compiler/index.d.ts",
+      "bun": "./compiler/index.ts",
+      "default": "./dist/compiler/index.js"
+    },
+    "./plugin/vite": {
+      "reactre-source": "./plugin/vite.ts",
+      "types": "./dist/plugin/vite.d.ts",
+      "bun": "./plugin/vite.ts",
+      "default": "./dist/plugin/vite.js"
+    },
+    "./plugin/rollup": {
+      "reactre-source": "./plugin/rollup.ts",
+      "types": "./dist/plugin/rollup.d.ts",
+      "bun": "./plugin/rollup.ts",
+      "default": "./dist/plugin/rollup.js"
+    },
+    "./plugin/rolldown": {
+      "reactre-source": "./plugin/rolldown.ts",
+      "types": "./dist/plugin/rolldown.d.ts",
+      "bun": "./plugin/rolldown.ts",
+      "default": "./dist/plugin/rolldown.js"
+    },
+    "./plugin/esbuild": {
+      "reactre-source": "./plugin/esbuild.ts",
+      "types": "./dist/plugin/esbuild.d.ts",
+      "bun": "./plugin/esbuild.ts",
+      "default": "./dist/plugin/esbuild.js"
+    },
+    "./plugin/webpack": {
+      "reactre-source": "./plugin/webpack.ts",
+      "types": "./dist/plugin/webpack.d.ts",
+      "bun": "./plugin/webpack.ts",
+      "default": "./dist/plugin/webpack.js"
+    },
+    "./plugin/rspack": {
+      "reactre-source": "./plugin/rspack.ts",
+      "types": "./dist/plugin/rspack.d.ts",
+      "bun": "./plugin/rspack.ts",
+      "default": "./dist/plugin/rspack.js"
+    },
+    "./plugin/bun": {
+      "reactre-source": "./plugin/bun.ts",
+      "types": "./dist/plugin/bun.d.ts",
+      "bun": "./plugin/bun.ts",
+      "default": "./dist/plugin/bun.js"
+    },
+    "./plugin/preload": {
+      "reactre-source": "./plugin/preload.ts",
+      "types": "./dist/plugin/preload.d.ts",
+      "bun": "./plugin/preload.ts",
+      "default": "./dist/plugin/preload.js"
+    },
+    "./plugin/runtime": {
+      "reactre-source": "./plugin/runtime.ts",
+      "types": "./dist/plugin/runtime.d.ts",
+      "bun": "./plugin/runtime.ts",
+      "default": "./dist/plugin/runtime.js"
+    }
+  },
+  "files": [
+    "src",
+    "compiler",
+    "plugin",
+    "codemod",
+    "!codemod/tsconfig.json",
+    "dist"
+  ],
+  "scripts": {
+    "build": "bun build.ts && bun ../../scripts/declarations.ts"
+  },
+  "dependencies": {
+    "oxc-parser": "catalog:",
+    "unplugin": "catalog:"
+  },
+  "peerDependencies": {
+    "@reactre/core": "workspace:*",
+    "react": "catalog:"
+  },
+  "peerDependenciesMeta": {
+    "@reactre/core": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@reactre/core": "workspace:*",
+    "bun-types": "catalog:",
+    "esbuild": "catalog:",
+    "react": "catalog:",
+    "rolldown": "catalog:",
+    "vite": "catalog:",
+    "xstate": "catalog:",
+    "xstate6": "npm:xstate@6.0.0-beta.1",
+    "@doeixd/machine": "1.6.0",
+    "@escapace/fsm": "6.1.1",
+    "@stateforward/hsm": "2.0.0",
+    "@xstate/store": "4.3.0",
+    "@zag-js/core": "1.47.0",
+    "jssm": "5.164.1",
+    "robot3": "1.4.0",
+    "typescript-fsm": "1.6.0",
+    "yay-machine": "1.5.0"
+  }
+}
