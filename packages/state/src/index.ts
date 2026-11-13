@@ -1005,8 +1005,8 @@ type Primitive = string | number | boolean | null;
 /**
  * The paths in T that JSON can't hold, that turn checking off, that hold more than they say (a
  * field typed `{}` or `object` accepts a string, an array or a function), or that may be missing
- * (an optional field: `T | null` is a field always there). `Top` is a state's data or a payload
- * itself, which may be `{}` (no fields).
+ * at the top level (workflow fields stay required). Nested JSON objects may have optional
+ * properties and string-keyed records. `Top` may be `{}` (no fields).
  */
 type NotJson<T, P extends string, Top extends boolean = false, Depth extends readonly unknown[] = []> = 0 extends 1 & T
   ? `${P} (any: write the type)`
@@ -1050,25 +1050,33 @@ type NotJsonOf<T, P extends string, Top extends boolean, Depth extends readonly 
                   : `${P} (a tuple: use an array, or an object with named fields)`
               : T extends object
                 ? string extends keyof T
-                  ? `${P} (an index signature: list the fields)`
-                  : [Extract<keyof T, symbol>] extends [never]
-                    ? [keyof T] extends [never]
-                      ? Top extends true
-                        ? never
-                        : `${P} ({} or object: it accepts a string, an array or a function. Write its fields)`
-                      : // Read before the fields: a DOM node's run deep enough that TypeScript gives up (TS2589).
-                        [Methods<T>] extends [never]
-                        ? {
-                            // An optional field is a contract loosened: a handler may leave it
-                            // out, and every reader then checks for it (M307).
-                            [K in keyof T & string]-?: K extends ProtoName
-                              ? `${P}.${K} (a prototype name, which a parsed object can't own as a field: rename it)`
-                              : {} extends Pick<T, K>
-                                ? `${P}.${K} (optional: a handler may leave it out. Make it required, with null for no value: ${K}: T | null)`
-                                : NotJson<T[K], `${P}.${K}`, false, [...Depth, 0]>;
-                          }[keyof T & string]
-                        : `${P} (an object with methods: a class instance, a DOM node, an actor or a Promise, which JSON can't hold. Store plain data: an id, or the fields you need)`
-                    : `${P} (a symbol key, which JSON drops: use a string field)`
+                  ? Top extends true
+                    ? `${P} (an index signature: list the fields)`
+                    : [Extract<keyof T, symbol>] extends [never]
+                      ? NotJson<T[string], `${P}[string]`, false, [...Depth, 0]>
+                      : `${P} (a symbol key, which JSON drops: use a string field)`
+                  : number extends keyof T
+                    ? `${P} (a numeric index signature: use a string-keyed record)`
+                    : [Extract<keyof T, symbol>] extends [never]
+                      ? [keyof T] extends [never]
+                        ? Top extends true
+                          ? never
+                          : `${P} ({} or object: it accepts a string, an array or a function. Write its fields)`
+                        : // Read before the fields: a DOM node's run deep enough that TypeScript gives up (TS2589).
+                          [Methods<T>] extends [never]
+                          ? {
+                              // Workflow fields stay required. Inside a named payload, absent
+                              // properties are JSON; an explicitly undefined value still is not.
+                              [K in keyof T & string]-?: K extends ProtoName
+                                ? `${P}.${K} (a prototype name, which a parsed object can't own as a field: rename it)`
+                                : {} extends Pick<T, K>
+                                  ? Top extends true
+                                    ? `${P}.${K} (optional: a handler may leave it out. Make it required, with null for no value: ${K}: T | null)`
+                                    : NotJson<Required<Pick<T, K>>[K], `${P}.${K}`, false, [...Depth, 0]>
+                                  : NotJson<T[K], `${P}.${K}`, false, [...Depth, 0]>;
+                            }[keyof T & string]
+                          : `${P} (an object with methods: a class instance, a DOM node, an actor or a Promise, which JSON can't hold. Store plain data: an id, or the fields you need)`
+                      : `${P} (a symbol key, which JSON drops: use a string field)`
                 : `${P}`;
 
 /** The keys of T whose values are functions: an object that has any isn't plain data. */
