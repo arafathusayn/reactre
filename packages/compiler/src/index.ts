@@ -267,8 +267,8 @@ export function reactreCompiler(options: ReactreCompilerOptions = {}): BunPlugin
             analysisError = error;
             return null;
           });
-          const result = await program;
-          if (options.async === undefined) keep = Promise.resolve(result === null || seen.async);
+          await program;
+          if (options.async === undefined) keep = Promise.resolve(seen.async);
         });
       // Bun does not reliably turn a rejected onStart callback into a failed build. Surface
       // analysis errors through onLoad, including entries outside the compilation filter.

@@ -148,9 +148,9 @@ accept `Host.onDiagnostic`.
 
 Diagnostics include `code`, `importer`, optional `specifier`, and an actionable
 `message`. Without a callback the Bun plugin warns; its default still compiles TSX
-with conservative per-file facts if analysis is incomplete. In that case it retains
-the async runtime unless explicitly overridden, because unseen modules might need
-it. `analysis.strict` rejects unreadable modules, unresolved imports and opaque
+with conservative per-file facts if analysis is incomplete. Runtime selection keeps
+its existing behavior: an async feature hidden from analysis requires `async: true`.
+`analysis.strict` rejects unreadable modules, unresolved imports and opaque
 imports such as `import(expression)`. It requires `Bun.build` with `wholeProgram`
 enabled. A late module still cannot invalidate facts already used by another file.
 HTML entry scripts are already supported and use the same host.

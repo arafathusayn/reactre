@@ -6,7 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { type AnalysisDiagnostic, reactreCompiler, transpileSource } from "../src/index.ts";
 import { analyze, type Host } from "../src/program.ts";
 
-const dir = mkdtempSync(join(tmpdir(), "reactre-analysis-host-"));
+const dir = mkdtempSync(join(tmpdir(), "reactre-plugin-analysis-host-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 const file = (name: string, source: string) => {
   const path = join(dir, name);
