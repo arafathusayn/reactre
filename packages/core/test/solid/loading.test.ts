@@ -622,6 +622,8 @@ describe("web/test/loading.spec.tsx", () => {
 
     test("latest preserves sibling async text in Loading fragments", async () => {
       const div = new FakeElement("DIV");
+      // Control the two completions separately: a loaded CI runner may overshoot both timers.
+      const gates = { first: deferred<void>(), second: deferred<void>() };
       const api = run<Api>(
         `
         import { attach, signal } from "@reactre/core";
@@ -632,12 +634,12 @@ describe("web/test/loading.spec.tsx", () => {
           setOg = _setOg;
           const derived1 = memo(async () => {
             const o = og() + 1;
-            await new Promise((res) => setTimeout(res, 10));
+            await api.gates.first.p;
             return o;
           });
           const derived2 = memo(async () => {
             const o = derived1() + 1;
-            await new Promise((res) => setTimeout(res, 10));
+            await api.gates.second.p;
             return o;
           });
           readDirect = derived2;
@@ -646,24 +648,27 @@ describe("web/test/loading.spec.tsx", () => {
         return { setOg: (f) => setOg(f), readDirect: () => readDirect(), disposer };
       `,
         div,
+        { gates },
       );
       flush();
       expect(div.textContent).toBe("Loading...");
-      await tick(12);
-      flush();
+      gates.first.ok();
+      await settle();
       expect(div.textContent).toBe("Loading...");
-      await tick(12);
-      flush();
+      gates.second.ok();
+      await settle();
       expect(api["readDirect"]!()).toBe(555);
       expect(div.textContent).toBe("a. 555 b. 555");
+      gates.first = deferred<void>();
+      gates.second = deferred<void>();
       api["setOg"]!(((x: number) => x + 1) as never);
       flush();
       expect(div.textContent).toBe("a. 555 b. 555");
-      await tick(12);
-      flush();
+      gates.first.ok();
+      await settle();
       expect(div.textContent).toBe("a. 555 b. 555");
-      await tick(12);
-      flush();
+      gates.second.ok();
+      await settle();
       expect(div.textContent).toBe("a. 556 b. 556");
       api["disposer"]!();
     });
