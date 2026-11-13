@@ -68,6 +68,12 @@
       "bun": "./src/dev.ts",
       "default": "./dist/dev.js"
     },
+    "./data": {
+      "reactre-source": "./src/data.ts",
+      "types": "./dist/data.d.ts",
+      "bun": "./src/data.ts",
+      "default": "./dist/data.js"
+    },
     "./signals": {
       "reactre-source": "./src/signals.ts",
       "types": "./dist/signals.d.ts",

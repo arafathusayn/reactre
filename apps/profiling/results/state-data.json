@@ -1,0 +1,166 @@
+{
+  "environment": {
+    "bun": "1.4.4",
+    "os": "darwin",
+    "release": "27.2.0",
+    "cpu": "Apple M5 Pro",
+    "revision": "d9a63944c77e01fe76f3f0499f1400f1864c421e",
+    "dirty": ""
+  },
+  "results": [
+    {
+      "count": 10,
+      "iteration": 1,
+      "name": "encoded",
+      "loops": 2000,
+      "ms": 10.529541,
+      "retainedBytes": 138546,
+      "serializedBytes": 1472,
+      "retainedCount": 50
+    },
+    {
+      "count": 10,
+      "iteration": 1,
+      "name": "structural",
+      "loops": 2000,
+      "ms": 6.7023340000000005,
+      "retainedBytes": 94432,
+      "serializedBytes": 418,
+      "retainedCount": 50
+    },
+    {
+      "count": 10,
+      "iteration": 2,
+      "name": "structural",
+      "loops": 2000,
+      "ms": 6.0567910000000005,
+      "retainedBytes": 94048,
+      "serializedBytes": 418,
+      "retainedCount": 50
+    },
+    {
+      "count": 10,
+      "iteration": 2,
+      "name": "encoded",
+      "loops": 2000,
+      "ms": 9.441874999999996,
+      "retainedBytes": 137314,
+      "serializedBytes": 1472,
+      "retainedCount": 50
+    },
+    {
+      "count": 10,
+      "iteration": 3,
+      "name": "encoded",
+      "loops": 2000,
+      "ms": 9.488791999999997,
+      "retainedBytes": 137314,
+      "serializedBytes": 1472,
+      "retainedCount": 50
+    },
+    {
+      "count": 10,
+      "iteration": 3,
+      "name": "structural",
+      "loops": 2000,
+      "ms": 5.948915999999997,
+      "retainedBytes": 94048,
+      "serializedBytes": 418,
+      "retainedCount": 50
+    },
+    {
+      "count": 500,
+      "iteration": 1,
+      "name": "encoded",
+      "loops": 100,
+      "ms": 25.874667000000002,
+      "retainedBytes": 7559678,
+      "serializedBytes": 71427,
+      "retainedCount": 50
+    },
+    {
+      "count": 500,
+      "iteration": 1,
+      "name": "structural",
+      "loops": 100,
+      "ms": 15.655167000000006,
+      "retainedBytes": 5099648,
+      "serializedBytes": 21553,
+      "retainedCount": 50
+    },
+    {
+      "count": 500,
+      "iteration": 2,
+      "name": "structural",
+      "loops": 100,
+      "ms": 15.289582999999993,
+      "retainedBytes": 5099648,
+      "serializedBytes": 21553,
+      "retainedCount": 50
+    },
+    {
+      "count": 500,
+      "iteration": 2,
+      "name": "encoded",
+      "loops": 100,
+      "ms": 25.155416000000002,
+      "retainedBytes": 7560218,
+      "serializedBytes": 71427,
+      "retainedCount": 50
+    },
+    {
+      "count": 500,
+      "iteration": 3,
+      "name": "encoded",
+      "loops": 100,
+      "ms": 25.91737500000002,
+      "retainedBytes": 7560218,
+      "serializedBytes": 71427,
+      "retainedCount": 50
+    },
+    {
+      "count": 500,
+      "iteration": 3,
+      "name": "structural",
+      "loops": 100,
+      "ms": 15.573666000000003,
+      "retainedBytes": 5099648,
+      "serializedBytes": 21553,
+      "retainedCount": 50
+    }
+  ],
+  "summary": [
+    {
+      "count": 10,
+      "name": "encoded",
+      "medianMs": 0.004744395999999998,
+      "minMs": 0.004720937499999998,
+      "maxMs": 0.0052647705,
+      "medianRetainedBytes": 137314
+    },
+    {
+      "count": 10,
+      "name": "structural",
+      "medianMs": 0.0030283955000000003,
+      "minMs": 0.0029744579999999984,
+      "maxMs": 0.0033511670000000004,
+      "medianRetainedBytes": 94048
+    },
+    {
+      "count": 500,
+      "name": "encoded",
+      "medianMs": 0.25874667,
+      "minMs": 0.25155416,
+      "maxMs": 0.2591737500000002,
+      "medianRetainedBytes": 7560218
+    },
+    {
+      "count": 500,
+      "name": "structural",
+      "medianMs": 0.15573666000000003,
+      "minMs": 0.15289582999999993,
+      "maxMs": 0.15655167000000006,
+      "medianRetainedBytes": 5099648
+    }
+  ]
+}
