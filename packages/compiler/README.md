@@ -98,3 +98,11 @@ For Vite, Rollup, Rolldown, esbuild, webpack or Rspack, use [`@reactre/plugin`](
 ## License
 
 Apache-2.0
+
+A complete untagged template-string child is known to produce text. If its inputs
+are static according to the same dependency analysis used for other text holes,
+it compiles as a template text hole even when it mentions an imported value.
+Same-key list updates still compare/write its content. Expressions that may react
+retain their slots and per-run resource cleanup. Tagged templates and larger
+expressions that can return nodes are unchanged. See the controlled measurements
+in [template-content.md](../../apps/profiling/results/template-content.md).

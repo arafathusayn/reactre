@@ -1,0 +1,791 @@
+{
+  "environment": {
+    "bun": "1.4.4",
+    "chrome": "Chrome/157.0.8103.78",
+    "os": "darwin",
+    "release": "27.2.0",
+    "cpu": "Apple M5 Pro",
+    "throttle": 1,
+    "viewport": [1280, 800],
+    "rows": 500,
+    "warmups": 20,
+    "base": "b272eed",
+    "head": "3e2c3709ddd5451b218bc27cd65a3d36ed468edd",
+    "dirty": "",
+    "profiled": false
+  },
+  "results": [
+    {
+      "iteration": 1,
+      "side": "base",
+      "mode": "plain",
+      "operation": "mount-dispose",
+      "cycles": 100,
+      "ms": 48.5
+    },
+    {
+      "iteration": 1,
+      "side": "base",
+      "mode": "plain",
+      "operation": "switch",
+      "cycles": 100,
+      "ms": 48.200000047683716
+    },
+    {
+      "iteration": 1,
+      "side": "base",
+      "mode": "plain",
+      "operation": "update",
+      "cycles": 100,
+      "ms": 40.200000047683716
+    },
+    {
+      "iteration": 1,
+      "side": "base",
+      "mode": "plain",
+      "operation": "signal",
+      "cycles": 100,
+      "ms": 6.199999928474426
+    },
+    {
+      "iteration": 1,
+      "side": "base",
+      "mode": "nested",
+      "operation": "mount-dispose",
+      "cycles": 100,
+      "ms": 65.39999997615814
+    },
+    {
+      "iteration": 1,
+      "side": "base",
+      "mode": "nested",
+      "operation": "switch",
+      "cycles": 100,
+      "ms": 67
+    },
+    {
+      "iteration": 1,
+      "side": "base",
+      "mode": "nested",
+      "operation": "update",
+      "cycles": 100,
+      "ms": 57.699999928474426
+    },
+    {
+      "iteration": 1,
+      "side": "base",
+      "mode": "nested",
+      "operation": "signal",
+      "cycles": 100,
+      "ms": 6.299999952316284
+    },
+    {
+      "iteration": 1,
+      "side": "base",
+      "mode": "text",
+      "operation": "mount-dispose",
+      "cycles": 100,
+      "ms": 54.89999997615814
+    },
+    {
+      "iteration": 1,
+      "side": "base",
+      "mode": "text",
+      "operation": "switch",
+      "cycles": 100,
+      "ms": 55
+    },
+    {
+      "iteration": 1,
+      "side": "base",
+      "mode": "text",
+      "operation": "update",
+      "cycles": 100,
+      "ms": 55.10000002384186
+    },
+    {
+      "iteration": 1,
+      "side": "base",
+      "mode": "text",
+      "operation": "signal",
+      "cycles": 100,
+      "ms": 6.300000071525574
+    },
+    {
+      "iteration": 1,
+      "side": "head",
+      "mode": "plain",
+      "operation": "mount-dispose",
+      "cycles": 100,
+      "ms": 47.5
+    },
+    {
+      "iteration": 1,
+      "side": "head",
+      "mode": "plain",
+      "operation": "switch",
+      "cycles": 100,
+      "ms": 46.299999952316284
+    },
+    {
+      "iteration": 1,
+      "side": "head",
+      "mode": "plain",
+      "operation": "update",
+      "cycles": 100,
+      "ms": 40.5
+    },
+    {
+      "iteration": 1,
+      "side": "head",
+      "mode": "plain",
+      "operation": "signal",
+      "cycles": 100,
+      "ms": 6.200000047683716
+    },
+    {
+      "iteration": 1,
+      "side": "head",
+      "mode": "nested",
+      "operation": "mount-dispose",
+      "cycles": 100,
+      "ms": 66
+    },
+    {
+      "iteration": 1,
+      "side": "head",
+      "mode": "nested",
+      "operation": "switch",
+      "cycles": 100,
+      "ms": 65.89999997615814
+    },
+    {
+      "iteration": 1,
+      "side": "head",
+      "mode": "nested",
+      "operation": "update",
+      "cycles": 100,
+      "ms": 58.39999997615814
+    },
+    {
+      "iteration": 1,
+      "side": "head",
+      "mode": "nested",
+      "operation": "signal",
+      "cycles": 100,
+      "ms": 6.199999928474426
+    },
+    {
+      "iteration": 1,
+      "side": "head",
+      "mode": "text",
+      "operation": "mount-dispose",
+      "cycles": 100,
+      "ms": 46.700000047683716
+    },
+    {
+      "iteration": 1,
+      "side": "head",
+      "mode": "text",
+      "operation": "switch",
+      "cycles": 100,
+      "ms": 46.700000047683716
+    },
+    {
+      "iteration": 1,
+      "side": "head",
+      "mode": "text",
+      "operation": "update",
+      "cycles": 100,
+      "ms": 44.60000002384186
+    },
+    {
+      "iteration": 1,
+      "side": "head",
+      "mode": "text",
+      "operation": "signal",
+      "cycles": 100,
+      "ms": 6.100000023841858
+    },
+    {
+      "iteration": 2,
+      "side": "head",
+      "mode": "plain",
+      "operation": "mount-dispose",
+      "cycles": 100,
+      "ms": 46.800000071525574
+    },
+    {
+      "iteration": 2,
+      "side": "head",
+      "mode": "plain",
+      "operation": "switch",
+      "cycles": 100,
+      "ms": 46.5
+    },
+    {
+      "iteration": 2,
+      "side": "head",
+      "mode": "plain",
+      "operation": "update",
+      "cycles": 100,
+      "ms": 38.700000047683716
+    },
+    {
+      "iteration": 2,
+      "side": "head",
+      "mode": "plain",
+      "operation": "signal",
+      "cycles": 100,
+      "ms": 6.300000071525574
+    },
+    {
+      "iteration": 2,
+      "side": "head",
+      "mode": "nested",
+      "operation": "mount-dispose",
+      "cycles": 100,
+      "ms": 66
+    },
+    {
+      "iteration": 2,
+      "side": "head",
+      "mode": "nested",
+      "operation": "switch",
+      "cycles": 100,
+      "ms": 67.10000002384186
+    },
+    {
+      "iteration": 2,
+      "side": "head",
+      "mode": "nested",
+      "operation": "update",
+      "cycles": 100,
+      "ms": 60.59999990463257
+    },
+    {
+      "iteration": 2,
+      "side": "head",
+      "mode": "nested",
+      "operation": "signal",
+      "cycles": 100,
+      "ms": 6.400000095367432
+    },
+    {
+      "iteration": 2,
+      "side": "head",
+      "mode": "text",
+      "operation": "mount-dispose",
+      "cycles": 100,
+      "ms": 47.5
+    },
+    {
+      "iteration": 2,
+      "side": "head",
+      "mode": "text",
+      "operation": "switch",
+      "cycles": 100,
+      "ms": 46.59999990463257
+    },
+    {
+      "iteration": 2,
+      "side": "head",
+      "mode": "text",
+      "operation": "update",
+      "cycles": 100,
+      "ms": 43.299999952316284
+    },
+    {
+      "iteration": 2,
+      "side": "head",
+      "mode": "text",
+      "operation": "signal",
+      "cycles": 100,
+      "ms": 6
+    },
+    {
+      "iteration": 2,
+      "side": "base",
+      "mode": "plain",
+      "operation": "mount-dispose",
+      "cycles": 100,
+      "ms": 47.199999928474426
+    },
+    {
+      "iteration": 2,
+      "side": "base",
+      "mode": "plain",
+      "operation": "switch",
+      "cycles": 100,
+      "ms": 45.89999997615814
+    },
+    {
+      "iteration": 2,
+      "side": "base",
+      "mode": "plain",
+      "operation": "update",
+      "cycles": 100,
+      "ms": 37.199999928474426
+    },
+    {
+      "iteration": 2,
+      "side": "base",
+      "mode": "plain",
+      "operation": "signal",
+      "cycles": 100,
+      "ms": 6.100000023841858
+    },
+    {
+      "iteration": 2,
+      "side": "base",
+      "mode": "nested",
+      "operation": "mount-dispose",
+      "cycles": 100,
+      "ms": 64.90000009536743
+    },
+    {
+      "iteration": 2,
+      "side": "base",
+      "mode": "nested",
+      "operation": "switch",
+      "cycles": 100,
+      "ms": 66.80000007152557
+    },
+    {
+      "iteration": 2,
+      "side": "base",
+      "mode": "nested",
+      "operation": "update",
+      "cycles": 100,
+      "ms": 57.60000002384186
+    },
+    {
+      "iteration": 2,
+      "side": "base",
+      "mode": "nested",
+      "operation": "signal",
+      "cycles": 100,
+      "ms": 6
+    },
+    {
+      "iteration": 2,
+      "side": "base",
+      "mode": "text",
+      "operation": "mount-dispose",
+      "cycles": 100,
+      "ms": 56.09999990463257
+    },
+    {
+      "iteration": 2,
+      "side": "base",
+      "mode": "text",
+      "operation": "switch",
+      "cycles": 100,
+      "ms": 59.10000002384186
+    },
+    {
+      "iteration": 2,
+      "side": "base",
+      "mode": "text",
+      "operation": "update",
+      "cycles": 100,
+      "ms": 57.200000047683716
+    },
+    {
+      "iteration": 2,
+      "side": "base",
+      "mode": "text",
+      "operation": "signal",
+      "cycles": 100,
+      "ms": 6.100000023841858
+    },
+    {
+      "iteration": 3,
+      "side": "base",
+      "mode": "plain",
+      "operation": "mount-dispose",
+      "cycles": 100,
+      "ms": 48.199999928474426
+    },
+    {
+      "iteration": 3,
+      "side": "base",
+      "mode": "plain",
+      "operation": "switch",
+      "cycles": 100,
+      "ms": 47.10000002384186
+    },
+    {
+      "iteration": 3,
+      "side": "base",
+      "mode": "plain",
+      "operation": "update",
+      "cycles": 100,
+      "ms": 40.39999997615814
+    },
+    {
+      "iteration": 3,
+      "side": "base",
+      "mode": "plain",
+      "operation": "signal",
+      "cycles": 100,
+      "ms": 6.200000047683716
+    },
+    {
+      "iteration": 3,
+      "side": "base",
+      "mode": "nested",
+      "operation": "mount-dispose",
+      "cycles": 100,
+      "ms": 98.80000007152557
+    },
+    {
+      "iteration": 3,
+      "side": "base",
+      "mode": "nested",
+      "operation": "switch",
+      "cycles": 100,
+      "ms": 70.09999990463257
+    },
+    {
+      "iteration": 3,
+      "side": "base",
+      "mode": "nested",
+      "operation": "update",
+      "cycles": 100,
+      "ms": 60.5
+    },
+    {
+      "iteration": 3,
+      "side": "base",
+      "mode": "nested",
+      "operation": "signal",
+      "cycles": 100,
+      "ms": 6.100000023841858
+    },
+    {
+      "iteration": 3,
+      "side": "base",
+      "mode": "text",
+      "operation": "mount-dispose",
+      "cycles": 100,
+      "ms": 60.60000002384186
+    },
+    {
+      "iteration": 3,
+      "side": "base",
+      "mode": "text",
+      "operation": "switch",
+      "cycles": 100,
+      "ms": 56.799999952316284
+    },
+    {
+      "iteration": 3,
+      "side": "base",
+      "mode": "text",
+      "operation": "update",
+      "cycles": 100,
+      "ms": 59.10000002384186
+    },
+    {
+      "iteration": 3,
+      "side": "base",
+      "mode": "text",
+      "operation": "signal",
+      "cycles": 100,
+      "ms": 6
+    },
+    {
+      "iteration": 3,
+      "side": "head",
+      "mode": "plain",
+      "operation": "mount-dispose",
+      "cycles": 100,
+      "ms": 48
+    },
+    {
+      "iteration": 3,
+      "side": "head",
+      "mode": "plain",
+      "operation": "switch",
+      "cycles": 100,
+      "ms": 47.10000002384186
+    },
+    {
+      "iteration": 3,
+      "side": "head",
+      "mode": "plain",
+      "operation": "update",
+      "cycles": 100,
+      "ms": 38.10000002384186
+    },
+    {
+      "iteration": 3,
+      "side": "head",
+      "mode": "plain",
+      "operation": "signal",
+      "cycles": 100,
+      "ms": 6
+    },
+    {
+      "iteration": 3,
+      "side": "head",
+      "mode": "nested",
+      "operation": "mount-dispose",
+      "cycles": 100,
+      "ms": 65.89999997615814
+    },
+    {
+      "iteration": 3,
+      "side": "head",
+      "mode": "nested",
+      "operation": "switch",
+      "cycles": 100,
+      "ms": 67.10000002384186
+    },
+    {
+      "iteration": 3,
+      "side": "head",
+      "mode": "nested",
+      "operation": "update",
+      "cycles": 100,
+      "ms": 58.799999952316284
+    },
+    {
+      "iteration": 3,
+      "side": "head",
+      "mode": "nested",
+      "operation": "signal",
+      "cycles": 100,
+      "ms": 6
+    },
+    {
+      "iteration": 3,
+      "side": "head",
+      "mode": "text",
+      "operation": "mount-dispose",
+      "cycles": 100,
+      "ms": 47.5
+    },
+    {
+      "iteration": 3,
+      "side": "head",
+      "mode": "text",
+      "operation": "switch",
+      "cycles": 100,
+      "ms": 49.10000002384186
+    },
+    {
+      "iteration": 3,
+      "side": "head",
+      "mode": "text",
+      "operation": "update",
+      "cycles": 100,
+      "ms": 46.800000071525574
+    },
+    {
+      "iteration": 3,
+      "side": "head",
+      "mode": "text",
+      "operation": "signal",
+      "cycles": 100,
+      "ms": 6.199999928474426
+    }
+  ],
+  "summary": [
+    {
+      "mode": "plain",
+      "operation": "mount-dispose",
+      "side": "base",
+      "medianMs": 48.199999928474426,
+      "minMs": 47.199999928474426,
+      "maxMs": 48.5
+    },
+    {
+      "mode": "plain",
+      "operation": "mount-dispose",
+      "side": "head",
+      "medianMs": 47.5,
+      "minMs": 46.800000071525574,
+      "maxMs": 48
+    },
+    {
+      "mode": "plain",
+      "operation": "switch",
+      "side": "base",
+      "medianMs": 47.10000002384186,
+      "minMs": 45.89999997615814,
+      "maxMs": 48.200000047683716
+    },
+    {
+      "mode": "plain",
+      "operation": "switch",
+      "side": "head",
+      "medianMs": 46.5,
+      "minMs": 46.299999952316284,
+      "maxMs": 47.10000002384186
+    },
+    {
+      "mode": "plain",
+      "operation": "update",
+      "side": "base",
+      "medianMs": 40.200000047683716,
+      "minMs": 37.199999928474426,
+      "maxMs": 40.39999997615814
+    },
+    {
+      "mode": "plain",
+      "operation": "update",
+      "side": "head",
+      "medianMs": 38.700000047683716,
+      "minMs": 38.10000002384186,
+      "maxMs": 40.5
+    },
+    {
+      "mode": "plain",
+      "operation": "signal",
+      "side": "base",
+      "medianMs": 6.199999928474426,
+      "minMs": 6.100000023841858,
+      "maxMs": 6.200000047683716
+    },
+    {
+      "mode": "plain",
+      "operation": "signal",
+      "side": "head",
+      "medianMs": 6.200000047683716,
+      "minMs": 6,
+      "maxMs": 6.300000071525574
+    },
+    {
+      "mode": "nested",
+      "operation": "mount-dispose",
+      "side": "base",
+      "medianMs": 65.39999997615814,
+      "minMs": 64.90000009536743,
+      "maxMs": 98.80000007152557
+    },
+    {
+      "mode": "nested",
+      "operation": "mount-dispose",
+      "side": "head",
+      "medianMs": 66,
+      "minMs": 65.89999997615814,
+      "maxMs": 66
+    },
+    {
+      "mode": "nested",
+      "operation": "switch",
+      "side": "base",
+      "medianMs": 67,
+      "minMs": 66.80000007152557,
+      "maxMs": 70.09999990463257
+    },
+    {
+      "mode": "nested",
+      "operation": "switch",
+      "side": "head",
+      "medianMs": 67.10000002384186,
+      "minMs": 65.89999997615814,
+      "maxMs": 67.10000002384186
+    },
+    {
+      "mode": "nested",
+      "operation": "update",
+      "side": "base",
+      "medianMs": 57.699999928474426,
+      "minMs": 57.60000002384186,
+      "maxMs": 60.5
+    },
+    {
+      "mode": "nested",
+      "operation": "update",
+      "side": "head",
+      "medianMs": 58.799999952316284,
+      "minMs": 58.39999997615814,
+      "maxMs": 60.59999990463257
+    },
+    {
+      "mode": "nested",
+      "operation": "signal",
+      "side": "base",
+      "medianMs": 6.100000023841858,
+      "minMs": 6,
+      "maxMs": 6.299999952316284
+    },
+    {
+      "mode": "nested",
+      "operation": "signal",
+      "side": "head",
+      "medianMs": 6.199999928474426,
+      "minMs": 6,
+      "maxMs": 6.400000095367432
+    },
+    {
+      "mode": "text",
+      "operation": "mount-dispose",
+      "side": "base",
+      "medianMs": 56.09999990463257,
+      "minMs": 54.89999997615814,
+      "maxMs": 60.60000002384186
+    },
+    {
+      "mode": "text",
+      "operation": "mount-dispose",
+      "side": "head",
+      "medianMs": 47.5,
+      "minMs": 46.700000047683716,
+      "maxMs": 47.5
+    },
+    {
+      "mode": "text",
+      "operation": "switch",
+      "side": "base",
+      "medianMs": 56.799999952316284,
+      "minMs": 55,
+      "maxMs": 59.10000002384186
+    },
+    {
+      "mode": "text",
+      "operation": "switch",
+      "side": "head",
+      "medianMs": 46.700000047683716,
+      "minMs": 46.59999990463257,
+      "maxMs": 49.10000002384186
+    },
+    {
+      "mode": "text",
+      "operation": "update",
+      "side": "base",
+      "medianMs": 57.200000047683716,
+      "minMs": 55.10000002384186,
+      "maxMs": 59.10000002384186
+    },
+    {
+      "mode": "text",
+      "operation": "update",
+      "side": "head",
+      "medianMs": 44.60000002384186,
+      "minMs": 43.299999952316284,
+      "maxMs": 46.800000071525574
+    },
+    {
+      "mode": "text",
+      "operation": "signal",
+      "side": "base",
+      "medianMs": 6.100000023841858,
+      "minMs": 6,
+      "maxMs": 6.300000071525574
+    },
+    {
+      "mode": "text",
+      "operation": "signal",
+      "side": "head",
+      "medianMs": 6.100000023841858,
+      "minMs": 6,
+      "maxMs": 6.199999928474426
+    }
+  ],
+  "profiles": [],
+  "fixture": "import { attach, For, onCleanup, Show, signal } from \"@reactre/core\";\n\nimport { labels } from \"./mount-data.ts\";\n\ntype Item = { id: number; label: string; kind: \"plain\" | \"alternate\" };\nconst items: Item[] = Array.from({ length: 500 }, (_, id) => ({\n  id,\n  label: `row ${id}`,\n  kind: id % 2 ? \"plain\" : \"alternate\",\n}));\nlet cleaned = 0;\nfunction Resource() {\n  onCleanup(() => cleaned++);\n  return <em>resource</em>;\n}\nexport function mount(root: Element, mode: string) {\n  const [rows, setRows] = signal(items);\n  const [shown, setShown] = signal(true);\n  const [count, setCount] = signal(0);\n  const dispose = attach(\n    () => (\n      <main>\n        <Show when={shown()}>\n          <ul>\n            <For each={rows()} key={(row) => row.id}>\n              {(row) => (\n                <li>\n                  {mode === \"nested\" ? (\n                    row.kind === \"plain\" ? (\n                      <span>\n                        {row.label}\n                        <Resource />\n                      </span>\n                    ) : (\n                      <i>\n                        {row.label}\n                        <Resource />\n                      </i>\n                    )\n                  ) : mode === \"text\" ? (\n                    <span>{`${labels[row.kind]}: ${row.label}`}</span>\n                  ) : (\n                    <span>{row.label}</span>\n                  )}\n                  <b>{count()}</b>\n                </li>\n              )}\n            </For>\n          </ul>\n        </Show>\n      </main>\n    ),\n    root,\n  );\n  return {\n    update() {\n      setRows(rows().map((r) => ({ ...r, label: r.label + \"!\", kind: r.kind === \"plain\" ? \"alternate\" : \"plain\" })));\n    },\n    switch() {\n      setShown(false);\n      setShown(true);\n    },\n    signal() {\n      setCount(count() + 1);\n    },\n    dispose,\n  };\n}\nexport function exercise(mode: string, operation: string, cycles: number): number {\n  const root = document.createElement(\"div\");\n  document.body.append(root);\n  const app = mount(root, mode);\n  const before = cleaned;\n  const start = performance.now();\n  for (let i = 0; i < cycles; i++) {\n    if (operation === \"mount-dispose\") {\n      const another = document.createElement(\"div\");\n      const mounted = mount(another, mode);\n      mounted.dispose();\n    } else if (operation === \"switch\") app.switch();\n    else if (operation === \"update\") app.update();\n    else app.signal();\n  }\n  const ms = performance.now() - start;\n  if (root.querySelectorAll(\"li\").length !== 500) throw new Error(\"lost rows\");\n  app.dispose();\n  if (root.textContent !== \"\") throw new Error(\"disposal left content\");\n  if (mode === \"nested\" && cleaned <= before) throw new Error(\"missing resource cleanup\");\n  root.remove();\n  return ms;\n}\n"
+}
