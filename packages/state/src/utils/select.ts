@@ -26,13 +26,17 @@ export function select<D extends Shape, T>(
 ): Selection<T> {
   let seen = actor.snapshot();
   let value = selector(seen);
+  let revision = 0;
   /** The value for the actor's snapshot now: recomputed only when the snapshot changed. */
   const get = (): T => {
     const s = actor.snapshot();
     if (s !== seen) {
       seen = s;
       const next = selector(s);
-      if (!compare(value, next)) value = next;
+      if (!compare(value, next)) {
+        value = next;
+        revision++;
+      }
     }
     return value;
   };
@@ -40,11 +44,15 @@ export function select<D extends Shape, T>(
     get,
     subscribe: (listener) => {
       let last = get();
+      let told = revision;
       return actor.subscribe(() => {
         const next = get();
         // Delivery follows the supplied comparison, including Object.is's NaN/signed-zero
         // behavior and comparators that deliberately report identical values as changed.
-        if (!compare(last, next)) listener((last = next));
+        if (told !== revision) {
+          told = revision;
+          if (!compare(last, next)) listener((last = next));
+        }
       });
     },
   };

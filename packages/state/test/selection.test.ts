@@ -74,6 +74,24 @@ test("shared selection caches work, retains equal objects, and keeps subscribers
   actor.stop();
 });
 
+test("a comparator-rejected value cannot notify by comparing the retained value again", () => {
+  const actor = createActor(machine);
+  // A deliberately non-reflexive comparison: changes are equal, repetitions are not.
+  const selected = select(
+    actor,
+    (s) => (s.state === "on" ? 1 : 0),
+    (a, b) => a !== b,
+  );
+  const seen: number[] = [];
+  selected.subscribe((n) => seen.push(n));
+  actor.send({ type: "flip" });
+  expect(selected.get()).toBe(0);
+  expect(seen).toEqual([]);
+  actor.send({ type: "flip" });
+  expect(seen).toEqual([0]);
+  actor.stop();
+});
+
 // The documented composition: the wrapper preserves select's equality semantics, which can
 // differ from core signal's ===. Function-valued selections remain values, never updater calls.
 function observe<T>(selection: Selection<T>): () => T {
