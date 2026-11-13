@@ -523,7 +523,11 @@ class Effect implements Observer {
     for (let i = 0; i < ss.length; i++) {
       const subs = ss[i]!.subs,
         j = subs.indexOf(this);
-      if (j >= 0) subs.splice(j, 1);
+      if (j >= 0) {
+        // The last subscriber needs no shifting or discarded splice result array.
+        if (j === subs.length - 1) subs.pop();
+        else subs.splice(j, 1);
+      }
     }
     this.sources = [];
   }
@@ -1678,7 +1682,10 @@ class RowObserver implements Observer {
   drop(): void {
     for (const s of this.sources) {
       const j = s.subs.indexOf(this);
-      if (j >= 0) s.subs.splice(j, 1);
+      if (j >= 0) {
+        if (j === s.subs.length - 1) s.subs.pop();
+        else s.subs.splice(j, 1);
+      }
     }
     this.sources = [];
   }

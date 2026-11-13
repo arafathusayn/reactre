@@ -22,6 +22,42 @@ test("@reactre/core leaves dynamic() to @reactre/core/features/dynamic, and keep
 });
 
 describe("createRoot", () => {
+  test("removing last and middle subscribers preserves order through reruns and remounts", () => {
+    const [read, write] = signal(0);
+    const log: string[] = [];
+    const mount = (name: string) =>
+      createRoot((dispose) => {
+        effect(() => {
+          log.push(`${name}:${read()}`);
+        });
+        return dispose;
+      });
+    const a = mount("a"),
+      b = mount("b"),
+      c = mount("c");
+    log.length = 0;
+    c();
+    write(1);
+    expect(log).toEqual(["a:1", "b:1"]);
+    const d = mount("d");
+    b();
+    log.length = 0;
+    batch(() => {
+      write(2);
+      write(3);
+    });
+    expect(log).toEqual(["a:3", "d:3"]);
+    a();
+    d();
+    log.length = 0;
+    write(4);
+    expect(log).toEqual([]);
+    const e = mount("e");
+    write(5);
+    expect(log).toEqual(["e:4", "e:5"]);
+    e();
+  });
+
   test("its dispose stops what fn made, deepest first; fn is untracked and its result returned", () => {
     const [n, setN] = signal(0);
     const log: string[] = [];

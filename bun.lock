@@ -35,6 +35,7 @@
       "name": "profiling",
       "dependencies": {
         "@reactre/core": "workspace:*",
+        "@reactre/state": "workspace:*",
         "jfb": "workspace:*",
         "puppeteer-core": "catalog:",
       },

@@ -42,7 +42,9 @@ export function select<D extends Shape, T>(
       let last = get();
       return actor.subscribe(() => {
         const next = get();
-        if (next !== last) listener((last = next));
+        // Delivery follows the supplied comparison, including Object.is's NaN/signed-zero
+        // behavior and comparators that deliberately report identical values as changed.
+        if (!compare(last, next)) listener((last = next));
       });
     },
   };
