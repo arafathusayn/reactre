@@ -567,7 +567,8 @@ describe("template strings are primitive text, even when their inputs may hold c
     for (const whole of [false, true]) {
       const p = program({ ui, main });
       const output = compileJs(js(main), whole ? { props: p.factsOf("main") } : undefined);
-      expect(output).not.toContain("__rrForM(");
+      // Reactive interpolations keep their per-run owner and dependency tracking.
+      expect(output).toContain("__rrForM(");
       const root = new FakeElement("DIV");
       const app = link<{
         setRows(rows: { id: number; kind: string }[]): void;
@@ -606,6 +607,49 @@ describe("template strings are primitive text, even when their inputs may hold c
     expect(root.textContent).toBe("value: <b>& text");
     expect(root.firstChild!.childNodes.length).toBe(1);
     app.dispose();
+  });
+
+  test("static imported labels use the plain keyed list and still replace same-key content", () => {
+    const ui = 'export const labels = { a: "A", b: "B" };';
+    const main = `import { attach, For, signal } from "@reactre/core";
+      import { labels } from "./ui";
+      const [rows, setRows] = signal([{ id: 1, kind: "a" }]);
+      const dispose = attach(() => <ul><For each={rows()} key={r => r.id}>{r => <li>{\`\${labels[r.kind]}\`}</li>}</For></ul>, root);
+      return { setRows, dispose };`;
+    const p = program({ ui, main });
+    const output = compileJs(js(main), { props: p.factsOf("main") });
+    expect(output).not.toContain("__rrForM(");
+    const root = new FakeElement("DIV");
+    const app = link<{ setRows(rows: { id: number; kind: string }[]): void; dispose(): void }>(
+      { ui: compileJs(js(ui)), main: output },
+      root,
+    );
+    const row = root.firstChild!.firstChild;
+    app.setRows([{ id: 1, kind: "b" }]);
+    expect(root.firstChild!.firstChild).toBe(row);
+    expect(root.textContent).toBe("B");
+    app.dispose();
+    expect(root.textContent).toBe("");
+  });
+
+  test("reactive string evaluations retain per-run resource cleanup", () => {
+    const ui = `import { onCleanup } from "@reactre/core";
+      export const cleaned = [];
+      export function value(n) { onCleanup(() => cleaned.push(n)); return n; }`;
+    const main = `import { attach, signal } from "@reactre/core";
+      import { value, cleaned } from "./ui";
+      const [n, setN] = signal(1);
+      const dispose = attach(() => <p>{\`\${value(n())}\`}</p>, root);
+      return { setN, dispose, cleaned };`;
+    const root = new FakeElement("DIV");
+    const app = link<{ setN(n: number): void; dispose(): void; cleaned: number[] }>(
+      { ui: compileJs(js(ui)), main: compileJs(js(main)) },
+      root,
+    );
+    app.setN(2);
+    expect(app.cleaned).toEqual([1]);
+    app.dispose();
+    expect(app.cleaned).toEqual([1, 2]);
   });
 
   test("a template at the start of a larger expression does not prove the result is text", () => {

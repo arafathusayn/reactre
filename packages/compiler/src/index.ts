@@ -1279,8 +1279,9 @@ export class Compiler {
       } else if (inner !== null)
         this.hole(t, { kind: "slot", slot: "comp", expr: this.m(at) + this.component(inner), only, at: -1 });
       // A complete template literal is a string even when its interpolations mention imports
-      // or content props. Keep dependency detection, but use a text hole instead of a slot.
-      else if (!this.hasJsx(child) && textExpression(child))
+      // or content props. Only static expressions move: reactive slots also own the resources
+      // their evaluation may create, whereas a text binding does not create a per-run owner.
+      else if (!this.hasJsx(child) && textExpression(child) && !this.changes(child))
         this.hole(t, { kind: "value", marker: M_TEXT, expr: child, at });
       // A component's children may be nodes, and so may what holds JSX and a fragment's
       // expression: inserted, and followed when they may change.
