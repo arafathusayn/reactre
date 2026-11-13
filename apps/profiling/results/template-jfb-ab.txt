@@ -1,0 +1,14 @@
+A/B of reactre: base b272eed vs working tree, 3 rounds of 5 samples per side
+
+01_run1k               duration base    16.8  head    16.9  diff    0.1 ms  95% [-0.4, 0.3]  no proven difference
+01_run1k               script   base     1.4  head     1.4  diff    0.0 ms  95% [-0.0, 0.0]  no proven difference
+02_replace1k           duration base    18.3  head    18.1  diff   -0.2 ms  95% [-0.4, 0.2]  no proven difference
+02_replace1k           script   base     3.5  head     3.3  diff   -0.2 ms  95% [-0.5, 0.0]  no proven difference
+03_update10th1k_x16    duration base    31.8  head    30.9  diff   -0.9 ms  95% [-1.8, -0.0]  FASTER (proven)
+03_update10th1k_x16    script   base     1.1  head     1.1  diff   -0.0 ms  95% [-0.2, 0.3]  no proven difference
+04_select1k            duration base    13.5  head    13.4  diff   -0.1 ms  95% [-0.6, 0.7]  no proven difference
+04_select1k            script   base     0.3  head     0.4  diff    0.1 ms  95% [-0.4, 0.4]  no proven difference
+05_swap1k              duration base    16.3  head    16.6  diff    0.3 ms  95% [-0.2, 1.3]  no proven difference
+05_swap1k              script   base     0.5  head     0.6  diff    0.1 ms  95% [-0.3, 0.4]  no proven difference
+09_clear1k_x8          duration base    15.5  head    15.3  diff   -0.2 ms  95% [-0.7, 0.3]  no proven difference
+09_clear1k_x8          script   base     6.4  head     6.6  diff    0.2 ms  95% [-0.5, 0.6]  no proven difference

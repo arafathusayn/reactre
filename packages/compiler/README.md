@@ -91,6 +91,14 @@ A whole program (a production build) sees the callers of every component it does
 
 A call of `memo` or `signal` from [`@reactre/core/features/memo`](https://www.npmjs.com/package/@reactre/core#feature-modules) (under any local name, or `M.memo` through `import * as`) that passes `lazy` or `unobserved` goes to the module's reader-counting entry (`__observedMemo`, `__observedSignal`), the only code that keeps the count of readers those options need; so does a call whose options the compiler cannot read (a variable, a spread, a computed key), and a use it cannot follow to a call (`memo` passed as a value, exported, or re-exported by name). Every other call stays as it is, and a file without the import compiles as before, byte for byte. A name the file binds again (a parameter, a `const`) is not the import where it is in scope. The rewrite reads the file alone, so a dev server and a build give the same code; it applies to a file with or without JSX, and to a `.ts` file the plugin's `filter` takes, which is loaded as TypeScript.
 
+A complete untagged template-string child is known to produce text. If its inputs
+are static according to the same dependency analysis used for other text holes,
+it compiles as a template text hole even when it mentions an imported value.
+Same-key list updates still compare/write its content. Expressions that may react
+retain their slots and per-run resource cleanup. Tagged templates and larger
+expressions that can return nodes are unchanged. See the controlled measurements
+in [template-content.md](../../apps/profiling/results/template-content.md).
+
 A construct the compiler does not handle, such as a `<For>` or `<Repeat>` row that is neither a function written in place nor content (`{renderRow}`), a `<Match>` outside a `<Switch>` or a `keyed` that is not written as a boolean, is a compile error that points at its source, never a silent fallback.
 
 For Vite, Rollup, Rolldown, esbuild, webpack or Rspack, use [`@reactre/plugin`](https://www.npmjs.com/package/@reactre/plugin), which runs this compiler inside each of them.

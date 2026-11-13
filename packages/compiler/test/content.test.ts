@@ -10,7 +10,7 @@
 
 import { beforeEach, describe, expect, test } from "bun:test";
 
-import { FakeElement, installFakeDocument } from "@reactre/testdom";
+import { FakeElement, FakeEvent, installFakeDocument } from "@reactre/testdom";
 
 import * as runtime from "../../core/src/index.ts";
 import { compileJs, type CompileOptions, transpileSource } from "../src/index.ts";
@@ -550,3 +550,114 @@ describe("a component the scan finds no name for", () => {
 });
 
 // #endregion
+
+describe("template strings are primitive text, even when their inputs may hold content", () => {
+  test("imported values become text holes, with signal dependencies and same-key updates preserved", () => {
+    const ui = `export const labels = { a: "A", b: "B" };`;
+    const main = `
+      import { attach, For, signal } from "@reactre/core";
+      import { labels } from "./ui";
+      const [rows, setRows] = signal([{ id: 1, kind: "a" }]);
+      const [suffix, setSuffix] = signal("!");
+      const dispose = attach(() => <ul><For each={rows()} key={r => r.id}>{r =>
+        <li onClick={() => setSuffix("clicked")}>{\`\${labels[r.kind]}\${suffix()}\`}</li>
+      }</For></ul>, root);
+      return { setRows, setSuffix, dispose };
+    `;
+    for (const whole of [false, true]) {
+      const p = program({ ui, main });
+      const output = compileJs(js(main), whole ? { props: p.factsOf("main") } : undefined);
+      // Reactive interpolations keep their per-run owner and dependency tracking.
+      expect(output).toContain("__rrForM(");
+      const root = new FakeElement("DIV");
+      const app = link<{
+        setRows(rows: { id: number; kind: string }[]): void;
+        setSuffix(s: string): void;
+        dispose(): void;
+      }>({ ui: compileJs(js(ui)), main: output }, root);
+      const row = root.firstChild!.firstChild as FakeElement;
+      expect(html(root)).toBe("<ul><li>A!</li></ul>");
+      row.dispatchEvent(new FakeEvent("click"));
+      expect(html(root)).toBe("<ul><li>Aclicked</li></ul>");
+      app.setSuffix("?");
+      expect(html(root)).toBe("<ul><li>A?</li></ul>");
+      app.setRows([{ id: 1, kind: "b" }]);
+      expect(root.firstChild!.firstChild).toBe(row);
+      expect(html(root)).toBe("<ul><li>B?</li></ul>");
+      app.dispose();
+      app.setSuffix("after disposal");
+      expect(html(root)).toBe("");
+    }
+  });
+
+  test("content props coerced to strings retain updates, escaping and primitive values", () => {
+    const source = `
+      import { attach, signal } from "@reactre/core";
+      function Label(props) { return <p>{\`value: \${props.children}\`}</p>; }
+      const [value, setValue] = signal(null);
+      const dispose = attach(() => <Label>{value()}</Label>, root);
+      return { setValue, dispose };
+    `;
+    const root = new FakeElement("DIV");
+    const app = run<{ setValue(v: unknown): void; dispose(): void }>(source, root);
+    expect(root.textContent).toBe("value: null");
+    app.setValue(false);
+    expect(root.textContent).toBe("value: false");
+    app.setValue("<b>& text");
+    expect(root.textContent).toBe("value: <b>& text");
+    expect(root.firstChild!.childNodes.some((node) => node.nodeType === 1)).toBe(false);
+    app.dispose();
+  });
+
+  test("static imported labels use the plain keyed list and still replace same-key content", () => {
+    const ui = 'export const labels = { a: "A", b: "B" };';
+    const main = `import { attach, For, signal } from "@reactre/core";
+      import { labels } from "./ui";
+      const [rows, setRows] = signal([{ id: 1, kind: "a" }]);
+      const dispose = attach(() => <ul><For each={rows()} key={r => r.id}>{r => <li>{\`\${labels[r.kind]}\`}</li>}</For></ul>, root);
+      return { setRows, dispose };`;
+    const p = program({ ui, main });
+    const output = compileJs(js(main), { props: p.factsOf("main") });
+    expect(output).not.toContain("__rrForM(");
+    const root = new FakeElement("DIV");
+    const app = link<{ setRows(rows: { id: number; kind: string }[]): void; dispose(): void }>(
+      { ui: compileJs(js(ui)), main: output },
+      root,
+    );
+    const row = root.firstChild!.firstChild;
+    app.setRows([{ id: 1, kind: "b" }]);
+    expect(root.firstChild!.firstChild).toBe(row);
+    expect(root.textContent).toBe("B");
+    app.dispose();
+    expect(root.textContent).toBe("");
+  });
+
+  test("reactive string evaluations retain per-run resource cleanup", () => {
+    const ui = `import { onCleanup } from "@reactre/core";
+      export const cleaned = [];
+      export function value(n) { onCleanup(() => cleaned.push(n)); return n; }`;
+    const main = `import { attach, signal } from "@reactre/core";
+      import { value, cleaned } from "./ui";
+      const [n, setN] = signal(1);
+      const dispose = attach(() => <p>{\`\${value(n())}\`}</p>, root);
+      return { setN, dispose, cleaned };`;
+    const root = new FakeElement("DIV");
+    const app = link<{ setN(n: number): void; dispose(): void; cleaned: number[] }>(
+      { ui: compileJs(js(ui)), main: compileJs(js(main)) },
+      root,
+    );
+    app.setN(2);
+    expect(app.cleaned).toEqual([1]);
+    app.dispose();
+    expect(app.cleaned).toEqual([1, 2]);
+  });
+
+  test("a template at the start of a larger expression does not prove the result is text", () => {
+    for (const src of [
+      'import { value } from "./ui"; const A = () => <p>{`${value}` && value}</p>;',
+      'import { value } from "./ui"; const A = () => <p>{`${value}` ? <b>yes</b> : null}</p>;',
+      'import { tag } from "./ui"; const A = () => <p>{tag`x`}</p>;',
+    ])
+      expect(compileJs(js(src))).toContain("], [-5])");
+  });
+});

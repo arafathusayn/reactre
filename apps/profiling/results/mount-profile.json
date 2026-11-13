@@ -1,0 +1,4824 @@
+{
+  "environment": {
+    "bun": "1.4.4",
+    "chrome": "Chrome/157.0.8103.78",
+    "os": "darwin",
+    "release": "27.2.0",
+    "cpu": "Apple M5 Pro",
+    "throttle": 1,
+    "viewport": [1280, 800],
+    "rows": 500,
+    "warmups": 20,
+    "base": "b272eed",
+    "head": "3e2c3709ddd5451b218bc27cd65a3d36ed468edd",
+    "dirty": "",
+    "profiled": true
+  },
+  "results": [
+    {
+      "iteration": 1,
+      "side": "base",
+      "mode": "plain",
+      "operation": "mount-dispose",
+      "cycles": 100,
+      "ms": 52.199999928474426
+    },
+    {
+      "iteration": 1,
+      "side": "base",
+      "mode": "plain",
+      "operation": "switch",
+      "cycles": 100,
+      "ms": 52.5
+    },
+    {
+      "iteration": 1,
+      "side": "base",
+      "mode": "plain",
+      "operation": "update",
+      "cycles": 100,
+      "ms": 40.90000009536743
+    },
+    {
+      "iteration": 1,
+      "side": "base",
+      "mode": "plain",
+      "operation": "signal",
+      "cycles": 100,
+      "ms": 6.399999976158142
+    },
+    {
+      "iteration": 1,
+      "side": "base",
+      "mode": "nested",
+      "operation": "mount-dispose",
+      "cycles": 100,
+      "ms": 72.20000004768372
+    },
+    {
+      "iteration": 1,
+      "side": "base",
+      "mode": "nested",
+      "operation": "switch",
+      "cycles": 100,
+      "ms": 75.09999990463257
+    },
+    {
+      "iteration": 1,
+      "side": "base",
+      "mode": "nested",
+      "operation": "update",
+      "cycles": 100,
+      "ms": 64.5
+    },
+    {
+      "iteration": 1,
+      "side": "base",
+      "mode": "nested",
+      "operation": "signal",
+      "cycles": 100,
+      "ms": 6.899999976158142
+    },
+    {
+      "iteration": 1,
+      "side": "base",
+      "mode": "text",
+      "operation": "mount-dispose",
+      "cycles": 100,
+      "ms": 62.10000002384186
+    },
+    {
+      "iteration": 1,
+      "side": "base",
+      "mode": "text",
+      "operation": "switch",
+      "cycles": 100,
+      "ms": 61.39999997615814
+    },
+    {
+      "iteration": 1,
+      "side": "base",
+      "mode": "text",
+      "operation": "update",
+      "cycles": 100,
+      "ms": 59.700000047683716
+    },
+    {
+      "iteration": 1,
+      "side": "base",
+      "mode": "text",
+      "operation": "signal",
+      "cycles": 100,
+      "ms": 6.700000047683716
+    },
+    {
+      "iteration": 1,
+      "side": "head",
+      "mode": "plain",
+      "operation": "mount-dispose",
+      "cycles": 100,
+      "ms": 52.89999997615814
+    },
+    {
+      "iteration": 1,
+      "side": "head",
+      "mode": "plain",
+      "operation": "switch",
+      "cycles": 100,
+      "ms": 52.200000047683716
+    },
+    {
+      "iteration": 1,
+      "side": "head",
+      "mode": "plain",
+      "operation": "update",
+      "cycles": 100,
+      "ms": 41.5
+    },
+    {
+      "iteration": 1,
+      "side": "head",
+      "mode": "plain",
+      "operation": "signal",
+      "cycles": 100,
+      "ms": 6.600000023841858
+    },
+    {
+      "iteration": 1,
+      "side": "head",
+      "mode": "nested",
+      "operation": "mount-dispose",
+      "cycles": 100,
+      "ms": 74.10000002384186
+    },
+    {
+      "iteration": 1,
+      "side": "head",
+      "mode": "nested",
+      "operation": "switch",
+      "cycles": 100,
+      "ms": 79.40000009536743
+    },
+    {
+      "iteration": 1,
+      "side": "head",
+      "mode": "nested",
+      "operation": "update",
+      "cycles": 100,
+      "ms": 65.40000009536743
+    },
+    {
+      "iteration": 1,
+      "side": "head",
+      "mode": "nested",
+      "operation": "signal",
+      "cycles": 100,
+      "ms": 6.600000023841858
+    },
+    {
+      "iteration": 1,
+      "side": "head",
+      "mode": "text",
+      "operation": "mount-dispose",
+      "cycles": 100,
+      "ms": 55.700000047683716
+    },
+    {
+      "iteration": 1,
+      "side": "head",
+      "mode": "text",
+      "operation": "switch",
+      "cycles": 100,
+      "ms": 55.799999952316284
+    },
+    {
+      "iteration": 1,
+      "side": "head",
+      "mode": "text",
+      "operation": "update",
+      "cycles": 100,
+      "ms": 49.89999997615814
+    },
+    {
+      "iteration": 1,
+      "side": "head",
+      "mode": "text",
+      "operation": "signal",
+      "cycles": 100,
+      "ms": 6.600000023841858
+    },
+    {
+      "iteration": 2,
+      "side": "head",
+      "mode": "plain",
+      "operation": "mount-dispose",
+      "cycles": 100,
+      "ms": 54.200000047683716
+    },
+    {
+      "iteration": 2,
+      "side": "head",
+      "mode": "plain",
+      "operation": "switch",
+      "cycles": 100,
+      "ms": 52.300000071525574
+    },
+    {
+      "iteration": 2,
+      "side": "head",
+      "mode": "plain",
+      "operation": "update",
+      "cycles": 100,
+      "ms": 43
+    },
+    {
+      "iteration": 2,
+      "side": "head",
+      "mode": "plain",
+      "operation": "signal",
+      "cycles": 100,
+      "ms": 6.700000047683716
+    },
+    {
+      "iteration": 2,
+      "side": "head",
+      "mode": "nested",
+      "operation": "mount-dispose",
+      "cycles": 100,
+      "ms": 78.10000002384186
+    },
+    {
+      "iteration": 2,
+      "side": "head",
+      "mode": "nested",
+      "operation": "switch",
+      "cycles": 100,
+      "ms": 83.10000002384186
+    },
+    {
+      "iteration": 2,
+      "side": "head",
+      "mode": "nested",
+      "operation": "update",
+      "cycles": 100,
+      "ms": 71.79999995231628
+    },
+    {
+      "iteration": 2,
+      "side": "head",
+      "mode": "nested",
+      "operation": "signal",
+      "cycles": 100,
+      "ms": 7.600000023841858
+    },
+    {
+      "iteration": 2,
+      "side": "head",
+      "mode": "text",
+      "operation": "mount-dispose",
+      "cycles": 100,
+      "ms": 56.299999952316284
+    },
+    {
+      "iteration": 2,
+      "side": "head",
+      "mode": "text",
+      "operation": "switch",
+      "cycles": 100,
+      "ms": 56.40000009536743
+    },
+    {
+      "iteration": 2,
+      "side": "head",
+      "mode": "text",
+      "operation": "update",
+      "cycles": 100,
+      "ms": 54.300000071525574
+    },
+    {
+      "iteration": 2,
+      "side": "head",
+      "mode": "text",
+      "operation": "signal",
+      "cycles": 100,
+      "ms": 6.899999976158142
+    },
+    {
+      "iteration": 2,
+      "side": "base",
+      "mode": "plain",
+      "operation": "mount-dispose",
+      "cycles": 100,
+      "ms": 54.89999997615814
+    },
+    {
+      "iteration": 2,
+      "side": "base",
+      "mode": "plain",
+      "operation": "switch",
+      "cycles": 100,
+      "ms": 53.59999990463257
+    },
+    {
+      "iteration": 2,
+      "side": "base",
+      "mode": "plain",
+      "operation": "update",
+      "cycles": 100,
+      "ms": 42.89999997615814
+    },
+    {
+      "iteration": 2,
+      "side": "base",
+      "mode": "plain",
+      "operation": "signal",
+      "cycles": 100,
+      "ms": 7.700000047683716
+    },
+    {
+      "iteration": 2,
+      "side": "base",
+      "mode": "nested",
+      "operation": "mount-dispose",
+      "cycles": 100,
+      "ms": 77
+    },
+    {
+      "iteration": 2,
+      "side": "base",
+      "mode": "nested",
+      "operation": "switch",
+      "cycles": 100,
+      "ms": 76.89999997615814
+    },
+    {
+      "iteration": 2,
+      "side": "base",
+      "mode": "nested",
+      "operation": "update",
+      "cycles": 100,
+      "ms": 68.39999997615814
+    },
+    {
+      "iteration": 2,
+      "side": "base",
+      "mode": "nested",
+      "operation": "signal",
+      "cycles": 100,
+      "ms": 7
+    },
+    {
+      "iteration": 2,
+      "side": "base",
+      "mode": "text",
+      "operation": "mount-dispose",
+      "cycles": 100,
+      "ms": 64.39999997615814
+    },
+    {
+      "iteration": 2,
+      "side": "base",
+      "mode": "text",
+      "operation": "switch",
+      "cycles": 100,
+      "ms": 66
+    },
+    {
+      "iteration": 2,
+      "side": "base",
+      "mode": "text",
+      "operation": "update",
+      "cycles": 100,
+      "ms": 65
+    },
+    {
+      "iteration": 2,
+      "side": "base",
+      "mode": "text",
+      "operation": "signal",
+      "cycles": 100,
+      "ms": 6.700000047683716
+    },
+    {
+      "iteration": 3,
+      "side": "base",
+      "mode": "plain",
+      "operation": "mount-dispose",
+      "cycles": 100,
+      "ms": 55.89999997615814
+    },
+    {
+      "iteration": 3,
+      "side": "base",
+      "mode": "plain",
+      "operation": "switch",
+      "cycles": 100,
+      "ms": 55.5
+    },
+    {
+      "iteration": 3,
+      "side": "base",
+      "mode": "plain",
+      "operation": "update",
+      "cycles": 100,
+      "ms": 44.39999997615814
+    },
+    {
+      "iteration": 3,
+      "side": "base",
+      "mode": "plain",
+      "operation": "signal",
+      "cycles": 100,
+      "ms": 6.899999976158142
+    },
+    {
+      "iteration": 3,
+      "side": "base",
+      "mode": "nested",
+      "operation": "mount-dispose",
+      "cycles": 100,
+      "ms": 76.39999997615814
+    },
+    {
+      "iteration": 3,
+      "side": "base",
+      "mode": "nested",
+      "operation": "switch",
+      "cycles": 100,
+      "ms": 78
+    },
+    {
+      "iteration": 3,
+      "side": "base",
+      "mode": "nested",
+      "operation": "update",
+      "cycles": 100,
+      "ms": 67.29999995231628
+    },
+    {
+      "iteration": 3,
+      "side": "base",
+      "mode": "nested",
+      "operation": "signal",
+      "cycles": 100,
+      "ms": 7.5
+    },
+    {
+      "iteration": 3,
+      "side": "base",
+      "mode": "text",
+      "operation": "mount-dispose",
+      "cycles": 100,
+      "ms": 64.30000007152557
+    },
+    {
+      "iteration": 3,
+      "side": "base",
+      "mode": "text",
+      "operation": "switch",
+      "cycles": 100,
+      "ms": 65.5
+    },
+    {
+      "iteration": 3,
+      "side": "base",
+      "mode": "text",
+      "operation": "update",
+      "cycles": 100,
+      "ms": 66.89999997615814
+    },
+    {
+      "iteration": 3,
+      "side": "base",
+      "mode": "text",
+      "operation": "signal",
+      "cycles": 100,
+      "ms": 7.200000047683716
+    },
+    {
+      "iteration": 3,
+      "side": "head",
+      "mode": "plain",
+      "operation": "mount-dispose",
+      "cycles": 100,
+      "ms": 53.799999952316284
+    },
+    {
+      "iteration": 3,
+      "side": "head",
+      "mode": "plain",
+      "operation": "switch",
+      "cycles": 100,
+      "ms": 54.10000002384186
+    },
+    {
+      "iteration": 3,
+      "side": "head",
+      "mode": "plain",
+      "operation": "update",
+      "cycles": 100,
+      "ms": 44.5
+    },
+    {
+      "iteration": 3,
+      "side": "head",
+      "mode": "plain",
+      "operation": "signal",
+      "cycles": 100,
+      "ms": 6.5
+    },
+    {
+      "iteration": 3,
+      "side": "head",
+      "mode": "nested",
+      "operation": "mount-dispose",
+      "cycles": 100,
+      "ms": 75.29999995231628
+    },
+    {
+      "iteration": 3,
+      "side": "head",
+      "mode": "nested",
+      "operation": "switch",
+      "cycles": 100,
+      "ms": 77.69999992847443
+    },
+    {
+      "iteration": 3,
+      "side": "head",
+      "mode": "nested",
+      "operation": "update",
+      "cycles": 100,
+      "ms": 69.10000002384186
+    },
+    {
+      "iteration": 3,
+      "side": "head",
+      "mode": "nested",
+      "operation": "signal",
+      "cycles": 100,
+      "ms": 7.800000071525574
+    },
+    {
+      "iteration": 3,
+      "side": "head",
+      "mode": "text",
+      "operation": "mount-dispose",
+      "cycles": 100,
+      "ms": 54.89999997615814
+    },
+    {
+      "iteration": 3,
+      "side": "head",
+      "mode": "text",
+      "operation": "switch",
+      "cycles": 100,
+      "ms": 56.200000047683716
+    },
+    {
+      "iteration": 3,
+      "side": "head",
+      "mode": "text",
+      "operation": "update",
+      "cycles": 100,
+      "ms": 54.10000002384186
+    },
+    {
+      "iteration": 3,
+      "side": "head",
+      "mode": "text",
+      "operation": "signal",
+      "cycles": 100,
+      "ms": 6.799999952316284
+    }
+  ],
+  "summary": [
+    {
+      "mode": "plain",
+      "operation": "mount-dispose",
+      "side": "base",
+      "medianMs": 54.89999997615814,
+      "minMs": 52.199999928474426,
+      "maxMs": 55.89999997615814
+    },
+    {
+      "mode": "plain",
+      "operation": "mount-dispose",
+      "side": "head",
+      "medianMs": 53.799999952316284,
+      "minMs": 52.89999997615814,
+      "maxMs": 54.200000047683716
+    },
+    {
+      "mode": "plain",
+      "operation": "switch",
+      "side": "base",
+      "medianMs": 53.59999990463257,
+      "minMs": 52.5,
+      "maxMs": 55.5
+    },
+    {
+      "mode": "plain",
+      "operation": "switch",
+      "side": "head",
+      "medianMs": 52.300000071525574,
+      "minMs": 52.200000047683716,
+      "maxMs": 54.10000002384186
+    },
+    {
+      "mode": "plain",
+      "operation": "update",
+      "side": "base",
+      "medianMs": 42.89999997615814,
+      "minMs": 40.90000009536743,
+      "maxMs": 44.39999997615814
+    },
+    {
+      "mode": "plain",
+      "operation": "update",
+      "side": "head",
+      "medianMs": 43,
+      "minMs": 41.5,
+      "maxMs": 44.5
+    },
+    {
+      "mode": "plain",
+      "operation": "signal",
+      "side": "base",
+      "medianMs": 6.899999976158142,
+      "minMs": 6.399999976158142,
+      "maxMs": 7.700000047683716
+    },
+    {
+      "mode": "plain",
+      "operation": "signal",
+      "side": "head",
+      "medianMs": 6.600000023841858,
+      "minMs": 6.5,
+      "maxMs": 6.700000047683716
+    },
+    {
+      "mode": "nested",
+      "operation": "mount-dispose",
+      "side": "base",
+      "medianMs": 76.39999997615814,
+      "minMs": 72.20000004768372,
+      "maxMs": 77
+    },
+    {
+      "mode": "nested",
+      "operation": "mount-dispose",
+      "side": "head",
+      "medianMs": 75.29999995231628,
+      "minMs": 74.10000002384186,
+      "maxMs": 78.10000002384186
+    },
+    {
+      "mode": "nested",
+      "operation": "switch",
+      "side": "base",
+      "medianMs": 76.89999997615814,
+      "minMs": 75.09999990463257,
+      "maxMs": 78
+    },
+    {
+      "mode": "nested",
+      "operation": "switch",
+      "side": "head",
+      "medianMs": 79.40000009536743,
+      "minMs": 77.69999992847443,
+      "maxMs": 83.10000002384186
+    },
+    {
+      "mode": "nested",
+      "operation": "update",
+      "side": "base",
+      "medianMs": 67.29999995231628,
+      "minMs": 64.5,
+      "maxMs": 68.39999997615814
+    },
+    {
+      "mode": "nested",
+      "operation": "update",
+      "side": "head",
+      "medianMs": 69.10000002384186,
+      "minMs": 65.40000009536743,
+      "maxMs": 71.79999995231628
+    },
+    {
+      "mode": "nested",
+      "operation": "signal",
+      "side": "base",
+      "medianMs": 7,
+      "minMs": 6.899999976158142,
+      "maxMs": 7.5
+    },
+    {
+      "mode": "nested",
+      "operation": "signal",
+      "side": "head",
+      "medianMs": 7.600000023841858,
+      "minMs": 6.600000023841858,
+      "maxMs": 7.800000071525574
+    },
+    {
+      "mode": "text",
+      "operation": "mount-dispose",
+      "side": "base",
+      "medianMs": 64.30000007152557,
+      "minMs": 62.10000002384186,
+      "maxMs": 64.39999997615814
+    },
+    {
+      "mode": "text",
+      "operation": "mount-dispose",
+      "side": "head",
+      "medianMs": 55.700000047683716,
+      "minMs": 54.89999997615814,
+      "maxMs": 56.299999952316284
+    },
+    {
+      "mode": "text",
+      "operation": "switch",
+      "side": "base",
+      "medianMs": 65.5,
+      "minMs": 61.39999997615814,
+      "maxMs": 66
+    },
+    {
+      "mode": "text",
+      "operation": "switch",
+      "side": "head",
+      "medianMs": 56.200000047683716,
+      "minMs": 55.799999952316284,
+      "maxMs": 56.40000009536743
+    },
+    {
+      "mode": "text",
+      "operation": "update",
+      "side": "base",
+      "medianMs": 65,
+      "minMs": 59.700000047683716,
+      "maxMs": 66.89999997615814
+    },
+    {
+      "mode": "text",
+      "operation": "update",
+      "side": "head",
+      "medianMs": 54.10000002384186,
+      "minMs": 49.89999997615814,
+      "maxMs": 54.300000071525574
+    },
+    {
+      "mode": "text",
+      "operation": "signal",
+      "side": "base",
+      "medianMs": 6.700000047683716,
+      "minMs": 6.700000047683716,
+      "maxMs": 7.200000047683716
+    },
+    {
+      "mode": "text",
+      "operation": "signal",
+      "side": "head",
+      "medianMs": 6.799999952316284,
+      "minMs": 6.600000023841858,
+      "maxMs": 6.899999976158142
+    }
+  ],
+  "profiles": [
+    {
+      "iteration": 1,
+      "side": "base",
+      "mode": "plain",
+      "operation": "mount-dispose",
+      "top": [
+        {
+          "fn": "(program)",
+          "us": 5497
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 5040
+        },
+        {
+          "fn": "cloneNode",
+          "us": 4529
+        },
+        {
+          "fn": "",
+          "us": 4431
+        },
+        {
+          "fn": "(idle)",
+          "us": 4332
+        },
+        {
+          "fn": "cloneNode",
+          "us": 3132
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2711
+        },
+        {
+          "fn": "removeChild",
+          "us": 2694
+        },
+        {
+          "fn": "clear",
+          "us": 2467
+        },
+        {
+          "fn": "insertBefore",
+          "us": 1810
+        },
+        {
+          "fn": "cloneNode",
+          "us": 1695
+        },
+        {
+          "fn": "insertBefore",
+          "us": 1574
+        }
+      ]
+    },
+    {
+      "iteration": 1,
+      "side": "base",
+      "mode": "plain",
+      "operation": "switch",
+      "top": [
+        {
+          "fn": "cloneNode",
+          "us": 6475
+        },
+        {
+          "fn": "",
+          "us": 6019
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 3711
+        },
+        {
+          "fn": "insertBefore",
+          "us": 3656
+        },
+        {
+          "fn": "cloneNode",
+          "us": 3630
+        },
+        {
+          "fn": "clear",
+          "us": 3423
+        },
+        {
+          "fn": "removeChild",
+          "us": 2893
+        },
+        {
+          "fn": "(program)",
+          "us": 2392
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2083
+        },
+        {
+          "fn": "create",
+          "us": 1827
+        },
+        {
+          "fn": "insertBefore",
+          "us": 1683
+        },
+        {
+          "fn": "drop",
+          "us": 1291
+        }
+      ]
+    },
+    {
+      "iteration": 1,
+      "side": "base",
+      "mode": "plain",
+      "operation": "update",
+      "top": [
+        {
+          "fn": "drop",
+          "us": 8015
+        },
+        {
+          "fn": "removeChild",
+          "us": 7002
+        },
+        {
+          "fn": "cloneNode",
+          "us": 3104
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2582
+        },
+        {
+          "fn": "(program)",
+          "us": 2271
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 1807
+        },
+        {
+          "fn": "apply",
+          "us": 1688
+        },
+        {
+          "fn": "cloneNode",
+          "us": 1264
+        },
+        {
+          "fn": "",
+          "us": 1019
+        },
+        {
+          "fn": "clone",
+          "us": 1017
+        },
+        {
+          "fn": "__forMount.mounts",
+          "us": 935
+        },
+        {
+          "fn": "insertBefore",
+          "us": 907
+        }
+      ]
+    },
+    {
+      "iteration": 1,
+      "side": "base",
+      "mode": "plain",
+      "operation": "signal",
+      "top": [
+        {
+          "fn": "drop",
+          "us": 2346
+        },
+        {
+          "fn": "(program)",
+          "us": 2118
+        },
+        {
+          "fn": "apply",
+          "us": 1958
+        },
+        {
+          "fn": "refresh",
+          "us": 687
+        },
+        {
+          "fn": "Root",
+          "us": 384
+        },
+        {
+          "fn": "notify",
+          "us": 384
+        },
+        {
+          "fn": "apply",
+          "us": 272
+        },
+        {
+          "fn": "drain",
+          "us": 251
+        },
+        {
+          "fn": "(idle)",
+          "us": 191
+        },
+        {
+          "fn": "clean",
+          "us": 135
+        },
+        {
+          "fn": "apply",
+          "us": 131
+        },
+        {
+          "fn": "Effect",
+          "us": 130
+        }
+      ]
+    },
+    {
+      "iteration": 1,
+      "side": "base",
+      "mode": "nested",
+      "operation": "mount-dispose",
+      "top": [
+        {
+          "fn": "cloneNode",
+          "us": 7960
+        },
+        {
+          "fn": "",
+          "us": 6829
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 4907
+        },
+        {
+          "fn": "clear",
+          "us": 3865
+        },
+        {
+          "fn": "insertBefore",
+          "us": 3667
+        },
+        {
+          "fn": "cloneNode",
+          "us": 3153
+        },
+        {
+          "fn": "insertBefore",
+          "us": 3074
+        },
+        {
+          "fn": "removeChild",
+          "us": 2973
+        },
+        {
+          "fn": "cloneNode",
+          "us": 2540
+        },
+        {
+          "fn": "cloneNode",
+          "us": 2331
+        },
+        {
+          "fn": "(program)",
+          "us": 2185
+        },
+        {
+          "fn": "drop",
+          "us": 2056
+        }
+      ]
+    },
+    {
+      "iteration": 1,
+      "side": "base",
+      "mode": "nested",
+      "operation": "switch",
+      "top": [
+        {
+          "fn": "cloneNode",
+          "us": 8135
+        },
+        {
+          "fn": "",
+          "us": 6746
+        },
+        {
+          "fn": "insertBefore",
+          "us": 5619
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 4993
+        },
+        {
+          "fn": "clear",
+          "us": 4594
+        },
+        {
+          "fn": "cloneNode",
+          "us": 3387
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2991
+        },
+        {
+          "fn": "removeChild",
+          "us": 2940
+        },
+        {
+          "fn": "cloneNode",
+          "us": 2205
+        },
+        {
+          "fn": "cloneNode",
+          "us": 2055
+        },
+        {
+          "fn": "",
+          "us": 2050
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2045
+        }
+      ]
+    },
+    {
+      "iteration": 1,
+      "side": "base",
+      "mode": "nested",
+      "operation": "update",
+      "top": [
+        {
+          "fn": "drop",
+          "us": 9108
+        },
+        {
+          "fn": "removeChild",
+          "us": 6838
+        },
+        {
+          "fn": "insertBefore",
+          "us": 4460
+        },
+        {
+          "fn": "cloneNode",
+          "us": 3962
+        },
+        {
+          "fn": "cloneNode",
+          "us": 3810
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 3083
+        },
+        {
+          "fn": "cloneNode",
+          "us": 3014
+        },
+        {
+          "fn": "(program)",
+          "us": 2055
+        },
+        {
+          "fn": "",
+          "us": 2015
+        },
+        {
+          "fn": "",
+          "us": 2012
+        },
+        {
+          "fn": "apply",
+          "us": 1952
+        },
+        {
+          "fn": "",
+          "us": 1935
+        }
+      ]
+    },
+    {
+      "iteration": 1,
+      "side": "base",
+      "mode": "nested",
+      "operation": "signal",
+      "top": [
+        {
+          "fn": "apply",
+          "us": 3135
+        },
+        {
+          "fn": "drop",
+          "us": 1955
+        },
+        {
+          "fn": "(program)",
+          "us": 1890
+        },
+        {
+          "fn": "node",
+          "us": 622
+        },
+        {
+          "fn": "(idle)",
+          "us": 600
+        },
+        {
+          "fn": "notify",
+          "us": 385
+        },
+        {
+          "fn": "refresh",
+          "us": 381
+        },
+        {
+          "fn": "",
+          "us": 268
+        },
+        {
+          "fn": "cloneNode",
+          "us": 263
+        },
+        {
+          "fn": "runDyn",
+          "us": 245
+        },
+        {
+          "fn": "read",
+          "us": 154
+        },
+        {
+          "fn": "entryRoot",
+          "us": 151
+        }
+      ]
+    },
+    {
+      "iteration": 1,
+      "side": "base",
+      "mode": "text",
+      "operation": "mount-dispose",
+      "top": [
+        {
+          "fn": "",
+          "us": 8056
+        },
+        {
+          "fn": "cloneNode",
+          "us": 7594
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 4718
+        },
+        {
+          "fn": "insertBefore",
+          "us": 3197
+        },
+        {
+          "fn": "createTextNode",
+          "us": 3143
+        },
+        {
+          "fn": "drop",
+          "us": 2858
+        },
+        {
+          "fn": "removeChild",
+          "us": 2553
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2427
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2329
+        },
+        {
+          "fn": "(program)",
+          "us": 2211
+        },
+        {
+          "fn": "cloneNode",
+          "us": 2140
+        },
+        {
+          "fn": "clear",
+          "us": 2033
+        }
+      ]
+    },
+    {
+      "iteration": 1,
+      "side": "base",
+      "mode": "text",
+      "operation": "switch",
+      "top": [
+        {
+          "fn": "cloneNode",
+          "us": 8854
+        },
+        {
+          "fn": "",
+          "us": 4306
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 4067
+        },
+        {
+          "fn": "insertBefore",
+          "us": 3882
+        },
+        {
+          "fn": "createTextNode",
+          "us": 3856
+        },
+        {
+          "fn": "cloneNode",
+          "us": 3698
+        },
+        {
+          "fn": "removeChild",
+          "us": 3207
+        },
+        {
+          "fn": "clear",
+          "us": 3138
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2963
+        },
+        {
+          "fn": "",
+          "us": 2059
+        },
+        {
+          "fn": "(program)",
+          "us": 2058
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2035
+        }
+      ]
+    },
+    {
+      "iteration": 1,
+      "side": "base",
+      "mode": "text",
+      "operation": "update",
+      "top": [
+        {
+          "fn": "removeChild",
+          "us": 8997
+        },
+        {
+          "fn": "drop",
+          "us": 7326
+        },
+        {
+          "fn": "add",
+          "us": 7124
+        },
+        {
+          "fn": "insertBefore",
+          "us": 4703
+        },
+        {
+          "fn": "cloneNode",
+          "us": 3863
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 3083
+        },
+        {
+          "fn": "createTextNode",
+          "us": 2896
+        },
+        {
+          "fn": "",
+          "us": 2448
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2304
+        },
+        {
+          "fn": "",
+          "us": 2088
+        },
+        {
+          "fn": "(program)",
+          "us": 2069
+        },
+        {
+          "fn": "__insert",
+          "us": 1142
+        }
+      ]
+    },
+    {
+      "iteration": 1,
+      "side": "base",
+      "mode": "text",
+      "operation": "signal",
+      "top": [
+        {
+          "fn": "drop",
+          "us": 3229
+        },
+        {
+          "fn": "apply",
+          "us": 2085
+        },
+        {
+          "fn": "(program)",
+          "us": 1610
+        },
+        {
+          "fn": "refresh",
+          "us": 381
+        },
+        {
+          "fn": "(idle)",
+          "us": 339
+        },
+        {
+          "fn": "appendChild",
+          "us": 146
+        },
+        {
+          "fn": "cloneNode",
+          "us": 140
+        },
+        {
+          "fn": "",
+          "us": 135
+        },
+        {
+          "fn": "entryRoot",
+          "us": 134
+        },
+        {
+          "fn": "read",
+          "us": 133
+        },
+        {
+          "fn": "",
+          "us": 133
+        },
+        {
+          "fn": "createTextNode",
+          "us": 132
+        }
+      ]
+    },
+    {
+      "iteration": 1,
+      "side": "head",
+      "mode": "plain",
+      "operation": "mount-dispose",
+      "top": [
+        {
+          "fn": "cloneNode",
+          "us": 9015
+        },
+        {
+          "fn": "",
+          "us": 6671
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 4408
+        },
+        {
+          "fn": "(program)",
+          "us": 3596
+        },
+        {
+          "fn": "cloneNode",
+          "us": 3350
+        },
+        {
+          "fn": "insertBefore",
+          "us": 3230
+        },
+        {
+          "fn": "clear",
+          "us": 3018
+        },
+        {
+          "fn": "removeChild",
+          "us": 2696
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2344
+        },
+        {
+          "fn": "drop",
+          "us": 1937
+        },
+        {
+          "fn": "apply",
+          "us": 1927
+        },
+        {
+          "fn": "insertBefore",
+          "us": 1336
+        }
+      ]
+    },
+    {
+      "iteration": 1,
+      "side": "head",
+      "mode": "plain",
+      "operation": "switch",
+      "top": [
+        {
+          "fn": "cloneNode",
+          "us": 8370
+        },
+        {
+          "fn": "",
+          "us": 6244
+        },
+        {
+          "fn": "cloneNode",
+          "us": 4841
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 3804
+        },
+        {
+          "fn": "insertBefore",
+          "us": 3362
+        },
+        {
+          "fn": "clear",
+          "us": 3098
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2136
+        },
+        {
+          "fn": "(program)",
+          "us": 2089
+        },
+        {
+          "fn": "insertBefore",
+          "us": 1962
+        },
+        {
+          "fn": "removeChild",
+          "us": 1803
+        },
+        {
+          "fn": "",
+          "us": 1724
+        },
+        {
+          "fn": "apply",
+          "us": 1668
+        }
+      ]
+    },
+    {
+      "iteration": 1,
+      "side": "head",
+      "mode": "plain",
+      "operation": "update",
+      "top": [
+        {
+          "fn": "drop",
+          "us": 8584
+        },
+        {
+          "fn": "removeChild",
+          "us": 4940
+        },
+        {
+          "fn": "cloneNode",
+          "us": 3108
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2738
+        },
+        {
+          "fn": "(program)",
+          "us": 2472
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 2183
+        },
+        {
+          "fn": "clone",
+          "us": 2069
+        },
+        {
+          "fn": "apply",
+          "us": 1941
+        },
+        {
+          "fn": "",
+          "us": 1185
+        },
+        {
+          "fn": "read",
+          "us": 1072
+        },
+        {
+          "fn": "insertBefore",
+          "us": 937
+        },
+        {
+          "fn": "__forMount.mounts",
+          "us": 896
+        }
+      ]
+    },
+    {
+      "iteration": 1,
+      "side": "head",
+      "mode": "plain",
+      "operation": "signal",
+      "top": [
+        {
+          "fn": "drop",
+          "us": 3634
+        },
+        {
+          "fn": "(program)",
+          "us": 1820
+        },
+        {
+          "fn": "apply",
+          "us": 1024
+        },
+        {
+          "fn": "(idle)",
+          "us": 458
+        },
+        {
+          "fn": "apply",
+          "us": 393
+        },
+        {
+          "fn": "refresh",
+          "us": 387
+        },
+        {
+          "fn": "drain",
+          "us": 267
+        },
+        {
+          "fn": "Effect",
+          "us": 266
+        },
+        {
+          "fn": "notify",
+          "us": 258
+        },
+        {
+          "fn": "dispose",
+          "us": 139
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 139
+        },
+        {
+          "fn": "untrack",
+          "us": 136
+        }
+      ]
+    },
+    {
+      "iteration": 1,
+      "side": "head",
+      "mode": "nested",
+      "operation": "mount-dispose",
+      "top": [
+        {
+          "fn": "cloneNode",
+          "us": 8799
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 6240
+        },
+        {
+          "fn": "",
+          "us": 5115
+        },
+        {
+          "fn": "removeChild",
+          "us": 3784
+        },
+        {
+          "fn": "insertBefore",
+          "us": 3643
+        },
+        {
+          "fn": "insertBefore",
+          "us": 3069
+        },
+        {
+          "fn": "clear",
+          "us": 2967
+        },
+        {
+          "fn": "cloneNode",
+          "us": 2901
+        },
+        {
+          "fn": "cloneNode",
+          "us": 2746
+        },
+        {
+          "fn": "drop",
+          "us": 2609
+        },
+        {
+          "fn": "cloneNode",
+          "us": 2136
+        },
+        {
+          "fn": "(program)",
+          "us": 2088
+        }
+      ]
+    },
+    {
+      "iteration": 1,
+      "side": "head",
+      "mode": "nested",
+      "operation": "switch",
+      "top": [
+        {
+          "fn": "cloneNode",
+          "us": 7990
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 6253
+        },
+        {
+          "fn": "",
+          "us": 5792
+        },
+        {
+          "fn": "insertBefore",
+          "us": 5226
+        },
+        {
+          "fn": "removeChild",
+          "us": 4475
+        },
+        {
+          "fn": "clear",
+          "us": 3582
+        },
+        {
+          "fn": "insertBefore",
+          "us": 3444
+        },
+        {
+          "fn": "cloneNode",
+          "us": 3100
+        },
+        {
+          "fn": "cloneNode",
+          "us": 2820
+        },
+        {
+          "fn": "cloneNode",
+          "us": 2621
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2582
+        },
+        {
+          "fn": "drop",
+          "us": 2563
+        }
+      ]
+    },
+    {
+      "iteration": 1,
+      "side": "head",
+      "mode": "nested",
+      "operation": "update",
+      "top": [
+        {
+          "fn": "removeChild",
+          "us": 10494
+        },
+        {
+          "fn": "drop",
+          "us": 7166
+        },
+        {
+          "fn": "insertBefore",
+          "us": 5001
+        },
+        {
+          "fn": "",
+          "us": 3224
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 3216
+        },
+        {
+          "fn": "cloneNode",
+          "us": 2715
+        },
+        {
+          "fn": "cloneNode",
+          "us": 2573
+        },
+        {
+          "fn": "",
+          "us": 2549
+        },
+        {
+          "fn": "(program)",
+          "us": 2504
+        },
+        {
+          "fn": "cloneNode",
+          "us": 2461
+        },
+        {
+          "fn": "",
+          "us": 2217
+        },
+        {
+          "fn": "cloneNode",
+          "us": 2131
+        }
+      ]
+    },
+    {
+      "iteration": 1,
+      "side": "head",
+      "mode": "nested",
+      "operation": "signal",
+      "top": [
+        {
+          "fn": "drop",
+          "us": 2709
+        },
+        {
+          "fn": "apply",
+          "us": 2049
+        },
+        {
+          "fn": "(program)",
+          "us": 1957
+        },
+        {
+          "fn": "refresh",
+          "us": 779
+        },
+        {
+          "fn": "node",
+          "us": 531
+        },
+        {
+          "fn": "drain",
+          "us": 390
+        },
+        {
+          "fn": "(idle)",
+          "us": 328
+        },
+        {
+          "fn": "cloneNode",
+          "us": 245
+        },
+        {
+          "fn": "notify",
+          "us": 135
+        },
+        {
+          "fn": "",
+          "us": 134
+        },
+        {
+          "fn": "create",
+          "us": 131
+        },
+        {
+          "fn": "write",
+          "us": 130
+        }
+      ]
+    },
+    {
+      "iteration": 1,
+      "side": "head",
+      "mode": "text",
+      "operation": "mount-dispose",
+      "top": [
+        {
+          "fn": "cloneNode",
+          "us": 7975
+        },
+        {
+          "fn": "",
+          "us": 5335
+        },
+        {
+          "fn": "cloneNode",
+          "us": 4451
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 4168
+        },
+        {
+          "fn": "insertBefore",
+          "us": 3707
+        },
+        {
+          "fn": "insertBefore",
+          "us": 3655
+        },
+        {
+          "fn": "clear",
+          "us": 3176
+        },
+        {
+          "fn": "removeChild",
+          "us": 2464
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2110
+        },
+        {
+          "fn": "(program)",
+          "us": 1841
+        },
+        {
+          "fn": "apply",
+          "us": 1780
+        },
+        {
+          "fn": "drop",
+          "us": 1689
+        }
+      ]
+    },
+    {
+      "iteration": 1,
+      "side": "head",
+      "mode": "text",
+      "operation": "switch",
+      "top": [
+        {
+          "fn": "cloneNode",
+          "us": 7073
+        },
+        {
+          "fn": "",
+          "us": 5556
+        },
+        {
+          "fn": "cloneNode",
+          "us": 4320
+        },
+        {
+          "fn": "insertBefore",
+          "us": 4076
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 4014
+        },
+        {
+          "fn": "removeChild",
+          "us": 2899
+        },
+        {
+          "fn": "drop",
+          "us": 2806
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2402
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2337
+        },
+        {
+          "fn": "(program)",
+          "us": 2283
+        },
+        {
+          "fn": "apply",
+          "us": 2049
+        },
+        {
+          "fn": "clear",
+          "us": 1882
+        }
+      ]
+    },
+    {
+      "iteration": 1,
+      "side": "head",
+      "mode": "text",
+      "operation": "update",
+      "top": [
+        {
+          "fn": "apply",
+          "us": 11128
+        },
+        {
+          "fn": "removeChild",
+          "us": 6890
+        },
+        {
+          "fn": "drop",
+          "us": 5068
+        },
+        {
+          "fn": "insertBefore",
+          "us": 4905
+        },
+        {
+          "fn": "cloneNode",
+          "us": 4324
+        },
+        {
+          "fn": "(program)",
+          "us": 2286
+        },
+        {
+          "fn": "",
+          "us": 2219
+        },
+        {
+          "fn": "clone",
+          "us": 1552
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 1354
+        },
+        {
+          "fn": "",
+          "us": 1182
+        },
+        {
+          "fn": "__insert",
+          "us": 1136
+        },
+        {
+          "fn": "add",
+          "us": 773
+        }
+      ]
+    },
+    {
+      "iteration": 1,
+      "side": "head",
+      "mode": "text",
+      "operation": "signal",
+      "top": [
+        {
+          "fn": "apply",
+          "us": 2866
+        },
+        {
+          "fn": "drop",
+          "us": 1962
+        },
+        {
+          "fn": "(program)",
+          "us": 1745
+        },
+        {
+          "fn": "read",
+          "us": 535
+        },
+        {
+          "fn": "refresh",
+          "us": 518
+        },
+        {
+          "fn": "(idle)",
+          "us": 470
+        },
+        {
+          "fn": "drain",
+          "us": 262
+        },
+        {
+          "fn": "",
+          "us": 154
+        },
+        {
+          "fn": "signal",
+          "us": 139
+        },
+        {
+          "fn": "insertBefore",
+          "us": 135
+        },
+        {
+          "fn": "createTextNode",
+          "us": 132
+        },
+        {
+          "fn": "fill",
+          "us": 129
+        }
+      ]
+    },
+    {
+      "iteration": 2,
+      "side": "head",
+      "mode": "plain",
+      "operation": "mount-dispose",
+      "top": [
+        {
+          "fn": "cloneNode",
+          "us": 7940
+        },
+        {
+          "fn": "",
+          "us": 6635
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 4659
+        },
+        {
+          "fn": "clear",
+          "us": 4221
+        },
+        {
+          "fn": "cloneNode",
+          "us": 4175
+        },
+        {
+          "fn": "(program)",
+          "us": 3955
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2760
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2266
+        },
+        {
+          "fn": "removeChild",
+          "us": 2027
+        },
+        {
+          "fn": "insertBefore",
+          "us": 1944
+        },
+        {
+          "fn": "insertBefore",
+          "us": 1563
+        },
+        {
+          "fn": "drop",
+          "us": 1426
+        }
+      ]
+    },
+    {
+      "iteration": 2,
+      "side": "head",
+      "mode": "plain",
+      "operation": "switch",
+      "top": [
+        {
+          "fn": "cloneNode",
+          "us": 7030
+        },
+        {
+          "fn": "",
+          "us": 5395
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 3915
+        },
+        {
+          "fn": "insertBefore",
+          "us": 3744
+        },
+        {
+          "fn": "cloneNode",
+          "us": 3612
+        },
+        {
+          "fn": "clear",
+          "us": 3123
+        },
+        {
+          "fn": "insertBefore",
+          "us": 3034
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2206
+        },
+        {
+          "fn": "(program)",
+          "us": 2002
+        },
+        {
+          "fn": "drop",
+          "us": 1696
+        },
+        {
+          "fn": "create",
+          "us": 1608
+        },
+        {
+          "fn": "removeChild",
+          "us": 1520
+        }
+      ]
+    },
+    {
+      "iteration": 2,
+      "side": "head",
+      "mode": "plain",
+      "operation": "update",
+      "top": [
+        {
+          "fn": "drop",
+          "us": 9219
+        },
+        {
+          "fn": "removeChild",
+          "us": 5352
+        },
+        {
+          "fn": "cloneNode",
+          "us": 3938
+        },
+        {
+          "fn": "insertBefore",
+          "us": 3641
+        },
+        {
+          "fn": "apply",
+          "us": 3249
+        },
+        {
+          "fn": "(program)",
+          "us": 2133
+        },
+        {
+          "fn": "clone",
+          "us": 2090
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 1894
+        },
+        {
+          "fn": "",
+          "us": 1445
+        },
+        {
+          "fn": "read",
+          "us": 1441
+        },
+        {
+          "fn": "__insert",
+          "us": 1123
+        },
+        {
+          "fn": "OwnedEffect",
+          "us": 906
+        }
+      ]
+    },
+    {
+      "iteration": 2,
+      "side": "head",
+      "mode": "plain",
+      "operation": "signal",
+      "top": [
+        {
+          "fn": "drop",
+          "us": 2622
+        },
+        {
+          "fn": "(program)",
+          "us": 2498
+        },
+        {
+          "fn": "apply",
+          "us": 2013
+        },
+        {
+          "fn": "refresh",
+          "us": 617
+        },
+        {
+          "fn": "create",
+          "us": 265
+        },
+        {
+          "fn": "drain",
+          "us": 259
+        },
+        {
+          "fn": "",
+          "us": 257
+        },
+        {
+          "fn": "(idle)",
+          "us": 198
+        },
+        {
+          "fn": "clear",
+          "us": 139
+        },
+        {
+          "fn": "runDyn",
+          "us": 132
+        },
+        {
+          "fn": "create",
+          "us": 131
+        },
+        {
+          "fn": "",
+          "us": 129
+        }
+      ]
+    },
+    {
+      "iteration": 2,
+      "side": "head",
+      "mode": "nested",
+      "operation": "mount-dispose",
+      "top": [
+        {
+          "fn": "cloneNode",
+          "us": 7911
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 7640
+        },
+        {
+          "fn": "",
+          "us": 5031
+        },
+        {
+          "fn": "cloneNode",
+          "us": 4108
+        },
+        {
+          "fn": "insertBefore",
+          "us": 3705
+        },
+        {
+          "fn": "removeChild",
+          "us": 3350
+        },
+        {
+          "fn": "clear",
+          "us": 2941
+        },
+        {
+          "fn": "cloneNode",
+          "us": 2680
+        },
+        {
+          "fn": "(program)",
+          "us": 2507
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2493
+        },
+        {
+          "fn": "cloneNode",
+          "us": 2407
+        },
+        {
+          "fn": "drop",
+          "us": 1943
+        }
+      ]
+    },
+    {
+      "iteration": 2,
+      "side": "head",
+      "mode": "nested",
+      "operation": "switch",
+      "top": [
+        {
+          "fn": "cloneNode",
+          "us": 7751
+        },
+        {
+          "fn": "",
+          "us": 7553
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 6798
+        },
+        {
+          "fn": "insertBefore",
+          "us": 5066
+        },
+        {
+          "fn": "clear",
+          "us": 4529
+        },
+        {
+          "fn": "removeChild",
+          "us": 3821
+        },
+        {
+          "fn": "cloneNode",
+          "us": 3511
+        },
+        {
+          "fn": "cloneNode",
+          "us": 2961
+        },
+        {
+          "fn": "cloneNode",
+          "us": 2903
+        },
+        {
+          "fn": "cloneNode",
+          "us": 2460
+        },
+        {
+          "fn": "(program)",
+          "us": 2282
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2045
+        }
+      ]
+    },
+    {
+      "iteration": 2,
+      "side": "head",
+      "mode": "nested",
+      "operation": "update",
+      "top": [
+        {
+          "fn": "removeChild",
+          "us": 10089
+        },
+        {
+          "fn": "drop",
+          "us": 9153
+        },
+        {
+          "fn": "insertBefore",
+          "us": 5018
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 3907
+        },
+        {
+          "fn": "cloneNode",
+          "us": 3785
+        },
+        {
+          "fn": "cloneNode",
+          "us": 3738
+        },
+        {
+          "fn": "cloneNode",
+          "us": 3062
+        },
+        {
+          "fn": "",
+          "us": 2964
+        },
+        {
+          "fn": "",
+          "us": 2713
+        },
+        {
+          "fn": "",
+          "us": 2202
+        },
+        {
+          "fn": "clone",
+          "us": 2140
+        },
+        {
+          "fn": "(program)",
+          "us": 2063
+        }
+      ]
+    },
+    {
+      "iteration": 2,
+      "side": "head",
+      "mode": "nested",
+      "operation": "signal",
+      "top": [
+        {
+          "fn": "drop",
+          "us": 4273
+        },
+        {
+          "fn": "apply",
+          "us": 2188
+        },
+        {
+          "fn": "(program)",
+          "us": 1944
+        },
+        {
+          "fn": "(idle)",
+          "us": 590
+        },
+        {
+          "fn": "",
+          "us": 495
+        },
+        {
+          "fn": "refresh",
+          "us": 266
+        },
+        {
+          "fn": "",
+          "us": 186
+        },
+        {
+          "fn": "node",
+          "us": 161
+        },
+        {
+          "fn": "querySelectorAll",
+          "us": 143
+        },
+        {
+          "fn": "cloneNode",
+          "us": 140
+        },
+        {
+          "fn": "",
+          "us": 137
+        },
+        {
+          "fn": "apply",
+          "us": 136
+        }
+      ]
+    },
+    {
+      "iteration": 2,
+      "side": "head",
+      "mode": "text",
+      "operation": "mount-dispose",
+      "top": [
+        {
+          "fn": "",
+          "us": 6800
+        },
+        {
+          "fn": "cloneNode",
+          "us": 6714
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 4820
+        },
+        {
+          "fn": "cloneNode",
+          "us": 4561
+        },
+        {
+          "fn": "insertBefore",
+          "us": 3459
+        },
+        {
+          "fn": "removeChild",
+          "us": 2907
+        },
+        {
+          "fn": "(program)",
+          "us": 2581
+        },
+        {
+          "fn": "apply",
+          "us": 2437
+        },
+        {
+          "fn": "clear",
+          "us": 2223
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2146
+        },
+        {
+          "fn": "create",
+          "us": 1622
+        },
+        {
+          "fn": "drop",
+          "us": 1602
+        }
+      ]
+    },
+    {
+      "iteration": 2,
+      "side": "head",
+      "mode": "text",
+      "operation": "switch",
+      "top": [
+        {
+          "fn": "cloneNode",
+          "us": 7252
+        },
+        {
+          "fn": "",
+          "us": 6317
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 4051
+        },
+        {
+          "fn": "insertBefore",
+          "us": 3640
+        },
+        {
+          "fn": "clear",
+          "us": 2917
+        },
+        {
+          "fn": "cloneNode",
+          "us": 2844
+        },
+        {
+          "fn": "removeChild",
+          "us": 2654
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2343
+        },
+        {
+          "fn": "(program)",
+          "us": 2281
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2143
+        },
+        {
+          "fn": "drop",
+          "us": 1782
+        },
+        {
+          "fn": "apply",
+          "us": 1738
+        }
+      ]
+    },
+    {
+      "iteration": 2,
+      "side": "head",
+      "mode": "text",
+      "operation": "update",
+      "top": [
+        {
+          "fn": "apply",
+          "us": 14228
+        },
+        {
+          "fn": "removeChild",
+          "us": 6534
+        },
+        {
+          "fn": "cloneNode",
+          "us": 5718
+        },
+        {
+          "fn": "drop",
+          "us": 4798
+        },
+        {
+          "fn": "clone",
+          "us": 2877
+        },
+        {
+          "fn": "(program)",
+          "us": 2594
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2519
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 1680
+        },
+        {
+          "fn": "",
+          "us": 1490
+        },
+        {
+          "fn": "",
+          "us": 1464
+        },
+        {
+          "fn": "__insert",
+          "us": 1130
+        },
+        {
+          "fn": "",
+          "us": 849
+        }
+      ]
+    },
+    {
+      "iteration": 2,
+      "side": "head",
+      "mode": "text",
+      "operation": "signal",
+      "top": [
+        {
+          "fn": "drop",
+          "us": 2575
+        },
+        {
+          "fn": "apply",
+          "us": 2492
+        },
+        {
+          "fn": "(program)",
+          "us": 1860
+        },
+        {
+          "fn": "(idle)",
+          "us": 748
+        },
+        {
+          "fn": "refresh",
+          "us": 571
+        },
+        {
+          "fn": "notify",
+          "us": 286
+        },
+        {
+          "fn": "Root",
+          "us": 163
+        },
+        {
+          "fn": "drop",
+          "us": 149
+        },
+        {
+          "fn": "dyn",
+          "us": 145
+        },
+        {
+          "fn": "read",
+          "us": 139
+        },
+        {
+          "fn": "",
+          "us": 137
+        },
+        {
+          "fn": "mount",
+          "us": 136
+        }
+      ]
+    },
+    {
+      "iteration": 2,
+      "side": "base",
+      "mode": "plain",
+      "operation": "mount-dispose",
+      "top": [
+        {
+          "fn": "cloneNode",
+          "us": 7356
+        },
+        {
+          "fn": "",
+          "us": 5410
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 5303
+        },
+        {
+          "fn": "(program)",
+          "us": 4255
+        },
+        {
+          "fn": "cloneNode",
+          "us": 4015
+        },
+        {
+          "fn": "removeChild",
+          "us": 3402
+        },
+        {
+          "fn": "insertBefore",
+          "us": 3341
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2039
+        },
+        {
+          "fn": "clear",
+          "us": 2013
+        },
+        {
+          "fn": "insertBefore",
+          "us": 1863
+        },
+        {
+          "fn": "clone",
+          "us": 1858
+        },
+        {
+          "fn": "apply",
+          "us": 1453
+        }
+      ]
+    },
+    {
+      "iteration": 2,
+      "side": "base",
+      "mode": "plain",
+      "operation": "switch",
+      "top": [
+        {
+          "fn": "cloneNode",
+          "us": 6425
+        },
+        {
+          "fn": "",
+          "us": 5893
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 4370
+        },
+        {
+          "fn": "cloneNode",
+          "us": 3882
+        },
+        {
+          "fn": "clear",
+          "us": 3231
+        },
+        {
+          "fn": "insertBefore",
+          "us": 3226
+        },
+        {
+          "fn": "insertBefore",
+          "us": 3023
+        },
+        {
+          "fn": "removeChild",
+          "us": 2664
+        },
+        {
+          "fn": "(program)",
+          "us": 2066
+        },
+        {
+          "fn": "drop",
+          "us": 1785
+        },
+        {
+          "fn": "clone",
+          "us": 1594
+        },
+        {
+          "fn": "apply",
+          "us": 1490
+        }
+      ]
+    },
+    {
+      "iteration": 2,
+      "side": "base",
+      "mode": "plain",
+      "operation": "update",
+      "top": [
+        {
+          "fn": "drop",
+          "us": 7156
+        },
+        {
+          "fn": "cloneNode",
+          "us": 4615
+        },
+        {
+          "fn": "insertBefore",
+          "us": 3996
+        },
+        {
+          "fn": "removeChild",
+          "us": 3937
+        },
+        {
+          "fn": "apply",
+          "us": 2811
+        },
+        {
+          "fn": "(program)",
+          "us": 2398
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 2210
+        },
+        {
+          "fn": "clone",
+          "us": 1772
+        },
+        {
+          "fn": "removeChild",
+          "us": 1472
+        },
+        {
+          "fn": "__insert",
+          "us": 957
+        },
+        {
+          "fn": "",
+          "us": 823
+        },
+        {
+          "fn": "read",
+          "us": 814
+        }
+      ]
+    },
+    {
+      "iteration": 2,
+      "side": "base",
+      "mode": "plain",
+      "operation": "signal",
+      "top": [
+        {
+          "fn": "drop",
+          "us": 3049
+        },
+        {
+          "fn": "(program)",
+          "us": 1870
+        },
+        {
+          "fn": "apply",
+          "us": 1578
+        },
+        {
+          "fn": "read",
+          "us": 1163
+        },
+        {
+          "fn": "apply",
+          "us": 649
+        },
+        {
+          "fn": "(idle)",
+          "us": 617
+        },
+        {
+          "fn": "runDyn",
+          "us": 416
+        },
+        {
+          "fn": "run",
+          "us": 390
+        },
+        {
+          "fn": "refresh",
+          "us": 265
+        },
+        {
+          "fn": "",
+          "us": 140
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 137
+        },
+        {
+          "fn": "",
+          "us": 133
+        }
+      ]
+    },
+    {
+      "iteration": 2,
+      "side": "base",
+      "mode": "nested",
+      "operation": "mount-dispose",
+      "top": [
+        {
+          "fn": "cloneNode",
+          "us": 6689
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 6508
+        },
+        {
+          "fn": "",
+          "us": 5372
+        },
+        {
+          "fn": "insertBefore",
+          "us": 4694
+        },
+        {
+          "fn": "removeChild",
+          "us": 3612
+        },
+        {
+          "fn": "",
+          "us": 3580
+        },
+        {
+          "fn": "insertBefore",
+          "us": 3541
+        },
+        {
+          "fn": "cloneNode",
+          "us": 3320
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2930
+        },
+        {
+          "fn": "cloneNode",
+          "us": 2929
+        },
+        {
+          "fn": "cloneNode",
+          "us": 2529
+        },
+        {
+          "fn": "drop",
+          "us": 2352
+        }
+      ]
+    },
+    {
+      "iteration": 2,
+      "side": "base",
+      "mode": "nested",
+      "operation": "switch",
+      "top": [
+        {
+          "fn": "cloneNode",
+          "us": 7177
+        },
+        {
+          "fn": "insertBefore",
+          "us": 6740
+        },
+        {
+          "fn": "",
+          "us": 5892
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 5597
+        },
+        {
+          "fn": "removeChild",
+          "us": 3682
+        },
+        {
+          "fn": "cloneNode",
+          "us": 3068
+        },
+        {
+          "fn": "drop",
+          "us": 3013
+        },
+        {
+          "fn": "clear",
+          "us": 2756
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2621
+        },
+        {
+          "fn": "",
+          "us": 2541
+        },
+        {
+          "fn": "cloneNode",
+          "us": 2510
+        },
+        {
+          "fn": "cloneNode",
+          "us": 2451
+        }
+      ]
+    },
+    {
+      "iteration": 2,
+      "side": "base",
+      "mode": "nested",
+      "operation": "update",
+      "top": [
+        {
+          "fn": "removeChild",
+          "us": 9778
+        },
+        {
+          "fn": "drop",
+          "us": 6604
+        },
+        {
+          "fn": "insertBefore",
+          "us": 4949
+        },
+        {
+          "fn": "cloneNode",
+          "us": 4276
+        },
+        {
+          "fn": "cloneNode",
+          "us": 4153
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 3151
+        },
+        {
+          "fn": "cloneNode",
+          "us": 2780
+        },
+        {
+          "fn": "",
+          "us": 2474
+        },
+        {
+          "fn": "",
+          "us": 2219
+        },
+        {
+          "fn": "(program)",
+          "us": 2204
+        },
+        {
+          "fn": "cloneNode",
+          "us": 2062
+        },
+        {
+          "fn": "",
+          "us": 1838
+        }
+      ]
+    },
+    {
+      "iteration": 2,
+      "side": "base",
+      "mode": "nested",
+      "operation": "signal",
+      "top": [
+        {
+          "fn": "drop",
+          "us": 2688
+        },
+        {
+          "fn": "apply",
+          "us": 2120
+        },
+        {
+          "fn": "(program)",
+          "us": 2040
+        },
+        {
+          "fn": "read",
+          "us": 790
+        },
+        {
+          "fn": "(idle)",
+          "us": 657
+        },
+        {
+          "fn": "refresh",
+          "us": 640
+        },
+        {
+          "fn": "__insert",
+          "us": 528
+        },
+        {
+          "fn": "cloneNode",
+          "us": 264
+        },
+        {
+          "fn": "notify",
+          "us": 245
+        },
+        {
+          "fn": "drain",
+          "us": 143
+        },
+        {
+          "fn": "Root",
+          "us": 141
+        },
+        {
+          "fn": "read",
+          "us": 141
+        }
+      ]
+    },
+    {
+      "iteration": 2,
+      "side": "base",
+      "mode": "text",
+      "operation": "mount-dispose",
+      "top": [
+        {
+          "fn": "cloneNode",
+          "us": 7855
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 5330
+        },
+        {
+          "fn": "cloneNode",
+          "us": 4808
+        },
+        {
+          "fn": "",
+          "us": 4727
+        },
+        {
+          "fn": "clear",
+          "us": 4288
+        },
+        {
+          "fn": "removeChild",
+          "us": 2986
+        },
+        {
+          "fn": "createTextNode",
+          "us": 2801
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2613
+        },
+        {
+          "fn": "(program)",
+          "us": 2531
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2469
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2114
+        },
+        {
+          "fn": "create",
+          "us": 2056
+        }
+      ]
+    },
+    {
+      "iteration": 2,
+      "side": "base",
+      "mode": "text",
+      "operation": "switch",
+      "top": [
+        {
+          "fn": "",
+          "us": 7732
+        },
+        {
+          "fn": "cloneNode",
+          "us": 7414
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 5088
+        },
+        {
+          "fn": "cloneNode",
+          "us": 3938
+        },
+        {
+          "fn": "insertBefore",
+          "us": 3649
+        },
+        {
+          "fn": "clear",
+          "us": 3250
+        },
+        {
+          "fn": "createTextNode",
+          "us": 3224
+        },
+        {
+          "fn": "insertBefore",
+          "us": 3149
+        },
+        {
+          "fn": "removeChild",
+          "us": 2951
+        },
+        {
+          "fn": "(program)",
+          "us": 2129
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2116
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2034
+        }
+      ]
+    },
+    {
+      "iteration": 2,
+      "side": "base",
+      "mode": "text",
+      "operation": "update",
+      "top": [
+        {
+          "fn": "removeChild",
+          "us": 10882
+        },
+        {
+          "fn": "add",
+          "us": 10125
+        },
+        {
+          "fn": "drop",
+          "us": 7274
+        },
+        {
+          "fn": "insertBefore",
+          "us": 4678
+        },
+        {
+          "fn": "createTextNode",
+          "us": 4087
+        },
+        {
+          "fn": "cloneNode",
+          "us": 3595
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 2974
+        },
+        {
+          "fn": "",
+          "us": 2527
+        },
+        {
+          "fn": "(program)",
+          "us": 2487
+        },
+        {
+          "fn": "",
+          "us": 1826
+        },
+        {
+          "fn": "insertBefore",
+          "us": 1734
+        },
+        {
+          "fn": "clone",
+          "us": 1079
+        }
+      ]
+    },
+    {
+      "iteration": 2,
+      "side": "base",
+      "mode": "text",
+      "operation": "signal",
+      "top": [
+        {
+          "fn": "drop",
+          "us": 2575
+        },
+        {
+          "fn": "apply",
+          "us": 2295
+        },
+        {
+          "fn": "(program)",
+          "us": 1980
+        },
+        {
+          "fn": "refresh",
+          "us": 673
+        },
+        {
+          "fn": "(idle)",
+          "us": 532
+        },
+        {
+          "fn": "read",
+          "us": 415
+        },
+        {
+          "fn": "clear",
+          "us": 267
+        },
+        {
+          "fn": "drain",
+          "us": 263
+        },
+        {
+          "fn": "Root",
+          "us": 260
+        },
+        {
+          "fn": "querySelectorAll",
+          "us": 147
+        },
+        {
+          "fn": "createTextNode",
+          "us": 137
+        },
+        {
+          "fn": "runDyn",
+          "us": 137
+        }
+      ]
+    },
+    {
+      "iteration": 3,
+      "side": "base",
+      "mode": "plain",
+      "operation": "mount-dispose",
+      "top": [
+        {
+          "fn": "cloneNode",
+          "us": 7423
+        },
+        {
+          "fn": "",
+          "us": 5821
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 5051
+        },
+        {
+          "fn": "cloneNode",
+          "us": 4050
+        },
+        {
+          "fn": "(program)",
+          "us": 4038
+        },
+        {
+          "fn": "removeChild",
+          "us": 3495
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2923
+        },
+        {
+          "fn": "clear",
+          "us": 2919
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2717
+        },
+        {
+          "fn": "drop",
+          "us": 2019
+        },
+        {
+          "fn": "create",
+          "us": 1992
+        },
+        {
+          "fn": "clone",
+          "us": 1654
+        }
+      ]
+    },
+    {
+      "iteration": 3,
+      "side": "base",
+      "mode": "plain",
+      "operation": "switch",
+      "top": [
+        {
+          "fn": "cloneNode",
+          "us": 7843
+        },
+        {
+          "fn": "",
+          "us": 6576
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 4599
+        },
+        {
+          "fn": "insertBefore",
+          "us": 4457
+        },
+        {
+          "fn": "cloneNode",
+          "us": 4012
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2671
+        },
+        {
+          "fn": "removeChild",
+          "us": 2652
+        },
+        {
+          "fn": "clear",
+          "us": 2613
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2126
+        },
+        {
+          "fn": "(program)",
+          "us": 1886
+        },
+        {
+          "fn": "apply",
+          "us": 1821
+        },
+        {
+          "fn": "drop",
+          "us": 1816
+        }
+      ]
+    },
+    {
+      "iteration": 3,
+      "side": "base",
+      "mode": "plain",
+      "operation": "update",
+      "top": [
+        {
+          "fn": "drop",
+          "us": 10487
+        },
+        {
+          "fn": "cloneNode",
+          "us": 5739
+        },
+        {
+          "fn": "removeChild",
+          "us": 4801
+        },
+        {
+          "fn": "insertBefore",
+          "us": 4011
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 2169
+        },
+        {
+          "fn": "(program)",
+          "us": 2157
+        },
+        {
+          "fn": "clone",
+          "us": 1472
+        },
+        {
+          "fn": "apply",
+          "us": 1265
+        },
+        {
+          "fn": "removeChild",
+          "us": 952
+        },
+        {
+          "fn": "read",
+          "us": 926
+        },
+        {
+          "fn": "",
+          "us": 915
+        },
+        {
+          "fn": "__insert",
+          "us": 814
+        }
+      ]
+    },
+    {
+      "iteration": 3,
+      "side": "base",
+      "mode": "plain",
+      "operation": "signal",
+      "top": [
+        {
+          "fn": "drop",
+          "us": 3706
+        },
+        {
+          "fn": "apply",
+          "us": 1989
+        },
+        {
+          "fn": "(program)",
+          "us": 1957
+        },
+        {
+          "fn": "apply",
+          "us": 525
+        },
+        {
+          "fn": "(idle)",
+          "us": 492
+        },
+        {
+          "fn": "mount",
+          "us": 271
+        },
+        {
+          "fn": "cloneNode",
+          "us": 256
+        },
+        {
+          "fn": "drop",
+          "us": 154
+        },
+        {
+          "fn": "clear",
+          "us": 147
+        },
+        {
+          "fn": "drain",
+          "us": 138
+        },
+        {
+          "fn": "createElement",
+          "us": 137
+        },
+        {
+          "fn": "removeChild",
+          "us": 132
+        }
+      ]
+    },
+    {
+      "iteration": 3,
+      "side": "base",
+      "mode": "nested",
+      "operation": "mount-dispose",
+      "top": [
+        {
+          "fn": "cloneNode",
+          "us": 7653
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 5862
+        },
+        {
+          "fn": "",
+          "us": 5516
+        },
+        {
+          "fn": "insertBefore",
+          "us": 4130
+        },
+        {
+          "fn": "cloneNode",
+          "us": 3276
+        },
+        {
+          "fn": "removeChild",
+          "us": 3264
+        },
+        {
+          "fn": "",
+          "us": 3172
+        },
+        {
+          "fn": "clear",
+          "us": 3012
+        },
+        {
+          "fn": "cloneNode",
+          "us": 2954
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2623
+        },
+        {
+          "fn": "drop",
+          "us": 2417
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2344
+        }
+      ]
+    },
+    {
+      "iteration": 3,
+      "side": "base",
+      "mode": "nested",
+      "operation": "switch",
+      "top": [
+        {
+          "fn": "cloneNode",
+          "us": 6893
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 5705
+        },
+        {
+          "fn": "",
+          "us": 4989
+        },
+        {
+          "fn": "clear",
+          "us": 4343
+        },
+        {
+          "fn": "removeChild",
+          "us": 3998
+        },
+        {
+          "fn": "insertBefore",
+          "us": 3640
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2580
+        },
+        {
+          "fn": "cloneNode",
+          "us": 2521
+        },
+        {
+          "fn": "",
+          "us": 2426
+        },
+        {
+          "fn": "cloneNode",
+          "us": 2332
+        },
+        {
+          "fn": "(program)",
+          "us": 2264
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2181
+        }
+      ]
+    },
+    {
+      "iteration": 3,
+      "side": "base",
+      "mode": "nested",
+      "operation": "update",
+      "top": [
+        {
+          "fn": "drop",
+          "us": 11387
+        },
+        {
+          "fn": "removeChild",
+          "us": 8562
+        },
+        {
+          "fn": "insertBefore",
+          "us": 4779
+        },
+        {
+          "fn": "cloneNode",
+          "us": 4456
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 3267
+        },
+        {
+          "fn": "cloneNode",
+          "us": 2799
+        },
+        {
+          "fn": "",
+          "us": 2636
+        },
+        {
+          "fn": "",
+          "us": 2487
+        },
+        {
+          "fn": "(program)",
+          "us": 2323
+        },
+        {
+          "fn": "cloneNode",
+          "us": 1969
+        },
+        {
+          "fn": "",
+          "us": 1827
+        },
+        {
+          "fn": "cloneNode",
+          "us": 1580
+        }
+      ]
+    },
+    {
+      "iteration": 3,
+      "side": "base",
+      "mode": "nested",
+      "operation": "signal",
+      "top": [
+        {
+          "fn": "apply",
+          "us": 2906
+        },
+        {
+          "fn": "drop",
+          "us": 2217
+        },
+        {
+          "fn": "(program)",
+          "us": 2155
+        },
+        {
+          "fn": "(idle)",
+          "us": 655
+        },
+        {
+          "fn": "",
+          "us": 503
+        },
+        {
+          "fn": "refresh",
+          "us": 415
+        },
+        {
+          "fn": "drop",
+          "us": 409
+        },
+        {
+          "fn": "apply",
+          "us": 269
+        },
+        {
+          "fn": "drain",
+          "us": 261
+        },
+        {
+          "fn": "",
+          "us": 164
+        },
+        {
+          "fn": "",
+          "us": 140
+        },
+        {
+          "fn": "clear",
+          "us": 137
+        }
+      ]
+    },
+    {
+      "iteration": 3,
+      "side": "base",
+      "mode": "text",
+      "operation": "mount-dispose",
+      "top": [
+        {
+          "fn": "cloneNode",
+          "us": 8520
+        },
+        {
+          "fn": "",
+          "us": 6697
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 5062
+        },
+        {
+          "fn": "cloneNode",
+          "us": 3799
+        },
+        {
+          "fn": "insertBefore",
+          "us": 3437
+        },
+        {
+          "fn": "clear",
+          "us": 2865
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2681
+        },
+        {
+          "fn": "createTextNode",
+          "us": 2547
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2454
+        },
+        {
+          "fn": "(program)",
+          "us": 2139
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2024
+        },
+        {
+          "fn": "removeChild",
+          "us": 2003
+        }
+      ]
+    },
+    {
+      "iteration": 3,
+      "side": "base",
+      "mode": "text",
+      "operation": "switch",
+      "top": [
+        {
+          "fn": "cloneNode",
+          "us": 7354
+        },
+        {
+          "fn": "",
+          "us": 5257
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 4441
+        },
+        {
+          "fn": "cloneNode",
+          "us": 4117
+        },
+        {
+          "fn": "insertBefore",
+          "us": 3973
+        },
+        {
+          "fn": "createTextNode",
+          "us": 3496
+        },
+        {
+          "fn": "clear",
+          "us": 3020
+        },
+        {
+          "fn": "removeChild",
+          "us": 2917
+        },
+        {
+          "fn": "",
+          "us": 2503
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2480
+        },
+        {
+          "fn": "(program)",
+          "us": 2428
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2344
+        }
+      ]
+    },
+    {
+      "iteration": 3,
+      "side": "base",
+      "mode": "text",
+      "operation": "update",
+      "top": [
+        {
+          "fn": "add",
+          "us": 10894
+        },
+        {
+          "fn": "removeChild",
+          "us": 9922
+        },
+        {
+          "fn": "drop",
+          "us": 8677
+        },
+        {
+          "fn": "cloneNode",
+          "us": 4706
+        },
+        {
+          "fn": "insertBefore",
+          "us": 4405
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 3225
+        },
+        {
+          "fn": "insertBefore",
+          "us": 3081
+        },
+        {
+          "fn": "(program)",
+          "us": 2674
+        },
+        {
+          "fn": "",
+          "us": 2305
+        },
+        {
+          "fn": "createTextNode",
+          "us": 1905
+        },
+        {
+          "fn": "",
+          "us": 1575
+        },
+        {
+          "fn": "within",
+          "us": 1074
+        }
+      ]
+    },
+    {
+      "iteration": 3,
+      "side": "base",
+      "mode": "text",
+      "operation": "signal",
+      "top": [
+        {
+          "fn": "drop",
+          "us": 2419
+        },
+        {
+          "fn": "(program)",
+          "us": 2194
+        },
+        {
+          "fn": "apply",
+          "us": 1857
+        },
+        {
+          "fn": "refresh",
+          "us": 956
+        },
+        {
+          "fn": "(idle)",
+          "us": 630
+        },
+        {
+          "fn": "read",
+          "us": 387
+        },
+        {
+          "fn": "drain",
+          "us": 287
+        },
+        {
+          "fn": "apply",
+          "us": 252
+        },
+        {
+          "fn": "cloneNode",
+          "us": 245
+        },
+        {
+          "fn": "runDyn",
+          "us": 242
+        },
+        {
+          "fn": "",
+          "us": 142
+        },
+        {
+          "fn": "__insert",
+          "us": 140
+        }
+      ]
+    },
+    {
+      "iteration": 3,
+      "side": "head",
+      "mode": "plain",
+      "operation": "mount-dispose",
+      "top": [
+        {
+          "fn": "cloneNode",
+          "us": 8235
+        },
+        {
+          "fn": "",
+          "us": 6357
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 4664
+        },
+        {
+          "fn": "cloneNode",
+          "us": 4205
+        },
+        {
+          "fn": "(program)",
+          "us": 3887
+        },
+        {
+          "fn": "insertBefore",
+          "us": 3330
+        },
+        {
+          "fn": "removeChild",
+          "us": 2783
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2248
+        },
+        {
+          "fn": "drop",
+          "us": 2226
+        },
+        {
+          "fn": "clear",
+          "us": 2151
+        },
+        {
+          "fn": "clone",
+          "us": 1621
+        },
+        {
+          "fn": "clone",
+          "us": 1504
+        }
+      ]
+    },
+    {
+      "iteration": 3,
+      "side": "head",
+      "mode": "plain",
+      "operation": "switch",
+      "top": [
+        {
+          "fn": "cloneNode",
+          "us": 7171
+        },
+        {
+          "fn": "",
+          "us": 7113
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 4722
+        },
+        {
+          "fn": "cloneNode",
+          "us": 4642
+        },
+        {
+          "fn": "insertBefore",
+          "us": 3685
+        },
+        {
+          "fn": "clear",
+          "us": 3144
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2666
+        },
+        {
+          "fn": "removeChild",
+          "us": 2109
+        },
+        {
+          "fn": "(program)",
+          "us": 2020
+        },
+        {
+          "fn": "drop",
+          "us": 1686
+        },
+        {
+          "fn": "",
+          "us": 1410
+        },
+        {
+          "fn": "insertBefore",
+          "us": 1304
+        }
+      ]
+    },
+    {
+      "iteration": 3,
+      "side": "head",
+      "mode": "plain",
+      "operation": "update",
+      "top": [
+        {
+          "fn": "drop",
+          "us": 10368
+        },
+        {
+          "fn": "removeChild",
+          "us": 4521
+        },
+        {
+          "fn": "cloneNode",
+          "us": 4176
+        },
+        {
+          "fn": "insertBefore",
+          "us": 4128
+        },
+        {
+          "fn": "clone",
+          "us": 2636
+        },
+        {
+          "fn": "apply",
+          "us": 1985
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 1885
+        },
+        {
+          "fn": "(program)",
+          "us": 1821
+        },
+        {
+          "fn": "",
+          "us": 1329
+        },
+        {
+          "fn": "read",
+          "us": 1071
+        },
+        {
+          "fn": "cloneNode",
+          "us": 898
+        },
+        {
+          "fn": "within",
+          "us": 821
+        }
+      ]
+    },
+    {
+      "iteration": 3,
+      "side": "head",
+      "mode": "plain",
+      "operation": "signal",
+      "top": [
+        {
+          "fn": "drop",
+          "us": 3154
+        },
+        {
+          "fn": "(program)",
+          "us": 2046
+        },
+        {
+          "fn": "apply",
+          "us": 2002
+        },
+        {
+          "fn": "(idle)",
+          "us": 519
+        },
+        {
+          "fn": "Root",
+          "us": 506
+        },
+        {
+          "fn": "apply",
+          "us": 309
+        },
+        {
+          "fn": "refresh",
+          "us": 287
+        },
+        {
+          "fn": "drain",
+          "us": 272
+        },
+        {
+          "fn": "",
+          "us": 146
+        },
+        {
+          "fn": "untrack",
+          "us": 145
+        },
+        {
+          "fn": "removeChild",
+          "us": 143
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 138
+        }
+      ]
+    },
+    {
+      "iteration": 3,
+      "side": "head",
+      "mode": "nested",
+      "operation": "mount-dispose",
+      "top": [
+        {
+          "fn": "cloneNode",
+          "us": 7975
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 6330
+        },
+        {
+          "fn": "",
+          "us": 5959
+        },
+        {
+          "fn": "insertBefore",
+          "us": 4475
+        },
+        {
+          "fn": "insertBefore",
+          "us": 3883
+        },
+        {
+          "fn": "clear",
+          "us": 3440
+        },
+        {
+          "fn": "removeChild",
+          "us": 3032
+        },
+        {
+          "fn": "cloneNode",
+          "us": 2902
+        },
+        {
+          "fn": "cloneNode",
+          "us": 2601
+        },
+        {
+          "fn": "",
+          "us": 2367
+        },
+        {
+          "fn": "cloneNode",
+          "us": 2104
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2044
+        }
+      ]
+    },
+    {
+      "iteration": 3,
+      "side": "head",
+      "mode": "nested",
+      "operation": "switch",
+      "top": [
+        {
+          "fn": "cloneNode",
+          "us": 6124
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 5981
+        },
+        {
+          "fn": "",
+          "us": 5722
+        },
+        {
+          "fn": "removeChild",
+          "us": 4625
+        },
+        {
+          "fn": "insertBefore",
+          "us": 4435
+        },
+        {
+          "fn": "cloneNode",
+          "us": 3956
+        },
+        {
+          "fn": "cloneNode",
+          "us": 3386
+        },
+        {
+          "fn": "clear",
+          "us": 3367
+        },
+        {
+          "fn": "cloneNode",
+          "us": 3190
+        },
+        {
+          "fn": "insertBefore",
+          "us": 3086
+        },
+        {
+          "fn": "insertBefore",
+          "us": 3055
+        },
+        {
+          "fn": "",
+          "us": 2078
+        }
+      ]
+    },
+    {
+      "iteration": 3,
+      "side": "head",
+      "mode": "nested",
+      "operation": "update",
+      "top": [
+        {
+          "fn": "removeChild",
+          "us": 11353
+        },
+        {
+          "fn": "drop",
+          "us": 9623
+        },
+        {
+          "fn": "insertBefore",
+          "us": 4737
+        },
+        {
+          "fn": "",
+          "us": 3391
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 3366
+        },
+        {
+          "fn": "(program)",
+          "us": 2697
+        },
+        {
+          "fn": "cloneNode",
+          "us": 2547
+        },
+        {
+          "fn": "",
+          "us": 2352
+        },
+        {
+          "fn": "apply",
+          "us": 2344
+        },
+        {
+          "fn": "cloneNode",
+          "us": 2341
+        },
+        {
+          "fn": "",
+          "us": 2258
+        },
+        {
+          "fn": "cloneNode",
+          "us": 1931
+        }
+      ]
+    },
+    {
+      "iteration": 3,
+      "side": "head",
+      "mode": "nested",
+      "operation": "signal",
+      "top": [
+        {
+          "fn": "drop",
+          "us": 3073
+        },
+        {
+          "fn": "apply",
+          "us": 2119
+        },
+        {
+          "fn": "(program)",
+          "us": 1827
+        },
+        {
+          "fn": "read",
+          "us": 665
+        },
+        {
+          "fn": "(idle)",
+          "us": 634
+        },
+        {
+          "fn": "runDyn",
+          "us": 407
+        },
+        {
+          "fn": "onCleanup",
+          "us": 399
+        },
+        {
+          "fn": "refresh",
+          "us": 377
+        },
+        {
+          "fn": "__slot",
+          "us": 277
+        },
+        {
+          "fn": "drop",
+          "us": 273
+        },
+        {
+          "fn": "apply",
+          "us": 259
+        },
+        {
+          "fn": "clean",
+          "us": 152
+        }
+      ]
+    },
+    {
+      "iteration": 3,
+      "side": "head",
+      "mode": "text",
+      "operation": "mount-dispose",
+      "top": [
+        {
+          "fn": "",
+          "us": 7711
+        },
+        {
+          "fn": "cloneNode",
+          "us": 6907
+        },
+        {
+          "fn": "cloneNode",
+          "us": 4434
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 3785
+        },
+        {
+          "fn": "apply",
+          "us": 3190
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2939
+        },
+        {
+          "fn": "drop",
+          "us": 2784
+        },
+        {
+          "fn": "removeChild",
+          "us": 2458
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2335
+        },
+        {
+          "fn": "(program)",
+          "us": 1977
+        },
+        {
+          "fn": "clear",
+          "us": 1957
+        },
+        {
+          "fn": "clone",
+          "us": 1734
+        }
+      ]
+    },
+    {
+      "iteration": 3,
+      "side": "head",
+      "mode": "text",
+      "operation": "switch",
+      "top": [
+        {
+          "fn": "cloneNode",
+          "us": 7225
+        },
+        {
+          "fn": "",
+          "us": 6031
+        },
+        {
+          "fn": "cloneNode",
+          "us": 4400
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 3928
+        },
+        {
+          "fn": "clear",
+          "us": 3785
+        },
+        {
+          "fn": "insertBefore",
+          "us": 3542
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2878
+        },
+        {
+          "fn": "removeChild",
+          "us": 2623
+        },
+        {
+          "fn": "apply",
+          "us": 2430
+        },
+        {
+          "fn": "insertBefore",
+          "us": 2132
+        },
+        {
+          "fn": "(program)",
+          "us": 2129
+        },
+        {
+          "fn": "drop",
+          "us": 1730
+        }
+      ]
+    },
+    {
+      "iteration": 3,
+      "side": "head",
+      "mode": "text",
+      "operation": "update",
+      "top": [
+        {
+          "fn": "apply",
+          "us": 14370
+        },
+        {
+          "fn": "drop",
+          "us": 6407
+        },
+        {
+          "fn": "removeChild",
+          "us": 5792
+        },
+        {
+          "fn": "cloneNode",
+          "us": 4439
+        },
+        {
+          "fn": "insertBefore",
+          "us": 3679
+        },
+        {
+          "fn": "clone",
+          "us": 2485
+        },
+        {
+          "fn": "(program)",
+          "us": 1880
+        },
+        {
+          "fn": "(garbage collector)",
+          "us": 1779
+        },
+        {
+          "fn": "",
+          "us": 1537
+        },
+        {
+          "fn": "read",
+          "us": 1364
+        },
+        {
+          "fn": "",
+          "us": 1294
+        },
+        {
+          "fn": "__slot",
+          "us": 1141
+        }
+      ]
+    },
+    {
+      "iteration": 3,
+      "side": "head",
+      "mode": "text",
+      "operation": "signal",
+      "top": [
+        {
+          "fn": "apply",
+          "us": 3443
+        },
+        {
+          "fn": "(program)",
+          "us": 1925
+        },
+        {
+          "fn": "drop",
+          "us": 1452
+        },
+        {
+          "fn": "drain",
+          "us": 688
+        },
+        {
+          "fn": "(idle)",
+          "us": 640
+        },
+        {
+          "fn": "refresh",
+          "us": 504
+        },
+        {
+          "fn": "drop",
+          "us": 407
+        },
+        {
+          "fn": "read",
+          "us": 273
+        },
+        {
+          "fn": "runDyn",
+          "us": 156
+        },
+        {
+          "fn": "apply",
+          "us": 137
+        },
+        {
+          "fn": "notify",
+          "us": 135
+        },
+        {
+          "fn": "remove",
+          "us": 135
+        }
+      ]
+    }
+  ],
+  "fixture": "import { attach, For, onCleanup, Show, signal } from \"@reactre/core\";\n\nimport { labels } from \"./mount-data.ts\";\n\ntype Item = { id: number; label: string; kind: \"plain\" | \"alternate\" };\nconst items: Item[] = Array.from({ length: 500 }, (_, id) => ({\n  id,\n  label: `row ${id}`,\n  kind: id % 2 ? \"plain\" : \"alternate\",\n}));\nlet cleaned = 0;\nfunction Resource() {\n  onCleanup(() => cleaned++);\n  return <em>resource</em>;\n}\nexport function mount(root: Element, mode: string) {\n  const [rows, setRows] = signal(items);\n  const [shown, setShown] = signal(true);\n  const [count, setCount] = signal(0);\n  const dispose = attach(\n    () => (\n      <main>\n        <Show when={shown()}>\n          <ul>\n            <For each={rows()} key={(row) => row.id}>\n              {(row) => (\n                <li>\n                  {mode === \"nested\" ? (\n                    row.kind === \"plain\" ? (\n                      <span>\n                        {row.label}\n                        <Resource />\n                      </span>\n                    ) : (\n                      <i>\n                        {row.label}\n                        <Resource />\n                      </i>\n                    )\n                  ) : mode === \"text\" ? (\n                    <span>{`${labels[row.kind]}: ${row.label}`}</span>\n                  ) : (\n                    <span>{row.label}</span>\n                  )}\n                  <b>{count()}</b>\n                </li>\n              )}\n            </For>\n          </ul>\n        </Show>\n      </main>\n    ),\n    root,\n  );\n  return {\n    update() {\n      setRows(rows().map((r) => ({ ...r, label: r.label + \"!\", kind: r.kind === \"plain\" ? \"alternate\" : \"plain\" })));\n    },\n    switch() {\n      setShown(false);\n      setShown(true);\n    },\n    signal() {\n      setCount(count() + 1);\n    },\n    dispose,\n  };\n}\nexport function exercise(mode: string, operation: string, cycles: number): number {\n  const root = document.createElement(\"div\");\n  document.body.append(root);\n  const app = mount(root, mode);\n  const before = cleaned;\n  const start = performance.now();\n  for (let i = 0; i < cycles; i++) {\n    if (operation === \"mount-dispose\") {\n      const another = document.createElement(\"div\");\n      const mounted = mount(another, mode);\n      mounted.dispose();\n    } else if (operation === \"switch\") app.switch();\n    else if (operation === \"update\") app.update();\n    else app.signal();\n  }\n  const ms = performance.now() - start;\n  if (root.querySelectorAll(\"li\").length !== 500) throw new Error(\"lost rows\");\n  app.dispose();\n  if (root.textContent !== \"\") throw new Error(\"disposal left content\");\n  if (mode === \"nested\" && cleaned <= before) throw new Error(\"missing resource cleanup\");\n  root.remove();\n  return ms;\n}\n"
+}

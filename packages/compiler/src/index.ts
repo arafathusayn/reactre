@@ -1305,6 +1305,11 @@ export class Compiler {
         else this.hole(t, { kind: "slot", slot: "comp", expr: this.m(at) + flow.expr, only, at: -1 });
       } else if (inner !== null)
         this.hole(t, { kind: "slot", slot: "comp", expr: this.m(at) + this.component(inner), only, at: -1 });
+      // A complete template literal is a string even when its interpolations mention imports
+      // or content props. Only static expressions move: reactive slots also own the resources
+      // their evaluation may create, whereas a text binding does not create a per-run owner.
+      else if (!this.hasJsx(child) && textExpression(child) && !this.changes(child))
+        this.hole(t, { kind: "value", marker: M_TEXT, expr: child, at });
       // A component's children may be nodes, and so may what holds JSX and a fragment's
       // expression: inserted, and followed when they may change.
       else if (this.readsChildren(child) || (!this.hasJsx(child) && (content || this.holdsJsx(child)))) {
@@ -2088,6 +2093,12 @@ export function forIndex(p: ReadonlyMap<string, readonly [string, number]>, keyA
  */
 function accessor(w: string): string {
   return `((__rrP) => __rrMemo(() => (__rrP = (${w}) || __rrP)))()`;
+}
+
+/** A whole untagged template literal always produces text, irrespective of its interpolations. */
+function textExpression(expr: string): boolean {
+  const text = expr.trim();
+  return text[0] === "`" && skipToken(text, 0, "", "") === text.length;
 }
 
 /**
