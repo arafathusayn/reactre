@@ -4,6 +4,7 @@
   "type": "module",
   "dependencies": {
     "@reactre/core": "workspace:*",
+    "@reactre/state": "workspace:*",
     "jfb": "workspace:*",
     "puppeteer-core": "catalog:"
   }

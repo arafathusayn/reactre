@@ -9,9 +9,10 @@
 // the signals made here are counted, and nothing in the core checks for them:
 //
 //   - A signal's readers are its `subs` array, which the core pushes a reader to when it reads
-//     it and splices out when the reader runs again or goes. A counted signal is the core's
+//     it and removes when the reader runs again or goes. A counted signal is the core's
 //     signal of a version number whose `subs` is an array of a subclass (`Counted`), whose
-//     `push` and `splice` tell it when it gains a reader and when it is left with none. Only that
+//     `push` and `pop` tell it when it gains a reader and when it is left with none. The core
+//     splices only a reader with another after it, so splice cannot empty the list. Only that
 //     signal's array is of the subclass: every other signal's is the plain array it was.
 //   - The signal object is found as its read records it, in an effect whose `read` keeps it
 //     (`Grab`, of the core's owned effect class), once, when the signal is made.
@@ -63,8 +64,8 @@ function counted(w: Watch): [() => number, Setter<number>, Subs] {
       this.w.seen = true;
       return super.push(...items);
     }
-    override splice(start: number, n: number): unknown[] {
-      const out = super.splice(start, n);
+    override pop(): unknown {
+      const out = super.pop();
       if (this.length === 0) this.w.empty();
       return out;
     }
