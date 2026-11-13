@@ -21,9 +21,8 @@ its ownership/equality semantics are documented in
 ## Reproduction and attribution
 
 Baseline: `63542a92765fbd401e37ce3b99fe47f429e2cd0f`, freshly fetched main.
-Candidate runtime and fixtures: `481da6b` (its parent `64ee20d` contains the
-fixtures and comparator fix). Only documentation was uncommitted during the
-final timings. Source fixtures, full revisions, bundle hashes, raw results and
+Candidate: `50a27ca` in a clean measured checkout (core implementation
+`481da6b`, fixtures initially added at `64ee20d`). Source fixtures, full revisions, bundle hashes, raw results and
 environment are embedded in [propagation.json](propagation.json).
 
 ```sh
@@ -69,25 +68,29 @@ with separate regression coverage for selection consistency and ownership.
 The table includes regressions, neutral results and the relevant absolute A/A
 gap. Faster-pair counts are descriptive, not confidence intervals. The
 [control](propagation-control.json) compiled byte-identical bundles on both sides.
+The final baseline differs from that control only in six generated source-path
+comments (`63542a9` versus `origin_main`); the executable code is identical.
 Small cases have sizable noise; in particular the raw-actor case varies enough
 that its apparent improvement must not be attributed to an unchanged runtime.
 
 | Fixture / workload                |   Base median (range), ms | Candidate median (range), ms | Median reduction | Faster pairs | A/A median gap |
 | --------------------------------- | ------------------------: | ---------------------------: | ---------------: | -----------: | -------------: |
-| micro: memo, changed              |    88.343 (85.505–96.965) |       76.825 (70.760–81.420) |            13.0% |          8/8 |           2.0% |
-| micro: selected-bridge, changed   |    82.675 (77.160–86.760) |       67.933 (63.370–72.810) |            17.8% |          8/8 |           2.7% |
-| micro: memo, reentrant            | 134.428 (126.410–139.325) |    122.360 (114.785–125.175) |             9.0% |          8/8 |           2.3% |
-| micro: selected-bridge, reentrant |    93.340 (86.550–97.635) |       81.693 (75.055–84.670) |            12.5% |          8/8 |           2.9% |
-| micro: bridge, changed            |    42.877 (40.700–47.695) |       45.517 (40.720–47.985) |            -6.2% |          1/8 |           3.2% |
-| micro: selection, unchanged       |       7.162 (6.065–8.120) |          8.518 (6.985–9.705) |           -18.9% |          0/8 |          10.3% |
-| dom: selected-bridge, changed     |    14.663 (13.045–17.395) |       14.517 (12.810–17.265) |             1.0% |          4/8 |           5.0% |
-| dom: memo, changed                |    18.825 (16.245–20.865) |       17.355 (15.505–20.065) |             7.8% |          5/8 |           7.3% |
-| dom: bridge, changed              |    15.788 (13.325–17.005) |       15.365 (13.890–17.285) |             2.7% |          5/8 |           3.0% |
+| micro: memo, changed              |    82.362 (79.290–83.490) |       69.717 (68.585–73.855) |            15.4% |          8/8 |           2.0% |
+| micro: selected-bridge, changed   |    75.712 (73.400–77.500) |       64.295 (63.140–66.755) |            15.1% |          8/8 |           2.7% |
+| micro: memo, reentrant            | 124.980 (121.960–129.780) |    112.160 (111.130–114.730) |            10.3% |          8/8 |           2.3% |
+| micro: selected-bridge, reentrant |    85.738 (83.750–87.870) |       75.035 (71.265–78.695) |            12.5% |          8/8 |           2.9% |
+| micro: bridge, changed            |    39.528 (38.135–40.920) |       41.038 (39.815–42.330) |            -3.8% |          0/8 |           3.2% |
+| micro: selection, unchanged       |       6.125 (6.085–6.755) |          6.633 (6.510–6.725) |            -8.3% |          2/8 |          10.3% |
+| dom: selected-bridge, changed     |    12.920 (12.740–13.225) |       12.762 (12.390–13.020) |             1.2% |          7/8 |           5.0% |
+| dom: memo, changed                |    16.002 (15.545–16.790) |       15.365 (14.405–16.310) |             4.0% |          6/8 |           7.3% |
+| dom: bridge, changed              |    13.277 (12.855–13.800) |       13.520 (12.675–14.780) |            -1.8% |          3/8 |           3.0% |
 
 The changed-value memo and selected-bridge microbenchmark ranges do not overlap,
 and all eight pairs improve. Their reentrant cases improve in all eight pairs
-too. Conversely, the whole-snapshot bridge regresses around 6% in this run, and
-selector-only unchanged values regress around 19%. These costs are retained in
+too. Conversely, the whole-snapshot bridge is around 4% slower in this run, and
+selector-only unchanged values are around 8% slower. The final revision counter
+avoids redundant delivery comparisons and a notification for comparator-rejected
+values; the superseded version had an approximately 19% selector-only cost. These costs are retained in
 the report; this is not a recommendation to replace every bridge with a selector.
 The DOM ranges overlap and their median differences are comparable to control
 noise. **No integrated DOM speedup is established.**
@@ -103,20 +106,20 @@ explain why selection helps one workload and loses in another.
 
 ## Allocation, GC and retained memory
 
-[Separate profiles](propagation-profile.json.gz) contain CPU self-time samples,
-GC samples and Chrome sampling-heap-profiler trees/results. A subsequent separate
-[CPU capture](propagation-cpu.json.gz) also preserves every full `cpuProfile` object
-and an explicit `gcSampleUs` total, rather than only the hottest functions. Export
-a profile object as `.cpuprofile` to inspect it in Chrome DevTools. Uncompress with
-`gzip -dc`. Sampling includes collected objects, uses a 16,384-byte interval and
+[Separate profiles](propagation-profile.json.gz) contain full CPU profiles,
+explicit `gcSampleUs` totals and Chrome sampling-heap-profiler trees/results.
+Export a `cpuProfile` object as `.cpuprofile` to inspect it in Chrome DevTools.
+Uncompress with `gzip -dc`. The [earlier CPU capture](propagation-cpu.json.gz) is
+retained as superseded diagnostic evidence, not the final candidate's profile.
+Sampling includes collected objects, uses a 16,384-byte interval and
 covers the whole fixture call (input preparation, setup, work and disposal).
 These are sampled allocation estimates, not exact allocated-byte counts; none
 of the profiled timings is used in the timing table.
 
-In two profile pairs, changed-value micro memos estimate 285.3 → 201.9 MB allocated
-and selected bridges 244.5 → 164.1 MB. The corresponding DOM cases estimate
-23.6 → 18.6 MB and 22.0 → 18.9 MB. The whole-snapshot bridge does not improve
-allocation (115.1 → 117.7 MB in the micro case). The profiles locate work in
+In two profile pairs, changed-value micro memos estimate 283.7 → 203.8 MB allocated
+and selected bridges 244.1 → 164.2 MB. The corresponding DOM cases estimate
+24.3 → 19.0 MB and 22.3 → 18.4 MB. The whole-snapshot bridge remains approximately unchanged
+(116.6 → 114.9 MB in the micro case). The profiles locate work in
 subscription removal, reactive execution and GC; DOM creation/removal/insertion
 remains substantial in the integrated fixture.
 
@@ -158,7 +161,7 @@ reduces transient discarded arrays, without a retained-memory claim.
 ## Validation and downstream impact
 
 The final runtime passes normal and strict type checks, formatting, all package
-builds, **4,095 tests with 100% source line/function coverage**, plugin distribution
+builds, **4,096 tests with 100% source line/function coverage**, plugin distribution
 checks, packed-consumer type checks and the complete React compatibility run.
 Existing byte budgets pass unchanged.
 The suite includes generated-machine ordering/guards/tasks, historical snapshots,
