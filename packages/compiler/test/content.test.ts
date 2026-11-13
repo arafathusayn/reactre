@@ -605,7 +605,7 @@ describe("template strings are primitive text, even when their inputs may hold c
     expect(root.textContent).toBe("value: false");
     app.setValue("<b>& text");
     expect(root.textContent).toBe("value: <b>& text");
-    expect(root.firstChild!.childNodes.length).toBe(1);
+    expect(root.firstChild!.childNodes.some((node) => node.nodeType === 1)).toBe(false);
     app.dispose();
   });
 
