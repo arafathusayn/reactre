@@ -1695,11 +1695,19 @@ function unseen(spec: string, to: Resolved | undefined): boolean {
 
 // #region Reading a build
 
+/** Why whole-program facts could not be established. Paths name the analysis input. */
+export interface AnalysisDiagnostic {
+  readonly code: "unresolved-import" | "opaque-module" | "unreadable-module";
+  readonly importer: string;
+  readonly specifier?: string;
+  readonly message: string;
+}
+
 /** How a build reads its modules: its bundler's resolver, and the transpiler the compiler reads. */
 export interface Host {
   /**
    * Where `spec`, imported by `importer`, leads: an absolute path (a query or hash after it is
-   * ignored), false for a module the build does not bundle (external, or not found), or null when
+   * ignored), false for a module the build does not bundle (external), or null when
    * it cannot be known (a virtual module), which makes the program give up.
    */
   resolve(spec: string, importer: string): Resolved | Promise<Resolved>;
@@ -1707,6 +1715,8 @@ export interface Host {
   transpile(file: string, source: string): string;
   /** A file's text; by default, read from disk. */
   read?(file: string): string | Promise<string>;
+  /** Called for each reason analysis is incomplete, including late modules. May throw to reject it. */
+  onDiagnostic?(diagnostic: AnalysisDiagnostic): void;
 }
 
 /**
@@ -1762,11 +1772,22 @@ export async function walk(
       js =
         code.get(file) ??
         (file.endsWith(".html") ? htmlScripts(file, await read(file)) : host.transpile(file, await read(file)));
-    } catch {
+    } catch (cause) {
+      host.onDiagnostic?.({
+        code: "unreadable-module",
+        importer: file,
+        message: `reactre: cannot read or transpile ${file}: ${String(cause)}`,
+      });
       return false;
     }
     const info = scanModule(js),
       resolved = new Map<string, Resolved>();
+    if (info.opaque)
+      host.onDiagnostic?.({
+        code: "opaque-module",
+        importer: file,
+        message: `reactre: ${file} has imports that cannot be enumerated; use static import specifiers for whole-program analysis`,
+      });
     for (const spec of info.specs) {
       const r = await host.resolve(spec, file);
       const path = typeof r === "string" ? r.replace(/[?#].*$/, "") : r;
@@ -1777,6 +1798,13 @@ export async function walk(
       else if (SCRIPT.test(path) || path.endsWith(".html")) to = path;
       else to = ASSET.test(path) ? false : null;
       resolved.set(spec, to);
+      if (to === null)
+        host.onDiagnostic?.({
+          code: "unresolved-import",
+          importer: file,
+          specifier: spec,
+          message: `reactre: cannot analyze import ${JSON.stringify(spec)} from ${file}; configure the analysis resolver to return a source path, or false only for an external module`,
+        });
       if (typeof to === "string" && !program.has(to)) queue.push(to);
     }
     program.add(file, js, resolved, info);

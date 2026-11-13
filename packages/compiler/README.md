@@ -98,3 +98,59 @@ For Vite, Rollup, Rolldown, esbuild, webpack or Rspack, use [`@reactre/plugin`](
 ## License
 
 Apache-2.0
+
+## Custom resolution and incomplete analysis
+
+Bun's `onResolve` hooks do not participate in `Bun.resolveSync`. If another
+plugin resolves an alias, workspace package or vendored source tree, share that
+resolver with analysis:
+
+```ts
+import { dirname, resolve } from "node:path";
+import { reactreCompiler, type Host } from "@reactre/compiler";
+
+const resolveSource: Host["resolve"] = (specifier, importer) => {
+  if (specifier === "@data/catalog") return resolve("src/catalog.ts");
+  if (specifier === "@workspace/widgets") return resolve("../widgets/src/index.tsx");
+  if (specifier === "@reactre/core") return resolve("vendor/reactre/packages/core/src/index.ts");
+  // Include every external configured on the build, including installed packages.
+  if (specifier === "external-sdk") return false;
+  try {
+    return Bun.resolveSync(specifier, dirname(importer));
+  } catch {
+    return null;
+  }
+};
+
+const compiler = reactreCompiler({
+  analysis: {
+    resolve: resolveSource,
+    strict: true,
+    onDiagnostic(diagnostic) {
+      console.error(diagnostic.message);
+    },
+  },
+});
+```
+
+Use the same path mapping in the bundler's source-resolution plugin. Vendored
+packages must map their subpath exports too. The analysis resolver returns an
+absolute readable source path, `false` for an external module, or `null` when it
+cannot resolve the import. Returning `false` for a missing module incorrectly
+asserts that analysis is complete. Installed packages and assets remain leaves;
+external packages may still export reactive stores, so their uses stay conservative.
+
+`analysis.read` and `analysis.transpile` optionally override the host for both
+analysis and compilation. Transpile must produce the automatic JSX calls accepted
+by `compileJs`; `transpileSource` is the default. No duplicate compilation adapter
+or runtime-selection plugin is needed. The low-level `analyze`/`walk` APIs also
+accept `Host.onDiagnostic`.
+
+Diagnostics include `code`, `importer`, optional `specifier`, and an actionable
+`message`. Without a callback the Bun plugin warns; its default still compiles TSX
+with conservative per-file facts if analysis is incomplete. In that case it retains
+the async runtime unless explicitly overridden, because unseen modules might need
+it. `analysis.strict` rejects unreadable modules, unresolved imports and opaque
+imports such as `import(expression)`. It requires `Bun.build` with `wholeProgram`
+enabled. A late module still cannot invalidate facts already used by another file.
+HTML entry scripts are already supported and use the same host.

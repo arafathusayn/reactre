@@ -139,7 +139,7 @@ import {
 import { isIdent, literal, NOT_LITERAL, skipToken, splitAt, trimAt, until } from "./scan.ts";
 import { CORE_FEATURE, SERVER_HELPERS, ServerEmit, serverImports, serverLate } from "./server.ts";
 
-export type { PropFacts } from "./program.ts";
+export type { AnalysisDiagnostic, Host, PropFacts } from "./program.ts";
 export { HYDRATE_FILE, hydrateImports } from "./hydrate.ts";
 export { CORE_FEATURE, serverImports } from "./server.ts";
 
@@ -175,6 +175,12 @@ export interface CompileOptions {
 
 /** Options for the plugin. */
 export interface ReactreCompilerOptions {
+  /**
+   * Match custom bundler resolution (vendored sources, workspaces, aliases). Overrides the
+   * analysis host; false means external, null means unresolved. Strict rejects incomplete
+   * analysis. By default it warns and compiles with conservative per-file facts.
+   */
+  readonly analysis?: Partial<Host> & { readonly strict?: boolean };
   /** Files to compile; default .jsx and .tsx outside node_modules. */
   readonly filter?: RegExp;
   /**
@@ -226,28 +232,50 @@ export function reactreCompiler(options: ReactreCompilerOptions = {}): BunPlugin
       const external = (build.config as { external?: string[] } | undefined)?.external;
       const host: Host = {
         resolve(spec, importer) {
+          if (isExternal(spec, external)) return false;
           try {
             return Bun.resolveSync(spec, dirname(importer));
           } catch {
             // Left to the runtime when the build says so; else another plugin may serve it (a
             // virtual module), whose code the program cannot read.
-            return isExternal(spec, external) ? false : null;
+            return null;
           }
         },
         transpile: (file, source) => transpileSource(source, loaderOf(file)),
+        ...options.analysis,
+        onDiagnostic(diagnostic) {
+          options.analysis?.onDiagnostic?.(diagnostic);
+          if (options.analysis?.strict) throw new ReactreCompileError(diagnostic.message);
+          if (!options.analysis?.onDiagnostic) console.warn(`${diagnostic.message}; using conservative per-file facts`);
+        },
       };
       let program: Promise<Program | null> = Promise.resolve(null);
+      let analysisError: unknown;
       // Whether the build gets the core's async runtime: by the option, else by the program.
       let keep: Promise<boolean> = Promise.resolve(options.async ?? true);
       const entries = (build.config as { entrypoints?: string[] } | undefined)?.entrypoints;
+      if (options.analysis?.strict && (options.wholeProgram === false || entries === undefined))
+        throw new ReactreCompileError("reactre: analysis.strict requires a Bun.build with wholeProgram enabled");
       if (options.wholeProgram !== false && entries !== undefined)
-        build.onStart(() => {
+        build.onStart(async () => {
+          analysisError = undefined;
           const seen = { async: false };
           program = analyze(
             entries.map((e) => resolve(e)),
             noticingAsync(host, seen),
-          );
-          if (options.async === undefined) keep = program.then(() => seen.async);
+          ).catch((error: unknown) => {
+            analysisError = error;
+            return null;
+          });
+          const result = await program;
+          if (options.async === undefined) keep = Promise.resolve(result === null || seen.async);
+        });
+      // Bun does not reliably turn a rejected onStart callback into a failed build. Surface
+      // analysis errors through onLoad, including entries outside the compilation filter.
+      if (options.wholeProgram !== false && entries !== undefined)
+        build.onLoad({ filter: /.*/ }, async () => {
+          await program;
+          if (analysisError !== undefined) throw analysisError;
         });
       // @reactre/core's runtime, as @reactre/plugin picks it (`coreRuntime`): whichever build the
       // conditions resolved (target "browser" resolves "development", the async one) or the
@@ -290,8 +318,7 @@ export function reactreCompiler(options: ReactreCompilerOptions = {}): BunPlugin
       build.onLoad({ filter }, async ({ path }) => {
         if (path.includes("/node_modules/")) return undefined;
         // A .ts file a filter of the caller's takes (for features/memo's options) is TypeScript without JSX.
-        const loader = path.endsWith(".tsx") ? "tsx" : /\.[cm]?ts$/.test(path) ? "ts" : "jsx";
-        const js = transpileSource(await Bun.file(path).text(), loader);
+        const js = host.transpile(path, await (host.read?.(path) ?? Bun.file(path).text()));
         const props = await factsFor(await program, path, js, host);
         // The output is plain JavaScript: TypeScript and JSX are already gone.
         return { contents: compileJs(js, props === undefined ? server : { props, ...server }), loader: "js" };
