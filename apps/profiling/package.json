@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@reactre/core": "workspace:*",
     "jfb": "workspace:*",
     "puppeteer-core": "catalog:"
   }
