@@ -166,6 +166,10 @@ try {
                 kind,
                 mode,
                 workload,
+                cpuProfile: cpu,
+                gcSampleUs: cpu.nodes
+                  .filter((n) => n.callFrame.functionName === "(garbage collector)")
+                  .reduce((sum, n) => sum + (weights.get(n.id) ?? 0), 0),
                 top: cpu.nodes
                   .map((n) => ({ fn: n.callFrame.functionName, us: weights.get(n.id) ?? 0 }))
                   .sort((a, b) => b.us - a.us)

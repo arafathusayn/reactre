@@ -1,0 +1,14 @@
+A/B of reactre: base 63542a9 vs working tree, 4 rounds of 5 samples per side
+
+01_run1k               duration base    16.9  head    16.9  diff    0.0 ms  95% [-0.6, 0.4]  no proven difference
+01_run1k               script   base     1.4  head     1.4  diff    0.0 ms  95% [-0.0, 0.0]  no proven difference
+02_replace1k           duration base    18.8  head    18.8  diff    0.0 ms  95% [-0.8, 0.9]  no proven difference
+02_replace1k           script   base     3.4  head     3.6  diff    0.1 ms  95% [-0.2, 0.3]  no proven difference
+03_update10th1k_x16    duration base    32.7  head    32.4  diff   -0.3 ms  95% [-1.6, 1.9]  no proven difference
+03_update10th1k_x16    script   base     1.1  head     1.1  diff    0.0 ms  95% [-0.2, 0.3]  no proven difference
+04_select1k            duration base    13.6  head    13.6  diff    0.1 ms  95% [-0.5, 0.7]  no proven difference
+04_select1k            script   base     0.5  head     0.1  diff   -0.4 ms  95% [-0.6, 0.1]  no proven difference
+05_swap1k              duration base    16.5  head    16.1  diff   -0.4 ms  95% [-1.0, 0.4]  no proven difference
+05_swap1k              script   base     0.7  head     0.7  diff   -0.1 ms  95% [-0.3, 0.2]  no proven difference
+09_clear1k_x8          duration base    15.5  head    15.3  diff   -0.2 ms  95% [-0.7, 0.4]  no proven difference
+09_clear1k_x8          script   base     6.3  head     6.8  diff    0.6 ms  95% [-0.4, 1.4]  no proven difference

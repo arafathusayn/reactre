@@ -94,7 +94,7 @@ const s = actor.snapshot();
 if (s.state === "loaded") s.data.body; // narrowed: only "loaded" has a body
 ```
 
-That is the core, and all of it: `setup`, `types`, `machine`, `to`, `keep`, `null` (decline), `on`, `task`, `after`, `final`, `createActor`, `restoreActor`, `transition`, `initial`. `keep(state, data)` stays in the state a handler runs in with new data, and leaves its task and timers running: where a state has a task or timer, `to` to itself is a type error that asks for `keep` or reenter's `reenter` (which restarts them). In a component, `useActor(machine)` from `@reactre/state/signals` gives the snapshot as a signal and stops the actor with the component. The core needs no opt-in. It already covers what XState's `xstate/fsm` does (pure transitions, an interpreter), plus tasks and timers.
+That is the core, and all of it: `setup`, `types`, `machine`, `to`, `keep`, `null` (decline), `on`, `task`, `after`, `final`, `createActor`, `restoreActor`, `transition`, `initial`. `keep(state, data)` stays in the state a handler runs in with new data, and leaves its task and timers running: where a state has a task or timer, `to` to itself is a type error that asks for `keep` or reenter's `reenter` (which restarts them). In a component, `useActor(machine)` from `@reactre/state/signals` gives the snapshot as a signal and stops the actor with the component. See [selected values and external actor ownership](signals.md) for composing the existing selector utility with core signals. The core needs no opt-in. It already covers what XState's `xstate/fsm` does (pure transitions, an interpreter), plus tasks and timers.
 
 ### Opt-ins
 
