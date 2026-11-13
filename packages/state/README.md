@@ -2,6 +2,8 @@
 
 Status: a package in `packages/state/`, not yet published. The plans it was built from are in [`plans/state/`](../../plans/state).
 
+For cancellation, retries, view remounting, and controllers that outlive a view, see the runnable [request lifetime examples](examples/README.md).
+
 Two layers check a machine, and neither repeats the other:
 
 - **The type checker** (`bun check`) checks everything a type can express. That covers targets, exact data (through spreads and variables too), payloads, JSON-only contracts, and the whole graph.
