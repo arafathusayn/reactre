@@ -1,0 +1,5 @@
+{
+  // The codemod, checked with the strictest settings, like the compiler.
+  "extends": "../../../tsconfig.strict.json",
+  "include": ["."]
+}

@@ -1,0 +1,4 @@
+{
+  // A strict config without noFallthroughCasesInSwitch, for ../../../compiler.test.ts (M500).
+  "compilerOptions": { "strict": true, "noUncheckedIndexedAccess": true }
+}

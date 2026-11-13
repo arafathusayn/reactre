@@ -15,5 +15,6 @@
     "forceConsistentCasingInFileNames": true,
     "libReplacement": false
   },
-  "include": ["packages/*/src"]
+  // @reactre/state publishes its compiler, plugin and codemod beside src/.
+  "include": ["packages/*/src", "packages/state/compiler", "packages/state/plugin", "packages/state/codemod"]
 }

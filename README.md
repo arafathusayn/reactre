@@ -133,6 +133,7 @@ bun add @reactre/preact
 | [`@reactre/full-compat`](packages/full-compat) | `@reactre/compat` with React's time slicing: long transitions yield to the page every 5 ms.     |
 | [`@reactre/plugin`](packages/plugin)           | The compiler and compat in Vite, Rollup, Rolldown, esbuild, webpack, Rspack and Bun.            |
 | [`@reactre/preact`](packages/preact)           | Preact 11's API and behaviour on reactre's templates, with a JSX compiler and a bundler plugin. |
+| [`@reactre/state`](packages/state)             | State machines that LLMs write correctly, checked by types and a compiler. Not released yet.    |
 
 ## Performance
 

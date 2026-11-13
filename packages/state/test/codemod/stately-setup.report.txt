@@ -1,0 +1,12 @@
+1: // @ts-nocheck is removed: @reactre/state's compiler refuses a suppression in a file with machines, and the output type-checks
+7: machine: 5 states, 3 events, internal reportOutageDone; each state keeps the whole context
+13: TODO action "logCycle" is a stub in the export: write it in setup's actions (it gets its params; pass it the fields of data and the event it reads). Until then it does nothing, as in the export
+17: TODO action "flashLights" is a stub in the export: write it in setup's actions (it gets its params; pass it the fields of data and the event it reads). Until then it does nothing, as in the export
+23: TODO actor "reportOutage" is a stub in the export: write the task in reportOutage (it gets the invoke's input and an abort signal). Until then it finishes at once (its output is null), as in the export
+29: TODO guard "isRushHour" is a stub in the export: write its condition in isRushHour, and pass it the fields of data and the event it reads. Until then it is true, as in the export
+46: TODO narrow this state's data to the fields it uses: the stubs (isRushHour, reportOutage) aren't written yet, so the fields each state reads aren't known
+72: TODO narrow this state's data to the fields it uses: the stubs (isRushHour, reportOutage) aren't written yet, so the fields each state reads aren't known
+82: TODO narrow this state's data to the fields it uses: the stubs (isRushHour, reportOutage) aren't written yet, so the fields each state reads aren't known
+95: TODO narrow this state's data to the fields it uses: the stubs (isRushHour, reportOutage) aren't written yet, so the fields each state reads aren't known
+96: TODO XState's actor errored when reportOutage failed: say where to go
+112: TODO narrow this state's data to the fields it uses: the stubs (isRushHour, reportOutage) aren't written yet, so the fields each state reads aren't known

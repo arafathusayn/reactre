@@ -1,4 +1,5 @@
 node_modules/
+.fuzz-out/
 .DS_Store
 packages/*/dist/
 apps/jfb/.cache/

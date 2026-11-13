@@ -3,7 +3,8 @@
 // `bun install` into a folder outside the workspace, and checked by `bun check` with skipLibCheck
 // false. The project imports every entry of every package, from a browser app (no runtime types) and
 // from build tools (with them), each under moduleResolution bundler and node16, and it compiles
-// packages/core/test/jsx-types.tsx, the JSX types test, against the declarations.
+// packages/core/test/jsx-types.tsx, the JSX types test, against the declarations. Its
+// @reactre/state machine checks that a broken contract is still a type error from the declarations.
 //
 //   bun scripts/consumer.ts          exits non-zero if any of the four checks fails
 //
@@ -15,7 +16,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const root = join(import.meta.dir, "..");
-const PACKAGES = ["dom", "core", "compiler", "compat", "full-compat", "plugin", "preact"];
+// @reactre/state is private (not released yet), but packed and checked like the others.
+const PACKAGES = ["dom", "core", "compiler", "compat", "full-compat", "plugin", "preact", "state"];
 // The bundlers the plugin's declarations reach through unplugin's, which import each one's types.
 const TOOLS: Record<string, string> = {
   "@types/bun": "1.4.4",

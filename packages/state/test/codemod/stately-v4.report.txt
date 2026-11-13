@@ -1,0 +1,14 @@
+1: // @ts-nocheck is removed: @reactre/state's compiler refuses a suppression in a file with machines, and the output type-checks
+7: machine: 5 states, 3 events, internal uploadFileDone; each state keeps the whole context
+9: the @xstate-layout comment is dropped: it is Stately's diagram layout, and @reactre/state has no visual editor
+11: tsTypes is dropped: it names v4's generated types, and setup's states and events type the machine now
+25: predictableActionArguments is dropped: it is v4's switch to run actions in order, and effects here always run in order
+26: preserveActionOrder is dropped: it is v4's switch to run actions in order, and effects here always run in order
+29: TODO narrow this state's data to the fields it uses: the stubs (isAllowedType, uploadFile) aren't written yet, so the fields each state reads aren't known
+42: TODO narrow this state's data to the fields it uses: the stubs (isAllowedType, uploadFile) aren't written yet, so the fields each state reads aren't known
+49: TODO narrow this state's data to the fields it uses: the stubs (isAllowedType, uploadFile) aren't written yet, so the fields each state reads aren't known
+71: TODO narrow this state's data to the fields it uses: the stubs (isAllowedType, uploadFile) aren't written yet, so the fields each state reads aren't known
+81: TODO narrow this state's data to the fields it uses: the stubs (isAllowedType, uploadFile) aren't written yet, so the fields each state reads aren't known
+88: TODO action "notifyUploaded" is a stub in the export: write it in setup's actions (it gets its params; pass it the fields of data and the event it reads). Until then it does nothing, as in the export
+91: TODO actor "uploadFile" is a stub in the export: write the task in uploadFile (it gets the invoke's input and an abort signal). Until then it never finishes, as in the export
+94: TODO guard "isAllowedType" is a stub in the export: write its condition in isAllowedType, and pass it the fields of data and the event it reads. Until then it is false, as in the export

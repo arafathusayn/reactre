@@ -8,9 +8,21 @@ root = "packages"
 preload = ["./packages/testdom/src/setup.ts", "./packages/compat/test/setup.ts"]
 # `bun test --coverage` measures the packages' sources: every function and line is covered, and
 # a run below that fails. Tests and their helpers, the packages' built dist folders (some tests
-# build them), and the bundles the plugin tests build in a temp folder, are not sources.
+# build them), temporary bundles, and generated differential fixtures are not sources.
+# Application scripts outside packages are build/test fixtures, not library source.
 coverageSkipTestFiles = true
-coveragePathIgnorePatterns = ["packages/*/test/**", "packages/*/dist/**", "**/reactre-plugin-*/**"]
+coveragePathIgnorePatterns = [
+  "packages/*/test/**",
+  "packages/*/dist/**",
+  "**/reactre-plugin-*/**",
+  "**/.fuzz-out/**",
+  "**/reactre-state-*",
+  "**/reactre-core-old-stripper-*/**",
+  # Generated production bundles execute in a separate plain-Bun process (state's run-emitted
+  # helpers). Bun 1.4.4's data:* filter does not exclude them from its text coverage report.
+  "apps/**",
+  "scripts/**",
+]
 coverageThreshold = { lines = 1.0, functions = 1.0 }
 
 [install]

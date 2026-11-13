@@ -1,0 +1,4 @@
+{
+  // A config whose base turns strict off, for ../../compiler.test.ts: a machine under it is refused.
+  "extends": "./base.json"
+}

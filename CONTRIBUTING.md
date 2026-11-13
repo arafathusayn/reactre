@@ -27,6 +27,7 @@ packages/compat         @reactre/compat, /core, /classes, /server and /compiler
 packages/full-compat    @reactre/full-compat: @reactre/compat with React's time slicing compiled in
 packages/plugin         @reactre/plugin: one plugin for Vite, Rollup, Rolldown, esbuild, webpack, Rspack and Bun
 packages/preact         @reactre/preact: Preact's API on reactre's templates
+packages/state          @reactre/state: state machines checked by types and a compiler (private, not released yet)
 packages/testdom        @reactre/testdom: the fake DOM the tests run on (private)
 apps/jfb                the js-framework-benchmark replica
 apps/profiling          CPU profiles, trace windows and A/B proofs
@@ -49,7 +50,7 @@ Commit messages follow [Conventional Commits](https://www.conventionalcommits.or
 
 ## Releasing
 
-The seven public packages (dom, core, compiler, compat, full-compat, plugin and preact) share one version. A release is a GitHub release tagged `v<version>`, matching every `packages/*/package.json` version, with a matching [CHANGELOG](CHANGELOG.md) entry. Its [workflow](.github/workflows/release.yml) runs the checks and tests, builds `dist/`, publishes each package to npm through npm's trusted publishing (no stored token, with provenance once the repository is public), and attaches the tarballs to the release. It is the one place npm is still used: `bun publish` (Bun 1.4.4) has neither trusted publishing nor provenance, so moving it to Bun waits on a decision between those and a stored token.
+The seven public packages (dom, core, compiler, compat, full-compat, plugin and preact) share one version. `@reactre/state` carries the same version but is private: CI builds, packs and type-checks it like the others, and the release leaves it out until it is published. A release is a GitHub release tagged `v<version>`, matching every `packages/*/package.json` version, with a matching [CHANGELOG](CHANGELOG.md) entry. Its [workflow](.github/workflows/release.yml) runs the checks and tests, builds `dist/`, publishes each package to npm through npm's trusted publishing (no stored token, with provenance once the repository is public), and attaches the tarballs to the release. It is the one place npm is still used: `bun publish` (Bun 1.4.4) has neither trusted publishing nor provenance, so moving it to Bun waits on a decision between those and a stored token.
 
 To cut one:
 

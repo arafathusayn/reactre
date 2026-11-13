@@ -30,16 +30,18 @@ jobs:
       - run: bun fmt --check
       - run: bun check
       - run: bun run check:strict
-      # Fails unless every function and line of the packages' sources is covered (bunfig.toml).
-      - run: bun test --coverage
+      # Before the tests: the installed-package tests pack each package's dist, so it must exist.
+      # @reactre/state is built and packed too, though it is not released yet (it stays private).
       - name: Build and pack the published packages
         run: |
-          for dir in dom core compiler compat full-compat plugin preact; do
+          for dir in dom core compiler compat full-compat plugin preact state; do
             if jq -e .scripts.build "packages/$dir/package.json" >/dev/null; then
               (cd "packages/$dir" && bun run build)
             fi
             (cd "packages/$dir" && bun pm pack --dry-run)
           done
+      # Fails unless every function and line of the packages' sources is covered (bunfig.toml).
+      - run: bun test --coverage
       # The plugin's dist build, as its users install it, in Vite builds and Vite's dev server.
       - run: bun packages/plugin/test/dist.ts
       # A user's project, installed from the packed packages and type-checked with `bun check`
