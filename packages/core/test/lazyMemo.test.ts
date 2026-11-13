@@ -168,6 +168,37 @@ describe("memo with lazy and unobserved", () => {
 });
 
 describe("signal with unobserved", () => {
+  test("independent readers notify unobserved only after the final removal", async () => {
+    let released = 0;
+    const [read, write] = observedSignal(0, { unobserved: () => released++ });
+    const mount = () =>
+      createRoot((dispose) => {
+        effect(() => {
+          read();
+        });
+        return dispose;
+      });
+    const a = mount(),
+      b = mount(),
+      c = mount();
+    b();
+    await Promise.resolve();
+    expect(released).toBe(0);
+    write(1);
+    await Promise.resolve();
+    expect(released).toBe(0);
+    c();
+    await Promise.resolve();
+    expect(released).toBe(0);
+    a();
+    await Promise.resolve();
+    expect(released).toBe(1);
+    const d = mount();
+    d();
+    await Promise.resolve();
+    expect(released).toBe(2);
+  });
+
   test("unobserved: once its last reader leaves; writes and reads go on as a signal's", async () => {
     let gone = 0;
     const [n, setN] = observedSignal(1, { unobserved: () => gone++ });

@@ -98,6 +98,20 @@ interface Source {
   subs: Observer[];
 }
 
+/** Remove a reader in order, without allocating a splice result when it is last. */
+function unsubscribe(observer: Observer & { sources: Source[] }): void {
+  for (const source of observer.sources) {
+    const subs = source.subs,
+      i = subs.indexOf(observer);
+    if (i >= 0) {
+      // Subscriber arrays are dense; a following reader means this removal needs shifting.
+      if (subs[i + 1]) subs.splice(i, 1);
+      else subs.pop();
+    }
+  }
+  observer.sources = [];
+}
+
 /** What reads are recorded for while it runs. */
 interface Reader {
   /** Note that this reader read `s`. */
@@ -519,17 +533,7 @@ class Effect implements Observer {
   }
   /** Unsubscribe from every source of the last run. */
   drop(): void {
-    const ss = this.sources;
-    for (let i = 0; i < ss.length; i++) {
-      const subs = ss[i]!.subs,
-        j = subs.indexOf(this);
-      if (j >= 0) {
-        // The last subscriber needs no shifting or discarded splice result array.
-        if (j === subs.length - 1) subs.pop();
-        else subs.splice(j, 1);
-      }
-    }
-    this.sources = [];
+    unsubscribe(this);
   }
 }
 
@@ -1640,7 +1644,7 @@ interface MountRow<T> extends Row<T> {
 class RowObserver implements Observer {
   readonly list: ForList<unknown, unknown>;
   readonly entry: Row<unknown>;
-  private sources: Source[] = [];
+  sources: Source[] = [];
   q = false;
   // #if DEV
   /** The drain of its last run, and its runs in it (see `cycle`). */
@@ -1680,14 +1684,7 @@ class RowObserver implements Observer {
   }
   /** Unsubscribe from every source: before a re-run, and when the row leaves the list. */
   drop(): void {
-    for (const s of this.sources) {
-      const j = s.subs.indexOf(this);
-      if (j >= 0) {
-        if (j === s.subs.length - 1) s.subs.pop();
-        else s.subs.splice(j, 1);
-      }
-    }
-    this.sources = [];
+    unsubscribe(this);
   }
 }
 
